@@ -1,0 +1,15 @@
+# Environment variables
+.env
+
+# Claude Code settings
+.claude/
+
+# Binary
+powerctl
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib

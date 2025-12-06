@@ -1,0 +1,20 @@
+{ pkgs ? import <nixpkgs> { config.allowUnfree = true; } }:
+
+pkgs.mkShell {
+  buildInputs = with pkgs; [
+    go
+    gopls
+    claude-code
+    claude-monitor
+  ];
+
+  shellHook = ''
+    echo "🚀 Development environment loaded!"
+    echo ""
+    echo "Available tools:"
+    echo "  • go             - Go programming language ($(go version | cut -d' ' -f3))"
+    echo "  • gopls          - Go language server"
+    echo "  • claude-code    - Claude Code CLI tool"
+    echo "  • claude-code-monitor - Claude API usage monitor"
+  '';
+}
