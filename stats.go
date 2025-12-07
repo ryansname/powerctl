@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"strconv"
 	"time"
 )
@@ -137,11 +138,16 @@ func cloneTopicData(topicData map[string]any) map[string]any {
 }
 
 // statsWorker receives messages, maintains statistics, and sends to output channel
-func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan chan<- DisplayData) {
+func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan chan<- DisplayData, expectedTopics []string) {
 	// Map of topic -> data (can be *FloatTopicData or *StringTopicData)
 	topicData := make(map[string]any)
 	// Map of topic -> readings (for float topics only, internal to stats worker)
 	topicReadings := make(map[string]Readings)
+
+	// Ready state tracking
+	allTopicsReceived := false
+	startupCheckTicker := time.NewTicker(30 * time.Second)
+	defer startupCheckTicker.Stop()
 
 	// Debouncing state
 	var lastSendTime time.Time
@@ -200,6 +206,18 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 				data.Current = msg.Value
 			}
 
+			// Check if we've received all expected topics
+			if !allTopicsReceived && len(topicData) == len(expectedTopics) {
+				allTopicsReceived = true
+				startupCheckTicker.Stop()
+				log.Printf("Stats worker ready: received data for all %d topics\n", len(expectedTopics))
+			}
+
+			// Only send updates if we've received all topics
+			if !allTopicsReceived {
+				continue
+			}
+
 			// Debounce: send immediately if enough time has passed, otherwise schedule
 			timeSinceLastSend := time.Since(lastSendTime)
 			if timeSinceLastSend >= time.Second {
@@ -218,15 +236,43 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 			}
 
 		case <-debounceTimerC:
-			// Timer fired, send the pending update
-			select {
-			case outputChan <- DisplayData{TopicData: cloneTopicData(topicData)}:
-				lastSendTime = time.Now()
-			case <-ctx.Done():
-				return
+			// Timer fired, send the pending update (only if ready)
+			if allTopicsReceived {
+				select {
+				case outputChan <- DisplayData{TopicData: cloneTopicData(topicData)}:
+					lastSendTime = time.Now()
+				case <-ctx.Done():
+					return
+				}
 			}
 			debounceTimer = nil
 			debounceTimerC = nil
+
+		case <-startupCheckTicker.C:
+			// Periodically check for missing topics
+			if allTopicsReceived {
+				continue
+			}
+
+			receivedTopics := make(map[string]bool)
+			for topic := range topicData {
+				receivedTopics[topic] = true
+			}
+
+			var missingTopics []string
+			for _, topic := range expectedTopics {
+				if !receivedTopics[topic] {
+					missingTopics = append(missingTopics, topic)
+				}
+			}
+
+			if len(missingTopics) > 0 {
+				log.Printf("WARNING: Still waiting for topics. Missing %d/%d:\n",
+					len(missingTopics), len(expectedTopics))
+				for _, topic := range missingTopics {
+					log.Printf("  - %s\n", topic)
+				}
+			}
 
 		case <-cleanupTicker.C:
 			// Remove readings older than 15 minutes for float topics

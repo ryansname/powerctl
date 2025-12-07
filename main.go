@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -51,6 +52,16 @@ func displayWorker(ctx context.Context, displayChan <-chan DisplayData) {
 	}
 }
 
+// extractShortName extracts a short name from the full MQTT topic
+func extractShortName(topic string) string {
+	// Extract just the sensor name from homeassistant/sensor/NAME/state
+	parts := strings.Split(topic, "/")
+	if len(parts) >= 3 {
+		return parts[2]
+	}
+	return topic
+}
+
 // displayAllStats formats and prints statistics for all topics to stdout
 func displayAllStats(topicData map[string]any) {
 	// Separate float and string topics and get sorted topic names
@@ -67,37 +78,31 @@ func displayAllStats(topicData map[string]any) {
 	sort.Strings(floatTopics)
 	sort.Strings(stringTopics)
 
-	fmt.Print("\033[H\033[2J") // Clear screen
-	fmt.Println("================================================================================")
-	fmt.Println("Power Monitoring Statistics")
-	fmt.Println("================================================================================")
-	fmt.Println()
+	// fmt.Print("\033[H\033[2J") // Clear screen
+	// fmt.Println("Power Monitoring")
+	// fmt.Println()
 
-	// Display float sensors with statistics
-	for _, topic := range floatTopics {
-		data := topicData[topic].(*FloatTopicData)
-		fmt.Printf("Topic: %s\n", topic)
-		fmt.Printf("  Current:  %-10.2f\n", data.Current)
-		fmt.Printf("            %-12s %-12s %-12s\n", "Average", "Min", "Max")
-		fmt.Printf("  1  min:   %-12.2f %-12.2f %-12.2f\n", data.Average._1, data.Min._1, data.Max._1)
-		fmt.Printf("  5  min:   %-12.2f %-12.2f %-12.2f\n", data.Average._5, data.Min._5, data.Max._5)
-		fmt.Printf("  15 min:   %-12.2f %-12.2f %-12.2f\n", data.Average._15, data.Min._15, data.Max._15)
-		fmt.Println()
-	}
+	// // Display float sensors - just current and 5-min average
+	// if len(floatTopics) > 0 {
+	// 	fmt.Printf("%-35s %10s %10s\n", "Sensor", "Current", "5m Avg")
+	// 	fmt.Println(strings.Repeat("-", 57))
+	// 	for _, topic := range floatTopics {
+	// 		data := topicData[topic].(*FloatTopicData)
+	// 		fmt.Printf("%-35s %10.2f %10.2f\n", extractShortName(topic), data.Current, data.Average._5)
+	// 	}
+	// 	fmt.Println()
+	// }
 
-	// Display string sensors
-	if len(stringTopics) > 0 {
-		fmt.Println("String Sensors:")
-		fmt.Println()
-		for _, topic := range stringTopics {
-			data := topicData[topic].(*StringTopicData)
-			fmt.Printf("Topic: %s\n", topic)
-			fmt.Printf("  Current:  %-20s\n", data.Current)
-			fmt.Println()
-		}
-	}
-
-	fmt.Println("================================================================================")
+	// // Display string sensors - compact format
+	// if len(stringTopics) > 0 {
+	// 	fmt.Printf("%-35s %s\n", "Sensor", "Value")
+	// 	fmt.Println(strings.Repeat("-", 57))
+	// 	for _, topic := range stringTopics {
+	// 		data := topicData[topic].(*StringTopicData)
+	// 		fmt.Printf("%-35s %s\n", extractShortName(topic), data.Current)
+	// 	}
+	// 	fmt.Println()
+	// }
 }
 
 // mqttWorker manages MQTT connection and forwards messages to a channel
@@ -184,25 +189,38 @@ func main() {
 
 	// Define topics to monitor
 	topics := []string{
+		// Battery 2 outflows (inverters 1-4)
+		"homeassistant/sensor/powerhouse_inverter_1_switch_0_energy/state",
+		"homeassistant/sensor/powerhouse_inverter_2_switch_0_energy/state",
+		"homeassistant/sensor/powerhouse_inverter_3_switch_0_energy/state",
+		"homeassistant/sensor/powerhouse_inverter_4_switch_0_energy/state",
+		// Battery 3 outflows (inverters 5-9)
 		"homeassistant/sensor/powerhouse_inverter_5_switch_0_energy/state",
 		"homeassistant/sensor/powerhouse_inverter_6_switch_0_energy/state",
 		"homeassistant/sensor/powerhouse_inverter_7_switch_0_energy/state",
 		"homeassistant/sensor/powerhouse_inverter_8_switch_0_energy/state",
 		"homeassistant/sensor/powerhouse_inverter_9_switch_0_energy/state",
+		// Battery 2 inflow and monitoring
+		"homeassistant/sensor/solar_5_solar_energy/state",
+		"homeassistant/sensor/solar_5_charge_state/state",
+		"homeassistant/sensor/solar_5_battery_voltage/state",
+		// Battery 3 inflows and monitoring
 		"homeassistant/sensor/solar_3_solar_energy/state",
 		"homeassistant/sensor/solar_4_solar_energy/state",
 		"homeassistant/sensor/solar_3_charge_state/state",
-		"homeassistant/sensor/solar_4_charge_state/state",
+		"homeassistant/sensor/solar_3_battery_voltage/state",
 	}
 
 	// Create channels for communication between workers
 	msgChan := make(chan SensorMessage, 10)
 	statsChan := make(chan DisplayData, 10)
 	displayChan := make(chan DisplayData, 10)
+	battery2Chan := make(chan DisplayData, 10)
+	battery3Chan := make(chan DisplayData, 10)
 
 	// Launch stats worker (produces statistics)
 	SafeGo(ctx, cancel, "stats-worker", func(ctx context.Context) {
-		statsWorker(ctx, msgChan, statsChan)
+		statsWorker(ctx, msgChan, statsChan, topics)
 	})
 	log.Println("Stats worker started")
 
@@ -212,10 +230,55 @@ func main() {
 	})
 	log.Println("Display worker started")
 
+	// Configure and launch battery 2 monitor (10 kWh)
+	battery2Config := BatteryConfig{
+		Name:        "Battery 2",
+		CapacityKWh: 10.0,
+		InflowTopics: []string{
+			"homeassistant/sensor/solar_5_solar_energy/state",
+		},
+		OutflowTopics: []string{
+			"homeassistant/sensor/powerhouse_inverter_1_switch_0_energy/state",
+			"homeassistant/sensor/powerhouse_inverter_2_switch_0_energy/state",
+			"homeassistant/sensor/powerhouse_inverter_3_switch_0_energy/state",
+			"homeassistant/sensor/powerhouse_inverter_4_switch_0_energy/state",
+		},
+		ChargeStateTopic:    "homeassistant/sensor/solar_5_charge_state/state",
+		BatteryVoltageTopic: "homeassistant/sensor/solar_5_battery_voltage/state",
+	}
+	SafeGo(ctx, cancel, "battery-2-monitor", func(ctx context.Context) {
+		batteryMonitorWorker(ctx, battery2Chan, battery2Config)
+	})
+	log.Println("Battery 2 monitor started")
+
+	// Configure and launch battery 3 monitor (15 kWh)
+	battery3Config := BatteryConfig{
+		Name:        "Battery 3",
+		CapacityKWh: 15.0,
+		InflowTopics: []string{
+			"homeassistant/sensor/solar_3_solar_energy/state",
+			"homeassistant/sensor/solar_4_solar_energy/state",
+		},
+		OutflowTopics: []string{
+			"homeassistant/sensor/powerhouse_inverter_5_switch_0_energy/state",
+			"homeassistant/sensor/powerhouse_inverter_6_switch_0_energy/state",
+			"homeassistant/sensor/powerhouse_inverter_7_switch_0_energy/state",
+			"homeassistant/sensor/powerhouse_inverter_8_switch_0_energy/state",
+			"homeassistant/sensor/powerhouse_inverter_9_switch_0_energy/state",
+		},
+		ChargeStateTopic:    "homeassistant/sensor/solar_3_charge_state/state",
+		BatteryVoltageTopic: "homeassistant/sensor/solar_3_battery_voltage/state",
+	}
+	SafeGo(ctx, cancel, "battery-3-monitor", func(ctx context.Context) {
+		batteryMonitorWorker(ctx, battery3Chan, battery3Config)
+	})
+	log.Println("Battery 3 monitor started")
+
 	// Collect all downstream worker channels for fan-out
 	downstreamChans := []chan<- DisplayData{
 		displayChan,
-		// Add more downstream workers here as needed
+		battery2Chan,
+		battery3Chan,
 	}
 
 	// Launch broadcast worker (fans out to all downstream workers)
