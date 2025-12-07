@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"log"
 	"strings"
 	"time"
@@ -10,17 +10,17 @@ import (
 
 // BatteryConfig holds configuration for a battery monitor
 type BatteryConfig struct {
-	Name              string
-	CapacityKWh       float64
-	InflowTopics      []string
-	OutflowTopics     []string
-	ChargeStateTopic  string
+	Name                string
+	CapacityKWh         float64
+	InflowTopics        []string
+	OutflowTopics       []string
+	ChargeStateTopic    string
 	BatteryVoltageTopic string
 }
 
 // BatteryState tracks the current state of a battery
 type BatteryState struct {
-	AvailableWh      float64   // Primary state: available energy in Wh
+	AvailableWh      float64 // Primary state: available energy in Wh
 	PrevInflowTotal  float64
 	PrevOutflowTotal float64
 	LastUpdateTime   time.Time // Track time for BMS/controller loss calculation
@@ -47,10 +47,47 @@ func getInitialPercentage(voltage float64, chargeState string) float64 {
 }
 
 // batteryMonitorWorker monitors battery charge percentage
-func batteryMonitorWorker(ctx context.Context, dataChan <-chan DisplayData, config BatteryConfig) {
+func batteryMonitorWorker(ctx context.Context, dataChan <-chan DisplayData, config BatteryConfig, outgoingChan chan<- MQTTMessage, manufacturer string) {
 	state := &BatteryState{}
 
 	log.Printf("Battery monitor started: %s (%.0f kWh capacity)\n", config.Name, config.CapacityKWh)
+
+	// Create Home Assistant entities for this battery
+	// Create percentage sensor
+	err := createBatteryEntity(
+		outgoingChan,
+		config.Name,
+		config.CapacityKWh,
+		manufacturer,
+		"State of Charge",
+		"battery",
+		"%",
+		"percentage",
+		"measurement",
+		1,
+	)
+	if err != nil {
+		log.Printf("Failed to create percentage entity for %s: %v\n", config.Name, err)
+	}
+
+	// Create energy sensor
+	err = createBatteryEntity(
+		outgoingChan,
+		config.Name,
+		config.CapacityKWh,
+		manufacturer,
+		"Available Energy",
+		"energy",
+		"Wh",
+		"available_wh",
+		"measurement",
+		0,
+	)
+	if err != nil {
+		log.Printf("Failed to create energy entity for %s: %v\n", config.Name, err)
+	}
+
+	log.Printf("%s: Home Assistant entities created\n", config.Name)
 
 	for {
 		select {
@@ -112,7 +149,7 @@ func batteryMonitorWorker(ctx context.Context, dataChan <-chan DisplayData, conf
 				timeDelta := now.Sub(state.LastUpdateTime).Hours()
 
 				// Calculate energy changes (in kWh, convert to Wh)
-				inflowDelta := (inflowTotal - state.PrevInflowTotal) * 1000 // kWh to Wh
+				inflowDelta := (inflowTotal - state.PrevInflowTotal) * 1000    // kWh to Wh
 				outflowDelta := (outflowTotal - state.PrevOutflowTotal) * 1000 // kWh to Wh
 
 				// Account for conversion losses (2% on outflows)
@@ -162,8 +199,26 @@ func batteryMonitorWorker(ctx context.Context, dataChan <-chan DisplayData, conf
 				// Calculate percentage for display
 				percentage := (state.AvailableWh / capacityWh) * 100
 
-				// Output current status
-				fmt.Printf("%s: %.1f%% (%.0f Wh, %.1fV, %s)\n", config.Name, percentage, state.AvailableWh, voltage, chargeState)
+				// Send state to Home Assistant
+				deviceId := strings.ReplaceAll(strings.ToLower(config.Name), " ", "_")
+				stateTopic := "homeassistant/sensor/" + deviceId + "/state"
+
+				statePayload := map[string]interface{}{
+					"percentage":   percentage,
+					"available_wh": state.AvailableWh,
+				}
+
+				payloadBytes, err := json.Marshal(statePayload)
+				if err != nil {
+					log.Printf("%s: Failed to marshal state payload: %v\n", config.Name, err)
+				} else {
+					outgoingChan <- MQTTMessage{
+						Topic:   stateTopic,
+						Payload: payloadBytes,
+						QoS:     0,
+						Retain:  false,
+					}
+				}
 			}
 
 		case <-ctx.Done():

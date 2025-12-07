@@ -106,7 +106,7 @@ func displayAllStats(topicData map[string]any) {
 }
 
 // mqttWorker manages MQTT connection and forwards messages to a channel
-func mqttWorker(ctx context.Context, broker string, topics []string, username, password string, msgChan chan<- SensorMessage) {
+func mqttWorker(ctx context.Context, broker string, topics []string, username, password string, msgChan chan<- SensorMessage, outgoingChan <-chan MQTTMessage) {
 	// Connect to MQTT broker
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(fmt.Sprintf("tcp://%s:1883", broker))
@@ -124,6 +124,9 @@ func mqttWorker(ctx context.Context, broker string, topics []string, username, p
 	// Set up connection handler
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
 		log.Printf("Connected to MQTT broker at %s\n", broker)
+
+		// Launch MQTT sender worker now that we're connected
+		go mqttSenderWorker(ctx, outgoingChan, client)
 
 		// Subscribe to all topics
 		for _, topic := range topics {
@@ -217,6 +220,7 @@ func main() {
 	displayChan := make(chan DisplayData, 10)
 	battery2Chan := make(chan DisplayData, 10)
 	battery3Chan := make(chan DisplayData, 10)
+	mqttOutgoingChan := make(chan MQTTMessage, 100) // Larger buffer for queuing
 
 	// Launch stats worker (produces statistics)
 	SafeGo(ctx, cancel, "stats-worker", func(ctx context.Context) {
@@ -247,7 +251,7 @@ func main() {
 		BatteryVoltageTopic: "homeassistant/sensor/solar_5_battery_voltage/state",
 	}
 	SafeGo(ctx, cancel, "battery-2-monitor", func(ctx context.Context) {
-		batteryMonitorWorker(ctx, battery2Chan, battery2Config)
+		batteryMonitorWorker(ctx, battery2Chan, battery2Config, mqttOutgoingChan, "SunnyTech Solar")
 	})
 	log.Println("Battery 2 monitor started")
 
@@ -270,7 +274,7 @@ func main() {
 		BatteryVoltageTopic: "homeassistant/sensor/solar_3_battery_voltage/state",
 	}
 	SafeGo(ctx, cancel, "battery-3-monitor", func(ctx context.Context) {
-		batteryMonitorWorker(ctx, battery3Chan, battery3Config)
+		batteryMonitorWorker(ctx, battery3Chan, battery3Config, mqttOutgoingChan, "Micromall")
 	})
 	log.Println("Battery 3 monitor started")
 
@@ -289,7 +293,7 @@ func main() {
 
 	// Launch MQTT worker
 	SafeGo(ctx, cancel, "mqtt-worker", func(ctx context.Context) {
-		mqttWorker(ctx, "homeassistant.lan", topics, mqttUsername, mqttPassword, msgChan)
+		mqttWorker(ctx, "homeassistant.lan", topics, mqttUsername, mqttPassword, msgChan, mqttOutgoingChan)
 	})
 	log.Println("MQTT worker started")
 
