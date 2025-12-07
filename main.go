@@ -195,21 +195,34 @@ func main() {
 		"homeassistant/sensor/solar_4_charge_state/state",
 	}
 
-	// Create message channel for communication between workers
+	// Create channels for communication between workers
 	msgChan := make(chan SensorMessage, 10)
+	statsChan := make(chan DisplayData, 10)
 	displayChan := make(chan DisplayData, 10)
 
-	// Launch display worker
+	// Launch stats worker (produces statistics)
+	SafeGo(ctx, cancel, "stats-worker", func(ctx context.Context) {
+		statsWorker(ctx, msgChan, statsChan)
+	})
+	log.Println("Stats worker started")
+
+	// Launch downstream workers
 	SafeGo(ctx, cancel, "display-worker", func(ctx context.Context) {
 		displayWorker(ctx, displayChan)
 	})
 	log.Println("Display worker started")
 
-	// Launch stats worker
-	SafeGo(ctx, cancel, "stats-worker", func(ctx context.Context) {
-		statsWorker(ctx, msgChan, displayChan)
+	// Collect all downstream worker channels for fan-out
+	downstreamChans := []chan<- DisplayData{
+		displayChan,
+		// Add more downstream workers here as needed
+	}
+
+	// Launch broadcast worker (fans out to all downstream workers)
+	SafeGo(ctx, cancel, "broadcast-worker", func(ctx context.Context) {
+		broadcastWorker(ctx, statsChan, downstreamChans)
 	})
-	log.Println("Stats worker started")
+	log.Println("Broadcast worker started")
 
 	// Launch MQTT worker
 	SafeGo(ctx, cancel, "mqtt-worker", func(ctx context.Context) {

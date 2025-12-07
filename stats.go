@@ -136,8 +136,8 @@ func cloneTopicData(topicData map[string]any) map[string]any {
 	return clone
 }
 
-// statsWorker receives messages, maintains statistics, and sends them for display
-func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, displayChan chan<- DisplayData) {
+// statsWorker receives messages, maintains statistics, and sends to output channel
+func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan chan<- DisplayData) {
 	// Map of topic -> data (can be *FloatTopicData or *StringTopicData)
 	topicData := make(map[string]any)
 	// Map of topic -> readings (for float topics only, internal to stats worker)
@@ -205,7 +205,7 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, displayChan 
 			if timeSinceLastSend >= time.Second {
 				// Send immediately
 				select {
-				case displayChan <- DisplayData{TopicData: cloneTopicData(topicData)}:
+				case outputChan <- DisplayData{TopicData: cloneTopicData(topicData)}:
 					lastSendTime = time.Now()
 				case <-ctx.Done():
 					return
@@ -220,7 +220,7 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, displayChan 
 		case <-debounceTimerC:
 			// Timer fired, send the pending update
 			select {
-			case displayChan <- DisplayData{TopicData: cloneTopicData(topicData)}:
+			case outputChan <- DisplayData{TopicData: cloneTopicData(topicData)}:
 				lastSendTime = time.Now()
 			case <-ctx.Done():
 				return

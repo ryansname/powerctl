@@ -64,16 +64,29 @@ The application uses a goroutine-based architecture with message passing via cha
    - Automatically cancels the application context if a goroutine panics
    - Logs panic information for debugging
 
-2. **statsWorker** (main.go:153-217)
+2. **statsWorker** (stats.go:139-259)
    - Goroutine that receives SensorMessage structs via a channel
    - Maintains separate state for each topic (readings, current, previous values)
    - Calculates real-time statistics using time-weighted averaging per topic
    - Current and previous values for each sensor
    - 1, 5, and 15 minute time-weighted averages, minimums, and maximums
    - Automatically cleans up readings older than 15 minutes every 30 seconds
-   - Displays formatted statistics for all topics to stdout (clears screen on each update)
+   - Updates are debounced (max 1 update per second)
+   - Sends DisplayData to a single output channel (broadcast worker handles fan-out)
 
-3. **mqttWorker** (main.go:240-300)
+3. **broadcastWorker** (broadcast_worker.go:8-27)
+   - Implements the actor pattern for fan-out
+   - Receives DisplayData from statsWorker
+   - Broadcasts to multiple downstream workers using non-blocking sends
+   - Isolates fan-out logic, making it easy to add new downstream workers
+   - Logs warnings when worker channels are full (but continues processing)
+
+4. **displayWorker** (main.go:42-52)
+   - Downstream worker that receives DisplayData via a channel
+   - Formats and prints statistics for all topics to stdout (clears screen on each update)
+   - Separates float sensors (with statistics) from string sensors (current value only)
+
+5. **mqttWorker** (main.go:227-229)
    - Goroutine that connects to Home Assistant MQTT broker at `homeassistant.lan:1883`
    - Subscribes to multiple sensor topics simultaneously
    - Forwards received messages with topic information to statsWorker via channel
@@ -83,11 +96,10 @@ The application uses a goroutine-based architecture with message passing via cha
 
 - **SensorMessage**: MQTT message with topic and value
 - **Reading**: Timestamped sensor value
-- **TopicData**: Holds readings and current/previous values for a specific topic
+- **FloatTopicData**: Holds current value and statistics for a numeric sensor topic
+- **StringTopicData**: Holds current value for a string sensor topic
+- **DisplayData**: Container for topic data broadcast to downstream workers
 - **TimeWindows**: Holds values across 1, 5, and 15 minute windows (accessed as `._1`, `._5`, `._15`)
-- **Statistics**: Current, previous, and time-windowed statistics organized by metric type
-  - Includes topic name for identification
-  - Accessed as `stats.Average._1`, `stats.Min._5`, `stats.Max._15`, etc.
 
 ### Statistics Algorithm
 
@@ -103,18 +115,63 @@ The application uses time-weighted averaging to account for irregular message ar
 ### Message Flow
 
 ```
-MQTT Broker → mqttWorker → SensorMessage channel → statsWorker → statistics (per topic) → stdout
+MQTT Broker → mqttWorker → SensorMessage → statsWorker → DisplayData → broadcastWorker → DisplayData (fan-out)
+                             channel                       channel                         ├─→ displayWorker → stdout
+                                                                                           └─→ (more workers...)
 ```
 
-Each topic's statistics are tracked independently and displayed together.
+- **statsWorker** calculates statistics for all topics and sends DisplayData to broadcastWorker
+- **broadcastWorker** implements the actor pattern for fan-out to multiple downstream workers
+- **Fan-out pattern** uses non-blocking sends to prevent slow workers from blocking the pipeline
+- Each downstream worker receives all stats updates and can process them independently
+- Each topic's statistics are tracked independently and broadcast together
 
 ### Concurrency Model
 
 - Workers are launched using `SafeGo` which wraps goroutines with panic recovery
-- Communication between workers uses a buffered channel of SensorMessage (capacity: 10)
+- Communication between workers uses buffered channels (capacity: 10)
 - Context is used for lifecycle management and graceful shutdown
 - If any worker panics, the entire application shuts down gracefully
 - Per-topic state is maintained in a map, allowing dynamic addition of new topics
+- **Actor pattern for fan-out**: broadcastWorker handles distribution to multiple downstream workers
+  - statsWorker only knows about one output channel (to broadcastWorker)
+  - broadcastWorker knows about all downstream workers
+  - Non-blocking sends prevent slow workers from blocking the pipeline
+  - Each worker processes updates independently
+  - Adding new workers doesn't require modifying statsWorker
+
+### Adding Downstream Workers
+
+To add a new downstream worker that processes sensor statistics:
+
+1. Create a worker function that receives `<-chan DisplayData` (see `displayWorker` in main.go:42-52 as an example)
+2. In `main.go`, create a channel: `newChan := make(chan DisplayData, 10)`
+3. Launch the worker: `SafeGo(ctx, cancel, "worker-name", func(ctx context.Context) { yourWorker(ctx, newChan) })`
+4. Add the channel to the `downstreamChans` slice (before launching broadcastWorker)
+
+Example:
+```go
+// Create channel
+controlChan := make(chan DisplayData, 10)
+
+// Launch worker
+SafeGo(ctx, cancel, "control-worker", func(ctx context.Context) {
+    controlWorker(ctx, controlChan)
+})
+
+// Add to downstreamChans
+downstreamChans := []chan<- DisplayData{
+    displayChan,
+    controlChan,  // <-- Add here
+}
+```
+
+Example downstream workers could:
+- Control smart switches based on power thresholds
+- Send alerts when values exceed limits
+- Log data to files or databases
+- Expose metrics via HTTP endpoints
+- Make HTTP requests to Home Assistant API to control devices
 
 ### Dependencies
 
