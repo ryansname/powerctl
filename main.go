@@ -216,12 +216,12 @@ func main() {
 		"homeassistant/sensor/powerhouse_inverter_8_switch_0_energy/state",
 		"homeassistant/sensor/powerhouse_inverter_9_switch_0_energy/state",
 		// Battery 2 inflow and monitoring
-		"homeassistant/sensor/solar_5_solar_energy/state",
+		"homeassistant/sensor/solar_5_total_energy/state",
 		"homeassistant/sensor/solar_5_charge_state/state",
 		"homeassistant/sensor/solar_5_battery_voltage/state",
 		// Battery 3 inflows and monitoring
-		"homeassistant/sensor/solar_3_solar_energy/state",
-		"homeassistant/sensor/solar_4_solar_energy/state",
+		"homeassistant/sensor/solar_3_total_energy/state",
+		"homeassistant/sensor/solar_4_total_energy/state",
 		"homeassistant/sensor/solar_3_charge_state/state",
 		"homeassistant/sensor/solar_3_battery_voltage/state",
 	}
@@ -251,7 +251,7 @@ func main() {
 		Name:        "Battery 2",
 		CapacityKWh: 10.0,
 		InflowTopics: []string{
-			"homeassistant/sensor/solar_5_solar_energy/state",
+			"homeassistant/sensor/solar_5_total_energy/state",
 		},
 		OutflowTopics: []string{
 			"homeassistant/sensor/powerhouse_inverter_1_switch_0_energy/state",
@@ -272,8 +272,8 @@ func main() {
 		Name:        "Battery 3",
 		CapacityKWh: 15.0,
 		InflowTopics: []string{
-			"homeassistant/sensor/solar_3_solar_energy/state",
-			"homeassistant/sensor/solar_4_solar_energy/state",
+			"homeassistant/sensor/solar_3_total_energy/state",
+			"homeassistant/sensor/solar_4_total_energy/state",
 		},
 		OutflowTopics: []string{
 			"homeassistant/sensor/powerhouse_inverter_5_switch_0_energy/state",

@@ -266,11 +266,11 @@ Battery 3 (15 kWh) outflows:
 - `homeassistant/sensor/powerhouse_inverter_9_switch_0_energy/state`
 
 Battery monitoring:
-- `homeassistant/sensor/solar_5_solar_energy/state` (Battery 2 inflow)
+- `homeassistant/sensor/solar_5_total_energy/state` (Battery 2 inflow)
 - `homeassistant/sensor/solar_5_charge_state/state`
 - `homeassistant/sensor/solar_5_battery_voltage/state`
-- `homeassistant/sensor/solar_3_solar_energy/state` (Battery 3 inflow)
-- `homeassistant/sensor/solar_4_solar_energy/state` (Battery 3 inflow)
+- `homeassistant/sensor/solar_3_total_energy/state` (Battery 3 inflow)
+- `homeassistant/sensor/solar_4_total_energy/state` (Battery 3 inflow)
 - `homeassistant/sensor/solar_3_charge_state/state`
 - `homeassistant/sensor/solar_3_battery_voltage/state`
 
