@@ -47,7 +47,13 @@ func getInitialPercentage(voltage float64, chargeState string) float64 {
 }
 
 // batteryMonitorWorker monitors battery charge percentage
-func batteryMonitorWorker(ctx context.Context, dataChan <-chan DisplayData, config BatteryConfig, outgoingChan chan<- MQTTMessage, manufacturer string) {
+func batteryMonitorWorker(
+	ctx context.Context,
+	dataChan <-chan DisplayData,
+	config BatteryConfig,
+	outgoingChan chan<- MQTTMessage,
+	manufacturer string,
+) {
 	state := &BatteryState{}
 
 	log.Printf("Battery monitor started: %s (%.0f kWh capacity)\n", config.Name, config.CapacityKWh)

@@ -285,3 +285,8 @@ Battery entities are auto-created via Home Assistant MQTT discovery:
 **Setup**: Copy `.env.example` to `.env` and fill in your credentials.
 
 **Adding topics**: Edit the `topics` slice in main.go to add or remove monitored sensors.
+- If there are more than 3 arguments to a function definition, put each one on a new line
+  - multiple arguments sharing the same type do not count for this purpose, eg.
+    - `func(a int, b int, c int)` is 3 arguments
+    - `func(a, b, c int)` is 1 argument
+  

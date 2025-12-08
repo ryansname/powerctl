@@ -28,7 +28,12 @@ type DisplayData struct {
 
 // SafeGo launches a goroutine with panic recovery.
 // If the goroutine panics, the context is cancelled and the panic is logged.
-func SafeGo(ctx context.Context, cancel context.CancelFunc, name string, fn func(ctx context.Context)) {
+func SafeGo(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	name string,
+	fn func(ctx context.Context),
+) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -106,7 +111,14 @@ func displayAllStats(topicData map[string]any) {
 }
 
 // mqttWorker manages MQTT connection and forwards messages to a channel
-func mqttWorker(ctx context.Context, broker string, topics []string, username, password string, msgChan chan<- SensorMessage, outgoingChan <-chan MQTTMessage) {
+func mqttWorker(
+	ctx context.Context,
+	broker string,
+	topics []string,
+	username, password string,
+	msgChan chan<- SensorMessage,
+	outgoingChan <-chan MQTTMessage,
+) {
 	// Connect to MQTT broker
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(fmt.Sprintf("tcp://%s:1883", broker))
