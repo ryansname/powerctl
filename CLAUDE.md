@@ -26,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The project uses Nix for development environment management:
 
 ```bash
-nix-shell  # Enter development environment with Go, claude-code, and claude-monitor
+nix-shell  # Enter development environment with Go, claude, and claude-monitor
 ```
 
 ## Development Commands
@@ -35,6 +35,7 @@ nix-shell  # Enter development environment with Go, claude-code, and claude-moni
 ```bash
 make build  # Build the binary
 make run    # Build and run the application
+make check  # Run golangci-lint
 make clean  # Remove built binary
 ```
 
