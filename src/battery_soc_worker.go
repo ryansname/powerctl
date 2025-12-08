@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 )
 
 // calculateAvailableWh computes available energy from calibration reference point
@@ -70,7 +71,7 @@ func batterySOCWorker(
 			percentage := (availableWh / capacityWh) * 100
 
 			// Publish state to MQTT
-			deviceId := "battery_" + string(config.Name[len(config.Name)-1]) // "Battery 2" -> "battery_2"
+			deviceId := strings.ReplaceAll(strings.ToLower(config.Name), " ", "_")
 			stateTopic := fmt.Sprintf("homeassistant/sensor/%s/state", deviceId)
 
 			statePayload := map[string]interface{}{

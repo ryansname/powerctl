@@ -1,0 +1,33 @@
+version: "2"
+
+linters:
+  enable:
+    - errorlint
+    - gocritic
+    - gosec
+    - prealloc
+    - unconvert
+    - goconst
+    - bodyclose
+    - durationcheck
+    - errname
+    - forcetypeassert
+    - nilerr
+    - unparam
+
+linters-settings:
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+    disabled-checks:
+      - hugeParam
+
+  gosec:
+    excludes:
+      - G104 # Duplicates errcheck
+
+  goconst:
+    min-len: 3
+    min-occurrences: 3

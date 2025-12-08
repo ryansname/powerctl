@@ -38,12 +38,14 @@ type StringTopicData struct {
 
 // calculateTimeWeightedStats computes time-weighted statistics for a time window
 // Each reading is weighted by the duration it was active (time until next reading)
-func calculateTimeWeightedStats(readings Readings, windowDuration time.Duration) (avg, min, max float64) {
+func calculateTimeWeightedStats(readings Readings, windowDuration time.Duration, now time.Time) (avg, min, max float64) {
 	if len(readings) == 0 {
 		return 0, 0, 0
 	}
 
-	now := time.Now()
+	// Capture last reading for fallback (guaranteed non-empty from check above)
+	lastReading := readings[len(readings)-1]
+
 	cutoff := now.Add(-windowDuration)
 
 	// Filter readings within the window
@@ -56,7 +58,6 @@ func calculateTimeWeightedStats(readings Readings, windowDuration time.Duration)
 
 	// If no readings in window, use the most recent reading (last known value)
 	if len(windowReadings) == 0 {
-		lastReading := readings[len(readings)-1]
 		return lastReading.Value, lastReading.Value, lastReading.Value
 	}
 
@@ -107,9 +108,10 @@ func calculateStats(data *FloatTopicData, readings Readings) {
 	}
 
 	// Calculate time-weighted statistics for each window
-	avg1, min1, max1 := calculateTimeWeightedStats(readings, 1*time.Minute)
-	avg5, min5, max5 := calculateTimeWeightedStats(readings, 5*time.Minute)
-	avg15, min15, max15 := calculateTimeWeightedStats(readings, 15*time.Minute)
+	now := time.Now()
+	avg1, min1, max1 := calculateTimeWeightedStats(readings, 1*time.Minute, now)
+	avg5, min5, max5 := calculateTimeWeightedStats(readings, 5*time.Minute, now)
+	avg15, min15, max15 := calculateTimeWeightedStats(readings, 15*time.Minute, now)
 
 	data.Average = TimeWindows{_1: avg1, _5: avg5, _15: avg15}
 	data.Min = TimeWindows{_1: min1, _5: min5, _15: min15}

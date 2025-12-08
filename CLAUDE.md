@@ -35,7 +35,7 @@ nix-shell  # Enter development environment with Go, claude, and claude-monitor
 ```bash
 make build  # Build the binary
 make run    # Build and run the application
-make check  # Run golangci-lint
+make check  # Run golangci-lint and tests
 make clean  # Remove built binary
 ```
 
@@ -144,11 +144,12 @@ The application uses a goroutine-based architecture with message passing via cha
 - **TimeWindows**: Holds values across 1, 5, and 15 minute windows (accessed as `._1`, `._5`, `._15`)
 
 **Battery Monitoring:**
-- **BatteryCalibConfig** (src/battery_config.go): Configuration for calibration worker
-  - Name, charge state topic, voltage topic, inflow/outflow topics
-  - High voltage threshold and float charge state string
-- **BatterySOCConfig** (src/battery_config.go): Configuration for SOC worker
-  - Name, capacity, inflow/outflow topics, calibration topics, conversion loss rate
+- **BatteryConfig** (src/battery_config.go): Shared configuration for each battery
+  - Name, capacity, manufacturer, inflow/outflow topics
+  - Charge state topic, voltage topic, calibration thresholds
+  - Helper methods: `CalibConfig()`, `SOCConfig()`, `CalibrationTopics()`
+- **BatteryCalibConfig** (src/battery_config.go): Configuration for calibration worker (derived from BatteryConfig)
+- **BatterySOCConfig** (src/battery_config.go): Configuration for SOC worker (derived from BatteryConfig)
 - **CalibrationTopics** (src/battery_config.go): Statestream topic paths for calibration data
 
 ### Statistics Algorithm
@@ -260,6 +261,7 @@ Example downstream workers could:
 
 - `github.com/eclipse/paho.mqtt.golang` - MQTT client
 - `github.com/joho/godotenv` - Environment variable loading
+- `github.com/stretchr/testify` - Test assertions
 
 ### Configuration
 

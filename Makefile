@@ -8,6 +8,7 @@ run: build
 
 check: build
 	golangci-lint run
+	go test ./...
 
 clean:
 	rm -f powerctl

@@ -11,7 +11,7 @@ func createBatteryEntity(
 	batteryName string, // "Battery 2" or "Battery 3"
 	capacityKWh float64, // 10.0 or 15.0
 	manufacturer string, // "SunnyTech Solar" or "Micromall"
-	entityName, entityClass, entityMeasure, jsonKey, stateClass string,
+	entityName, entityClass, entityMeasure, jsonKey string,
 	displayPrecision int,
 ) error {
 	type Config struct {
@@ -45,7 +45,7 @@ func createBatteryEntity(
 	config.ValueTemplate = "{{ value_json." + jsonKey + "}}"
 	config.UniqueId = deviceId + "_" + jsonKey
 	config.ExpireAfter = 60 * 30 // 30 minutes
-	config.StateClass = stateClass
+	config.StateClass = "measurement"
 	config.DisplayPrecision = displayPrecision
 	config.Device.Identifiers = []string{deviceId}
 	config.Device.Name = batteryName
