@@ -40,8 +40,8 @@ make clean  # Remove built binary
 
 ### Direct Go Commands
 ```bash
-go build -o powerctl .  # Build the binary
-./powerctl              # Run the application
+go build -o powerctl ./src  # Build the binary
+./powerctl                  # Run the application
 ```
 
 ### Dependencies
@@ -66,16 +66,16 @@ go vet ./...  # Run Go vet for suspicious code
 
 ## Architecture
 
-The application uses a goroutine-based architecture with message passing via channels:
+The application uses a goroutine-based architecture with message passing via channels. All source code is organized in the `src/` directory.
 
 ### Core Components
 
-1. **SafeGo** (main.go:54-68)
+1. **SafeGo** (src/main.go:53-69)
    - Launches goroutines with panic recovery
    - Automatically cancels the application context if a goroutine panics
    - Logs panic information for debugging
 
-2. **statsWorker** (stats.go:140-290)
+2. **statsWorker** (src/stats.go:140-290)
    - Receives SensorMessage structs via a channel
    - Maintains separate state for each topic (readings, current, previous values)
    - Calculates real-time statistics using time-weighted averaging per topic
@@ -86,26 +86,21 @@ The application uses a goroutine-based architecture with message passing via cha
    - Logs missing topics every 30 seconds until all received
    - Sends DisplayData to broadcastWorker
 
-3. **broadcastWorker** (broadcast_worker.go)
+3. **broadcastWorker** (src/broadcast_worker.go)
    - Implements the actor pattern for fan-out
    - Receives DisplayData from statsWorker
    - Broadcasts to multiple downstream workers using non-blocking sends
    - Isolates fan-out logic, making it easy to add new downstream workers
    - Logs warnings when worker channels are full (but continues processing)
 
-4. **displayWorker** (main.go:48-58)
-   - Downstream worker that receives DisplayData via a channel
-   - Formats and prints statistics for all topics to stdout
-   - Currently commented out - battery monitoring provides primary output
-
-5. **batteryCalibWorker** (battery_calib_worker.go:9-72)
+4. **batteryCalibWorker** (src/battery_calib_worker.go)
    - Monitors voltage and charge state to detect calibration events
    - **Stateless design**: Always publishes when battery is calibrated (Float Charging + voltage ≥ 53.6V)
    - Publishes calibration reference points (inflow/outflow totals) to MQTT attributes topic
    - MQTT retain flag ensures calibration data persists across restarts
    - Uses DisplayData helper methods (GetFloat, GetString, SumTopics)
 
-6. **batterySOCWorker** (battery_soc_worker.go:37-99)
+5. **batterySOCWorker** (src/battery_soc_worker.go)
    - Calculates battery state of charge from calibration reference points
    - Reads calibration data from DisplayData (published by calibration worker via statestream)
    - **Energy accounting**:
@@ -115,7 +110,7 @@ The application uses a goroutine-based architecture with message passing via cha
    - Publishes percentage and available_wh to Home Assistant state topic
    - Waits for calibration topics via statsWorker readiness mechanism
 
-7. **mqttSenderWorker** (mqtt_sender.go)
+6. **mqttSenderWorker** (src/mqtt_sender.go)
    - Dedicated worker for outgoing MQTT messages
    - Receives MQTTMessage structs via channel (100-message buffer)
    - Handles message queuing automatically
@@ -123,11 +118,11 @@ The application uses a goroutine-based architecture with message passing via cha
    - Logs publish failures
    - Launched automatically when MQTT connection is established
 
-8. **mqttWorker** (main.go:127-196)
+7. **mqttWorker** (src/mqtt_worker.go)
    - Connects to Home Assistant MQTT broker at `homeassistant.lan:1883`
    - Subscribes to multiple sensor topics simultaneously
    - Forwards received messages to statsWorker via channel
-   - Launches mqttSenderWorker when connected
+   - Sends MQTT client to mqttSenderWorker when connected
    - Handles reconnection automatically via paho.mqtt client options
 
 ### Data Structures
@@ -141,19 +136,19 @@ The application uses a goroutine-based architecture with message passing via cha
 - **FloatTopicData**: Holds current value and statistics for a numeric sensor topic
 - **StringTopicData**: Holds current value for a string sensor topic
 - **DisplayData**: Container for topic data broadcast to downstream workers
-  - **Helper methods** (main.go:29-52):
+  - **Helper methods** (src/main.go:28-50):
     - `GetFloat(topic string) float64` - Extracts float value with type safety
     - `GetString(topic string) string` - Extracts string value with type safety
     - `SumTopics(topics []string) float64` - Sums multiple float topics
 - **TimeWindows**: Holds values across 1, 5, and 15 minute windows (accessed as `._1`, `._5`, `._15`)
 
 **Battery Monitoring:**
-- **BatteryCalibConfig** (battery_config.go:3-12): Configuration for calibration worker
+- **BatteryCalibConfig** (src/battery_config.go): Configuration for calibration worker
   - Name, charge state topic, voltage topic, inflow/outflow topics
   - High voltage threshold and float charge state string
-- **BatterySOCConfig** (battery_config.go:21-29): Configuration for SOC worker
+- **BatterySOCConfig** (src/battery_config.go): Configuration for SOC worker
   - Name, capacity, inflow/outflow topics, calibration topics, conversion loss rate
-- **CalibrationTopics** (battery_config.go:15-18): Statestream topic paths for calibration data
+- **CalibrationTopics** (src/battery_config.go): Statestream topic paths for calibration data
 
 ### Statistics Algorithm
 
@@ -171,8 +166,7 @@ The application uses time-weighted averaging to account for irregular message ar
 **Incoming (from MQTT):**
 ```
 MQTT Broker → mqttWorker → SensorMessage → statsWorker → DisplayData → broadcastWorker → (fan-out)
-                             channel                       channel                         ├─→ displayWorker → stdout
-                                                                                           ├─→ batteryCalibWorker (Battery 2)
+                             channel                       channel                         ├─→ batteryCalibWorker (Battery 2)
                                                                                            ├─→ batteryCalibWorker (Battery 3)
                                                                                            ├─→ batterySOCWorker (Battery 2)
                                                                                            └─→ batterySOCWorker (Battery 3)
@@ -229,8 +223,8 @@ batteryCalibWorker → MQTT attributes topic → Home Assistant statestream → 
 
 To add a new downstream worker that processes sensor statistics:
 
-1. Create a worker function that receives `<-chan DisplayData` (see `displayWorker` in main.go:72-82 as an example)
-2. In `main.go`, create a channel: `newChan := make(chan DisplayData, 10)`
+1. Create a worker function that receives `<-chan DisplayData` (see existing workers in `src/battery_*_worker.go` as examples)
+2. In `src/main.go`, create a channel: `newChan := make(chan DisplayData, 10)`
 3. Launch the worker: `SafeGo(ctx, cancel, "worker-name", func(ctx context.Context) { yourWorker(ctx, newChan) })`
 4. Add the channel to the `downstreamChans` slice (before launching broadcastWorker)
 
@@ -246,7 +240,6 @@ SafeGo(ctx, cancel, "control-worker", func(ctx context.Context) {
 
 // Add to downstreamChans
 downstreamChans := []chan<- DisplayData{
-    displayChan,
     battery2CalibChan,
     battery3CalibChan,
     battery2SOCChan,
@@ -277,7 +270,7 @@ MQTT connection settings in main():
 - Broker: `homeassistant.lan`
 - Port: `1883`
 
-**Topics monitored** (defined in main.go:230-252):
+**Topics monitored** (defined in src/main.go):
 
 Battery 2 (10 kWh) outflows:
 - `homeassistant/sensor/powerhouse_inverter_1_switch_0_energy/state`
@@ -309,7 +302,7 @@ Battery calibration (statestream topics from Home Assistant):
 
 **MQTT Publishing:**
 
-Battery entities are auto-created at startup via Home Assistant MQTT discovery (homeassistant.go):
+Battery entities are auto-created at startup via Home Assistant MQTT discovery (src/homeassistant.go):
 - Config topics: `homeassistant/sensor/battery_2_[percentage|available_wh]/config`
 - Config topics: `homeassistant/sensor/battery_3_[percentage|available_wh]/config`
 - State topics: `homeassistant/sensor/battery_2/state` (JSON with percentage + available_wh)
@@ -322,9 +315,10 @@ The calibration attributes are republished by Home Assistant's statestream integ
 
 **Setup**: Copy `.env.example` to `.env` and fill in your credentials.
 
-**Adding topics**: Edit the `topics` slice in main.go to add or remove monitored sensors.
+**Adding topics**: Edit the `topics` slice in src/main.go to add or remove monitored sensors.
 - If there are more than 3 arguments to a function definition, put each one on a new line
   - multiple arguments sharing the same type do not count for this purpose, eg.
     - `func(a int, b int, c int)` is 3 arguments
     - `func(a, b, c int)` is 1 argument
   
+- Before making a commit, update CLAUDE.md

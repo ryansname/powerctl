@@ -2,13 +2,10 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"sort"
 	"syscall"
-	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/joho/godotenv"
@@ -69,138 +66,6 @@ func SafeGo(
 	}()
 }
 
-// displayWorker receives display data and renders it to stdout
-func displayWorker(ctx context.Context, displayChan <-chan DisplayData) {
-	for {
-		select {
-		case data := <-displayChan:
-			displayAllStats(data.TopicData)
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-// displayAllStats formats and prints statistics for all topics to stdout
-func displayAllStats(topicData map[string]any) {
-	// Separate float and string topics and get sorted topic names
-	var floatTopics []string
-	var stringTopics []string
-	for topic, data := range topicData {
-		switch data.(type) {
-		case *FloatTopicData:
-			floatTopics = append(floatTopics, topic)
-		case *StringTopicData:
-			stringTopics = append(stringTopics, topic)
-		}
-	}
-	sort.Strings(floatTopics)
-	sort.Strings(stringTopics)
-
-	// fmt.Print("\033[H\033[2J") // Clear screen
-	// fmt.Println("Power Monitoring")
-	// fmt.Println()
-
-	// // Display float sensors - just current and 5-min average
-	// if len(floatTopics) > 0 {
-	// 	fmt.Printf("%-35s %10s %10s\n", "Sensor", "Current", "5m Avg")
-	// 	fmt.Println(strings.Repeat("-", 57))
-	// 	for _, topic := range floatTopics {
-	// 		data := topicData[topic].(*FloatTopicData)
-	// 		fmt.Printf("%-35s %10.2f %10.2f\n", extractShortName(topic), data.Current, data.Average._5)
-	// 	}
-	// 	fmt.Println()
-	// }
-
-	// // Display string sensors - compact format
-	// if len(stringTopics) > 0 {
-	// 	fmt.Printf("%-35s %s\n", "Sensor", "Value")
-	// 	fmt.Println(strings.Repeat("-", 57))
-	// 	for _, topic := range stringTopics {
-	// 		data := topicData[topic].(*StringTopicData)
-	// 		fmt.Printf("%-35s %s\n", extractShortName(topic), data.Current)
-	// 	}
-	// 	fmt.Println()
-	// }
-}
-
-// mqttWorker manages MQTT connection and forwards messages to a channel
-func mqttWorker(
-	ctx context.Context,
-	broker string,
-	topics []string,
-	username, password string,
-	msgChan chan<- SensorMessage,
-	clientChan chan<- mqtt.Client,
-) {
-	// Connect to MQTT broker
-	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tcp://%s:1883", broker))
-	opts.SetClientID("powerctl")
-	opts.SetUsername(username)
-	opts.SetPassword(password)
-	opts.SetAutoReconnect(true)
-	opts.SetConnectRetryInterval(5 * time.Second)
-
-	// Set up connection lost handler
-	opts.SetConnectionLostHandler(func(client mqtt.Client, err error) {
-		log.Printf("MQTT connection lost: %v\n", err)
-	})
-
-	// Set up connection handler
-	opts.SetOnConnectHandler(func(client mqtt.Client) {
-		log.Printf("Connected to MQTT broker at %s\n", broker)
-
-		// Send the new client to the sender worker
-		select {
-		case clientChan <- client:
-			log.Println("Sent new MQTT client to sender worker")
-		case <-ctx.Done():
-			return
-		}
-
-		// Subscribe to all topics
-		for _, topic := range topics {
-			token := client.Subscribe(topic, 0, func(client mqtt.Client, msg mqtt.Message) {
-				// Forward message to stats worker via channel
-				sensorMsg := SensorMessage{
-					Topic: msg.Topic(),
-					Value: string(msg.Payload()),
-				}
-				select {
-				case msgChan <- sensorMsg:
-				case <-ctx.Done():
-					return
-				}
-			})
-
-			if token.Wait() && token.Error() != nil {
-				log.Printf("Failed to subscribe to topic %s: %v\n", topic, token.Error())
-			} else {
-				log.Printf("Subscribed to topic: %s\n", topic)
-			}
-		}
-	})
-
-	client := mqtt.NewClient(opts)
-
-	// Connect to broker
-	log.Printf("Connecting to MQTT broker at %s...\n", broker)
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
-		log.Printf("Failed to connect to MQTT broker: %v\n", token.Error())
-		return
-	}
-
-	// Keep worker alive until context is done
-	<-ctx.Done()
-
-	// Cleanup
-	if client.IsConnected() {
-		client.Disconnect(250)
-		log.Println("Disconnected from MQTT broker")
-	}
-}
-
 func main() {
 	log.Println("Starting powerctl...")
 
@@ -254,7 +119,6 @@ func main() {
 	// Create channels for communication between workers
 	msgChan := make(chan SensorMessage, 10)
 	statsChan := make(chan DisplayData, 10)
-	displayChan := make(chan DisplayData, 10)
 	battery2CalibChan := make(chan DisplayData, 10)
 	battery3CalibChan := make(chan DisplayData, 10)
 	battery2SOCChan := make(chan DisplayData, 10)
@@ -312,12 +176,6 @@ func main() {
 		statsWorker(ctx, msgChan, statsChan, topics)
 	})
 	log.Println("Stats worker started")
-
-	// Launch downstream workers
-	SafeGo(ctx, cancel, "display-worker", func(ctx context.Context) {
-		displayWorker(ctx, displayChan)
-	})
-	log.Println("Display worker started")
 
 	// Configure and launch battery 2 calibration worker
 	battery2CalibConfig := BatteryCalibConfig{
@@ -413,7 +271,6 @@ func main() {
 
 	// Collect all downstream worker channels for fan-out
 	downstreamChans := []chan<- DisplayData{
-		displayChan,
 		battery2CalibChan,
 		battery3CalibChan,
 		battery2SOCChan,
