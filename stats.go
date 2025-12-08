@@ -174,7 +174,14 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 				// Handle as float topic
 				var data *FloatTopicData
 				if existing, exists := topicData[msg.Topic]; exists {
-					data = existing.(*FloatTopicData)
+					// Check if existing data is actually FloatTopicData
+					if floatData, ok := existing.(*FloatTopicData); ok {
+						data = floatData
+					} else {
+						// Type mismatch: topic was previously string, now numeric
+						log.Printf("ERROR: Topic %s type changed from string to float (value=%s)\n", msg.Topic, msg.Value)
+						return
+					}
 				} else {
 					data = &FloatTopicData{}
 					topicData[msg.Topic] = data
@@ -196,7 +203,14 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 				// Handle as string topic
 				var data *StringTopicData
 				if existing, exists := topicData[msg.Topic]; exists {
-					data = existing.(*StringTopicData)
+					// Check if existing data is actually StringTopicData
+					if stringData, ok := existing.(*StringTopicData); ok {
+						data = stringData
+					} else {
+						// Type mismatch: topic was previously float, now string
+						log.Printf("ERROR: Topic %s type changed from float to string (value=%s)\n", msg.Topic, msg.Value)
+						return
+					}
 				} else {
 					data = &StringTopicData{}
 					topicData[msg.Topic] = data
