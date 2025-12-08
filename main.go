@@ -117,7 +117,7 @@ func mqttWorker(
 	topics []string,
 	username, password string,
 	msgChan chan<- SensorMessage,
-	outgoingChan <-chan MQTTMessage,
+	clientChan chan<- mqtt.Client,
 ) {
 	// Connect to MQTT broker
 	opts := mqtt.NewClientOptions()
@@ -137,8 +137,13 @@ func mqttWorker(
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
 		log.Printf("Connected to MQTT broker at %s\n", broker)
 
-		// Launch MQTT sender worker now that we're connected
-		go mqttSenderWorker(ctx, outgoingChan, client)
+		// Send the new client to the sender worker
+		select {
+		case clientChan <- client:
+			log.Println("Sent new MQTT client to sender worker")
+		case <-ctx.Done():
+			return
+		}
 
 		// Subscribe to all topics
 		for _, topic := range topics {
@@ -233,6 +238,13 @@ func main() {
 	battery2Chan := make(chan DisplayData, 10)
 	battery3Chan := make(chan DisplayData, 10)
 	mqttOutgoingChan := make(chan MQTTMessage, 100) // Larger buffer for queuing
+	mqttClientChan := make(chan mqtt.Client, 1)     // Buffered to prevent blocking onConnect
+
+	// Launch MQTT sender worker (receives client updates via channel)
+	SafeGo(ctx, cancel, "mqtt-sender-worker", func(ctx context.Context) {
+		mqttSenderWorker(ctx, mqttOutgoingChan, mqttClientChan)
+	})
+	log.Println("MQTT sender worker started")
 
 	// Launch stats worker (produces statistics)
 	SafeGo(ctx, cancel, "stats-worker", func(ctx context.Context) {
@@ -305,7 +317,7 @@ func main() {
 
 	// Launch MQTT worker
 	SafeGo(ctx, cancel, "mqtt-worker", func(ctx context.Context) {
-		mqttWorker(ctx, "homeassistant.lan", topics, mqttUsername, mqttPassword, msgChan, mqttOutgoingChan)
+		mqttWorker(ctx, "homeassistant.lan", topics, mqttUsername, mqttPassword, msgChan, mqttClientChan)
 	})
 	log.Println("MQTT worker started")
 
