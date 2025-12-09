@@ -40,7 +40,7 @@ func batterySOCWorker(
 	ctx context.Context,
 	dataChan <-chan DisplayData,
 	config BatterySOCConfig,
-	outgoingChan chan<- MQTTMessage,
+	sender *MQTTSender,
 ) {
 	log.Printf("%s SOC worker started\n", config.Name)
 
@@ -50,8 +50,8 @@ func batterySOCWorker(
 		select {
 		case data := <-dataChan:
 			// Extract calibration data from statestream topics (totals when battery was last at 100%)
-			calibInflows := data.GetFloat(config.CalibrationTopics.Inflows)
-			calibOutflows := data.GetFloat(config.CalibrationTopics.Outflows)
+			calibInflows := data.GetFloat(config.CalibrationTopics.Inflows).Current
+			calibOutflows := data.GetFloat(config.CalibrationTopics.Outflows).Current
 
 			// Calculate current inflow and outflow totals
 			inflowTotal := data.SumTopics(config.InflowTopics)
@@ -85,12 +85,12 @@ func batterySOCWorker(
 				continue
 			}
 
-			outgoingChan <- MQTTMessage{
+			sender.Send(MQTTMessage{
 				Topic:   stateTopic,
 				Payload: payloadBytes,
 				QoS:     0,
 				Retain:  false,
-			}
+			})
 
 		case <-ctx.Done():
 			log.Printf("%s SOC worker stopped\n", config.Name)

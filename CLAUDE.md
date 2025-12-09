@@ -106,12 +106,21 @@ The application uses a goroutine-based architecture with message passing via cha
    - Reads calibration data from DisplayData (published by calibration worker via statestream)
    - **Energy accounting**:
      - Calculates energy delta since last calibration (inflows - outflows)
-     - Applies 2% conversion loss rate to outflows
+     - Applies 10% conversion loss rate to outflows
      - Available Wh = capacity + energy_in - energy_out_with_losses
    - Publishes percentage and available_wh to Home Assistant state topic
    - Waits for calibration topics via statsWorker readiness mechanism
 
-6. **mqttSenderWorker** (src/mqtt_sender.go)
+6. **lowVoltageWorker** (src/low_voltage_worker.go)
+   - Monitors battery voltage and turns off inverters when voltage drops too low
+   - Uses 15-minute minimum voltage to avoid reacting to measurement noise
+   - **Protection behavior**:
+     - Threshold: 50.75V (configurable in main.go)
+     - When triggered, sends turn_off commands for all attached inverters via `MQTTSender.CallService()`
+     - Re-arms after 16 minutes to allow voltage recovery before checking again
+   - Uses Node-RED MQTT proxy (`nodered/proxy/call_service`) to call Home Assistant services
+
+7. **mqttSenderWorker** (src/mqtt_sender.go)
    - Dedicated worker for outgoing MQTT messages
    - Receives MQTTMessage structs via channel (100-message buffer)
    - Handles message queuing automatically
@@ -119,7 +128,7 @@ The application uses a goroutine-based architecture with message passing via cha
    - Logs publish failures
    - Launched automatically when MQTT connection is established
 
-7. **mqttWorker** (src/mqtt_worker.go)
+8. **mqttWorker** (src/mqtt_worker.go)
    - Connects to Home Assistant MQTT broker at `homeassistant.lan:1883`
    - Subscribes to multiple sensor topics simultaneously
    - Forwards received messages to statsWorker via channel
@@ -131,25 +140,31 @@ The application uses a goroutine-based architecture with message passing via cha
 **MQTT Communication:**
 - **SensorMessage**: Incoming MQTT message with topic and value
 - **MQTTMessage**: Outgoing MQTT message with topic, payload, QoS, and retain flag
+- **MQTTSender** (src/mqtt_sender.go): Wrapper around outgoing channel with helper methods
+  - `Send(msg MQTTMessage)` - Sends a raw MQTT message
+  - `CallService(domain, service, entityID string)` - Sends a Home Assistant service call via Node-RED proxy
+  - `CreateBatteryEntity(...)` - Creates a Home Assistant entity via MQTT discovery
 
 **Statistics:**
 - **Reading**: Timestamped sensor value
 - **FloatTopicData**: Holds current value and statistics for a numeric sensor topic
 - **StringTopicData**: Holds current value for a string sensor topic
 - **DisplayData**: Container for topic data broadcast to downstream workers
-  - **Helper methods** (src/main.go:28-50):
-    - `GetFloat(topic string) float64` - Extracts float value with type safety
+  - **Helper methods** (src/main.go:25-50):
+    - `GetFloat(topic string) *FloatTopicData` - Extracts FloatTopicData with type safety (access `.Current`, `.Average._15`, etc.)
     - `GetString(topic string) string` - Extracts string value with type safety
-    - `SumTopics(topics []string) float64` - Sums multiple float topics
+    - `SumTopics(topics []string) float64` - Sums multiple float topics (uses `.Current` values)
 - **TimeWindows**: Holds values across 1, 5, and 15 minute windows (accessed as `._1`, `._5`, `._15`)
 
 **Battery Monitoring:**
 - **BatteryConfig** (src/battery_config.go): Shared configuration for each battery
   - Name, capacity, manufacturer, inflow/outflow topics
   - Charge state topic, voltage topic, calibration thresholds
-  - Helper methods: `CalibConfig()`, `SOCConfig()`, `CalibrationTopics()`
+  - Inverter switch entity IDs for protection control
+  - Helper methods: `CalibConfig()`, `SOCConfig()`, `LowVoltageProtectionConfig(threshold)`
 - **BatteryCalibConfig** (src/battery_config.go): Configuration for calibration worker (derived from BatteryConfig)
 - **BatterySOCConfig** (src/battery_config.go): Configuration for SOC worker (derived from BatteryConfig)
+- **LowVoltageConfig** (src/battery_config.go): Configuration for low voltage protection worker
 - **CalibrationTopics** (src/battery_config.go): Statestream topic paths for calibration data
 
 ### Statistics Algorithm
@@ -171,7 +186,9 @@ MQTT Broker → mqttWorker → SensorMessage → statsWorker → DisplayData →
                              channel                       channel                         ├─→ batteryCalibWorker (Battery 2)
                                                                                            ├─→ batteryCalibWorker (Battery 3)
                                                                                            ├─→ batterySOCWorker (Battery 2)
-                                                                                           └─→ batterySOCWorker (Battery 3)
+                                                                                           ├─→ batterySOCWorker (Battery 3)
+                                                                                           ├─→ lowVoltageWorker (Battery 2)
+                                                                                           └─→ lowVoltageWorker (Battery 3)
 ```
 
 **Outgoing (to MQTT/Home Assistant):**
@@ -181,6 +198,9 @@ batteryCalibWorker → MQTTMessage → mqttOutgoingChan → mqttSenderWorker →
 
 batterySOCWorker → MQTTMessage → mqttOutgoingChan → mqttSenderWorker → MQTT Broker → Home Assistant
 (state updates)    channel      (100 msg buffer)                                       (percentage + available_wh)
+
+lowVoltageWorker → MQTTMessage → mqttOutgoingChan → mqttSenderWorker → MQTT Broker → Node-RED → Home Assistant
+(service calls)    channel      (100 msg buffer)                                       (nodered/proxy/call_service)
 ```
 
 **Calibration Data Loop:**
@@ -195,6 +215,7 @@ batteryCalibWorker → MQTT attributes topic → Home Assistant statestream → 
 - **batteryCalibWorker** detects calibration events and publishes reference values to attributes topic
 - **Home Assistant statestream** republishes attributes as sensor topics for consumption
 - **batterySOCWorker** reads calibration data from DisplayData and calculates battery percentage
+- **lowVoltageWorker** monitors 15-min minimum voltage and triggers inverter shutoff via Node-RED proxy
 - **mqttSenderWorker** handles all outgoing MQTT with automatic queuing
 - Each topic's statistics are tracked independently and broadcast together
 
@@ -255,7 +276,24 @@ Example downstream workers could:
 - Send alerts when values exceed limits
 - Log data to files or databases
 - Expose metrics via HTTP endpoints
-- Make HTTP requests to Home Assistant API to control devices
+- Call Home Assistant services via Node-RED MQTT proxy
+
+### Calling Home Assistant Services
+
+A Node-RED flow is configured to proxy Home Assistant service calls via MQTT.
+
+**Topic:** `nodered/proxy/call_service`
+
+**Payload schema:**
+```json
+{
+  "domain": "switch",
+  "service": "turn_on",
+  "entity_id": "switch.example"
+}
+```
+
+This allows powerctl to control any Home Assistant entity by publishing to the MQTT broker.
 
 ### Dependencies
 
@@ -305,7 +343,7 @@ Battery calibration (statestream topics from Home Assistant):
 
 **MQTT Publishing:**
 
-Battery entities are auto-created at startup via Home Assistant MQTT discovery (src/homeassistant.go):
+Battery entities are auto-created at startup via Home Assistant MQTT discovery (`MQTTSender.CreateBatteryEntity`):
 - Config topics: `homeassistant/sensor/battery_2_[percentage|available_wh]/config`
 - Config topics: `homeassistant/sensor/battery_3_[percentage|available_wh]/config`
 - State topics: `homeassistant/sensor/battery_2/state` (JSON with percentage + available_wh)

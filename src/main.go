@@ -22,12 +22,13 @@ type DisplayData struct {
 	TopicData map[string]any
 }
 
-// GetFloat extracts a float value from DisplayData
-func (d *DisplayData) GetFloat(topic string) float64 {
+// GetFloat extracts FloatTopicData from DisplayData
+// Returns a zero-valued FloatTopicData if topic doesn't exist or isn't a float topic
+func (d *DisplayData) GetFloat(topic string) *FloatTopicData {
 	if td, ok := d.TopicData[topic].(*FloatTopicData); ok {
-		return td.Current
+		return td
 	}
-	return 0
+	return &FloatTopicData{}
 }
 
 // GetString extracts a string value from DisplayData
@@ -42,7 +43,7 @@ func (d *DisplayData) GetString(topic string) string {
 func (d *DisplayData) SumTopics(topics []string) float64 {
 	var total float64
 	for _, topic := range topics {
-		total += d.GetFloat(topic)
+		total += d.GetFloat(topic).Current
 	}
 	return total
 }
@@ -120,7 +121,13 @@ func main() {
 		},
 		HighVoltageThreshold: 53.6,
 		FloatChargeState:     "Float Charging",
-		ConversionLossRate:   0.02,
+		ConversionLossRate:   0.10,
+		InverterSwitchIDs: []string{
+			"switch.powerhouse_inverter_1_switch_0",
+			"switch.powerhouse_inverter_2_switch_0",
+			"switch.powerhouse_inverter_3_switch_0",
+			"switch.powerhouse_inverter_4_switch_0",
+		},
 	}
 
 	battery3 := BatteryConfig{
@@ -146,7 +153,14 @@ func main() {
 		},
 		HighVoltageThreshold: 53.6,
 		FloatChargeState:     "Float Charging",
-		ConversionLossRate:   0.02,
+		ConversionLossRate:   0.10,
+		InverterSwitchIDs: []string{
+			"switch.powerhouse_inverter_5_switch_0",
+			"switch.powerhouse_inverter_6_switch_0",
+			"switch.powerhouse_inverter_7_switch_0",
+			"switch.powerhouse_inverter_8_switch_0",
+			"switch.powerhouse_inverter_9_switch_0",
+		},
 	}
 
 	batteries := []BatteryConfig{battery2, battery3}
@@ -166,12 +180,15 @@ func main() {
 	})
 	log.Println("MQTT sender worker started")
 
+	// Create MQTT sender for workers
+	mqttSender := NewMQTTSender(mqttOutgoingChan)
+
 	// Create Home Assistant battery entities
 	log.Println("Creating Home Assistant entities...")
 
 	for _, b := range batteries {
-		err := createBatteryEntity(
-			mqttOutgoingChan, b.Name, b.CapacityKWh, b.Manufacturer,
+		err := mqttSender.CreateBatteryEntity(
+			b.Name, b.CapacityKWh, b.Manufacturer,
 			"State of Charge", "battery", "%", "percentage", 1,
 		)
 		if err != nil {
@@ -179,8 +196,8 @@ func main() {
 			log.Fatalf("Failed to create %s State of Charge entity: %v", b.Name, err)
 		}
 
-		err = createBatteryEntity(
-			mqttOutgoingChan, b.Name, b.CapacityKWh, b.Manufacturer,
+		err = mqttSender.CreateBatteryEntity(
+			b.Name, b.CapacityKWh, b.Manufacturer,
 			"Available Energy", "energy", "Wh", "available_wh", 0,
 		)
 		if err != nil {
@@ -197,26 +214,36 @@ func main() {
 	})
 	log.Println("Stats worker started")
 
+	// Low voltage threshold for protection
+	lowVoltageThreshold := 50.75
+
 	// Launch battery workers and collect downstream channels
 	var downstreamChans []chan<- DisplayData //nolint:prealloc // small slice
 	for _, b := range batteries {
 		calibChan := make(chan DisplayData, 10)
 		socChan := make(chan DisplayData, 10)
-		downstreamChans = append(downstreamChans, calibChan, socChan)
+		lowVoltageChan := make(chan DisplayData, 10)
+		downstreamChans = append(downstreamChans, calibChan, socChan, lowVoltageChan)
 
 		// Launch calibration worker
 		calibConfig := b.CalibConfig()
 		SafeGo(ctx, cancel, b.Name+"-calib", func(ctx context.Context) {
-			batteryCalibWorker(ctx, calibChan, calibConfig, mqttOutgoingChan)
+			batteryCalibWorker(ctx, calibChan, calibConfig, mqttSender)
 		})
 		log.Printf("%s calibration worker started\n", b.Name)
 
 		// Launch SOC worker
 		socConfig := b.SOCConfig()
 		SafeGo(ctx, cancel, b.Name+"-soc", func(ctx context.Context) {
-			batterySOCWorker(ctx, socChan, socConfig, mqttOutgoingChan)
+			batterySOCWorker(ctx, socChan, socConfig, mqttSender)
 		})
 		log.Printf("%s SOC worker started\n", b.Name)
+
+		// Launch low voltage protection worker
+		lowVoltageConfig := b.LowVoltageProtectionConfig(lowVoltageThreshold)
+		SafeGo(ctx, cancel, b.Name+"-low-voltage", func(ctx context.Context) {
+			lowVoltageWorker(ctx, lowVoltageChan, lowVoltageConfig, mqttSender)
+		})
 	}
 
 	// Launch broadcast worker (fans out to all downstream workers)

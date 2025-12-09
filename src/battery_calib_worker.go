@@ -11,12 +11,12 @@ func batteryCalibWorker(
 	ctx context.Context,
 	dataChan <-chan DisplayData,
 	config BatteryCalibConfig,
-	outgoingChan chan<- MQTTMessage,
+	sender *MQTTSender,
 ) {
 	for {
 		select {
 		case data := <-dataChan:
-			voltage := data.GetFloat(config.BatteryVoltageTopic)
+			voltage := data.GetFloat(config.BatteryVoltageTopic).Current
 			chargeState := data.GetString(config.ChargeStateTopic)
 
 			isFloatCharging := strings.Contains(chargeState, config.FloatChargeState)
@@ -32,12 +32,12 @@ func batteryCalibWorker(
 					"calibration_outflows": outflows,
 				})
 
-				outgoingChan <- MQTTMessage{
+				sender.Send(MQTTMessage{
 					Topic:   "homeassistant/sensor/" + deviceId + "/attributes",
 					Payload: payload,
 					QoS:     1,
 					Retain:  true,
-				}
+				})
 			}
 
 		case <-ctx.Done():

@@ -13,6 +13,7 @@ type BatteryConfig struct {
 	HighVoltageThreshold float64
 	FloatChargeState     string
 	ConversionLossRate   float64
+	InverterSwitchIDs    []string
 }
 
 // CalibrationTopics holds statestream topic paths for calibration data
@@ -42,6 +43,14 @@ type BatterySOCConfig struct {
 	ConversionLossRate float64
 }
 
+// LowVoltageConfig holds configuration for the low voltage protection worker
+type LowVoltageConfig struct {
+	Name                string
+	BatteryVoltageTopic string
+	InverterSwitchIDs   []string
+	LowVoltageThreshold float64
+}
+
 // CalibConfig creates a BatteryCalibConfig from the shared BatteryConfig
 func (c *BatteryConfig) CalibConfig() BatteryCalibConfig {
 	return BatteryCalibConfig{
@@ -64,6 +73,16 @@ func (c *BatteryConfig) SOCConfig() BatterySOCConfig {
 		OutflowTopics:      c.OutflowTopics,
 		CalibrationTopics:  c.CalibrationTopics,
 		ConversionLossRate: c.ConversionLossRate,
+	}
+}
+
+// LowVoltageProtectionConfig creates a LowVoltageConfig from the shared BatteryConfig
+func (c *BatteryConfig) LowVoltageProtectionConfig(threshold float64) LowVoltageConfig {
+	return LowVoltageConfig{
+		Name:                c.Name,
+		BatteryVoltageTopic: c.BatteryVoltageTopic,
+		InverterSwitchIDs:   c.InverterSwitchIDs,
+		LowVoltageThreshold: threshold,
 	}
 }
 
