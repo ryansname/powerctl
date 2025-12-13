@@ -47,10 +47,18 @@ func mqttWorker(
 		// Subscribe to all topics
 		for _, topic := range topics {
 			token := client.Subscribe(topic, 0, func(client mqtt.Client, msg mqtt.Message) {
+				value := string(msg.Payload())
+
+				// Skip "Undefined" values from HA - sensor has dropped out
+				// TODO: Track how long sensors have been undefined and send notification
+				if value == "Undefined" {
+					return
+				}
+
 				// Forward message to stats worker via channel
 				sensorMsg := SensorMessage{
 					Topic: msg.Topic(),
-					Value: string(msg.Payload()),
+					Value: value,
 				}
 				select {
 				case msgChan <- sensorMsg:
