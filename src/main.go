@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/joho/godotenv"
@@ -61,22 +62,70 @@ func buildTopicsList(batteries []BatteryConfig) []string {
 	return topics
 }
 
-// SafeGo launches a goroutine with panic recovery.
-// If the goroutine panics, the context is cancelled and the panic is logged.
+// SafeGo launches a goroutine with panic recovery and retry logic.
+// On panic, retries with exponential backoff (max 10 retries).
+// Retry count resets if worker ran for 2+ minutes before failing.
+// After exhausting retries, cancels context to trigger shutdown.
 func SafeGo(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	name string,
 	fn func(ctx context.Context),
 ) {
+	const maxRetries = 10
+	const maxDelay = 10 * time.Minute
+	const resetAfter = 2 * time.Minute
+
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("Panic in %s: %v\n", name, r)
-				cancel()
+		retries := 0
+		delay := time.Second
+
+		for {
+			startTime := time.Now()
+			var panicValue any
+
+			func() {
+				defer func() {
+					panicValue = recover()
+				}()
+				fn(ctx)
+			}()
+
+			// If function returned normally (no panic), exit the goroutine
+			// This covers both context cancellation and unexpected completion
+			if panicValue == nil {
+				return
 			}
-		}()
-		fn(ctx)
+
+			// If ran for resetAfter duration before panicking, reset retry state
+			if time.Since(startTime) >= resetAfter {
+				retries = 0
+				delay = time.Second
+			}
+
+			retries++
+			log.Printf("Panic in %s (attempt %d/%d): %v\n", name, retries, maxRetries, panicValue)
+
+			// Check if we've exhausted retries
+			if retries >= maxRetries {
+				log.Printf("%s failed after %d retries, shutting down\n", name, maxRetries)
+				cancel()
+				return
+			}
+
+			// Wait before retry with exponential backoff
+			log.Printf("%s will retry in %v\n", name, delay)
+			select {
+			case <-time.After(delay):
+				// Double delay for next time, cap at max
+				delay *= 2
+				if delay > maxDelay {
+					delay = maxDelay
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
 	}()
 }
 
@@ -153,7 +202,7 @@ func main() {
 		},
 		HighVoltageThreshold: 53.6,
 		FloatChargeState:     "Float Charging",
-		ConversionLossRate:   0.10,
+		ConversionLossRate:   0.05,
 		InverterSwitchIDs: []string{
 			"switch.powerhouse_inverter_5_switch_0",
 			"switch.powerhouse_inverter_6_switch_0",
