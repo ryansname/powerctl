@@ -187,10 +187,14 @@ The application uses a goroutine-based architecture with message passing via cha
 **Statistics:**
 - **Reading**: Timestamped sensor value
 - **FloatTopicData**: Holds current value and statistics for a numeric sensor topic
+  - `Current`: Most recent value
+  - `P1`: 1st percentile (filters out low outliers) for 1, 5, and 15 minute windows
+  - `P50`: 50th percentile (median) for 1, 5, and 15 minute windows
+  - `P99`: 99th percentile (filters out high outliers) for 1, 5, and 15 minute windows
 - **StringTopicData**: Holds current value for a string sensor topic
 - **DisplayData**: Container for topic data broadcast to downstream workers
   - **Helper methods** (src/main.go:25-55):
-    - `GetFloat(topic string) *FloatTopicData` - Extracts FloatTopicData with type safety (access `.Current`, `.Average._15`, etc.)
+    - `GetFloat(topic string) *FloatTopicData` - Extracts FloatTopicData with type safety (access `.Current`, `.P50._15`, etc.)
     - `GetString(topic string) string` - Extracts string value with type safety
     - `GetBoolean(topic string) bool` - Returns true if string value is "on", false otherwise (for switch states)
     - `SumTopics(topics []string) float64` - Sums multiple float topics (uses `.Current` values)
@@ -217,12 +221,15 @@ The application uses a goroutine-based architecture with message passing via cha
 
 ### Statistics Algorithm
 
-The application uses time-weighted averaging to account for irregular message arrival times:
+The application uses time-weighted percentiles to account for irregular message arrival times:
 1. Each reading is assigned a weight based on how long it was "active"
 2. Weight = duration from this reading until the next reading (or until now for the last reading)
-3. Time-weighted average = sum(value × duration) / sum(durations)
-4. This ensures that a value that was stable for 30 seconds has more influence than a brief spike
-5. Min/Max remain simple - just the minimum and maximum values observed in the window
+3. For percentile calculation:
+   - Values are sorted by magnitude
+   - Durations are accumulated until reaching the percentile threshold
+   - Example: P50 (median) is the value at 50% of total duration
+4. **P50** = time-weighted median - stable values have more influence than brief spikes
+5. **P1/P99** = 1st/99th percentile - filters out extreme outliers (brief spikes/dips don't affect these)
 6. **Last known value preservation**: If no messages arrive in a time window, statistics show the last known value instead of zero
 7. At least one reading is always kept (even if older than 15 minutes) to maintain the last known value
 

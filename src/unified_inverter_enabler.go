@@ -107,15 +107,15 @@ func unifiedInverterEnabler(
 // determineMode selects operating mode based on Powerwall SOC and solar conditions
 func determineMode(data DisplayData, config UnifiedInverterConfig) OperatingMode {
 	// Check Powerwall SOC first - if low, prioritize draining local batteries
-	// Use 15min minimum to avoid flip-flopping between modes
-	powerwallSOC15MinMin := data.GetFloat(config.PowerwallSOCTopic).Min._15
-	if powerwallSOC15MinMin < config.PowerwallLowThreshold {
+	// Use 15min P1 to avoid flip-flopping between modes (filters out brief low readings)
+	powerwallSOC15MinP1 := data.GetFloat(config.PowerwallSOCTopic).P1._15
+	if powerwallSOC15MinP1 < config.PowerwallLowThreshold {
 		return PowerwallLowMode
 	}
 
 	// Check solar conditions for max inverter mode
 	solarForecast := data.GetFloat(config.SolarForecastTopic).Current
-	solarPower5MinAvg := data.GetFloat(config.Solar1PowerTopic).Average._5
+	solarPower5MinAvg := data.GetFloat(config.Solar1PowerTopic).P50._5
 
 	if solarForecast > config.MaxInverterModeSolarForecast &&
 		solarPower5MinAvg > config.MaxInverterModeSolarPower {
@@ -132,18 +132,18 @@ func calculateTargetPower(data DisplayData, config UnifiedInverterConfig, mode O
 	switch mode {
 	case MaxInverterMode:
 		target = 10000.0 // Will be limited by actual hardware anyway
-		fmt.Println(data.GetFloat(config.Solar1PowerTopic).Max._15)
+		fmt.Println(data.GetFloat(config.Solar1PowerTopic).P99._15)
 	case PowerwallLowMode:
-		loadPower15MinMax := data.GetFloat(config.LoadPowerTopic).Max._15
-		target = loadPower15MinMax // 100% of peak load when Powerwall is low
+		loadPower15MinP99 := data.GetFloat(config.LoadPowerTopic).P99._15
+		target = loadPower15MinP99 // 100% of peak load when Powerwall is low
 	case PowerwallLastMode:
-		loadPower15MinAvg := data.GetFloat(config.LoadPowerTopic).Average._15
+		loadPower15MinAvg := data.GetFloat(config.LoadPowerTopic).P50._15
 		target = loadPower15MinAvg * (2.0 / 3.0)
 	}
 
-	// Apply limit: available capacity = 5000W - solar_1_power_15min_max
-	solar1Power15MinMax := data.GetFloat(config.Solar1PowerTopic).Max._15
-	availableCapacity := config.MaxTransferPower - solar1Power15MinMax
+	// Apply limit: available capacity = 5000W - solar_1_power_15min_P99
+	solar1Power15MinP99 := data.GetFloat(config.Solar1PowerTopic).P99._15
+	availableCapacity := config.MaxTransferPower - solar1Power15MinP99
 	target = min(target, availableCapacity)
 	target = max(target, 0)
 

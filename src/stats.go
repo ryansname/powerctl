@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -38,9 +39,9 @@ type TimeWindows struct {
 // FloatTopicData holds current value and statistics for a float topic
 type FloatTopicData struct {
 	Current float64
-	Average TimeWindows
-	Min     TimeWindows
-	Max     TimeWindows
+	P1      TimeWindows // 1st percentile (filters out low outliers)
+	P50     TimeWindows // 50th percentile (median)
+	P99     TimeWindows // 99th percentile (filters out high outliers)
 }
 
 // StringTopicData holds current value for a string topic
@@ -48,9 +49,70 @@ type StringTopicData struct {
 	Current string
 }
 
+// weightedValue represents a value with its duration weight for percentile calculation
+type weightedValue struct {
+	value    float64
+	duration float64
+}
+
+// calculateTimeWeightedPercentiles returns P1, P50, and P99 in a single pass
+// where each value is weighted by how long it persisted.
+// The pairs slice must be sorted by value in ascending order.
+func calculateTimeWeightedPercentiles(pairs []weightedValue, totalDuration float64) (p1, p50, p99 float64) {
+	if len(pairs) == 0 {
+		return 0, 0, 0
+	}
+	if len(pairs) == 1 {
+		v := pairs[0].value
+		return v, v, v
+	}
+
+	// Target durations for each percentile
+	target1 := totalDuration * 0.01
+	target50 := totalDuration * 0.50
+	target99 := totalDuration * 0.99
+
+	// Walk through sorted pairs once, capturing values as we cross thresholds
+	var cumulative float64
+	var found1, found50, found99 bool
+
+	for _, pair := range pairs {
+		cumulative += pair.duration
+
+		if !found1 && cumulative >= target1 {
+			p1 = pair.value
+			found1 = true
+		}
+		if !found50 && cumulative >= target50 {
+			p50 = pair.value
+			found50 = true
+		}
+		if !found99 && cumulative >= target99 {
+			p99 = pair.value
+			found99 = true
+			break // All found, no need to continue
+		}
+	}
+
+	// Fallback to last value for any not found (shouldn't happen)
+	lastValue := pairs[len(pairs)-1].value
+	if !found1 {
+		p1 = lastValue
+	}
+	if !found50 {
+		p50 = lastValue
+	}
+	if !found99 {
+		p99 = lastValue
+	}
+
+	return p1, p50, p99
+}
+
 // calculateTimeWeightedStats computes time-weighted statistics for a time window
 // Each reading is weighted by the duration it was active (time until next reading)
-func calculateTimeWeightedStats(readings Readings, windowDuration time.Duration, now time.Time) (avg, min, max float64) {
+// Returns: p1 (1st percentile), p50 (median), p99 (99th percentile)
+func calculateTimeWeightedStats(readings Readings, windowDuration time.Duration, now time.Time) (p1, p50, p99 float64) {
 	if len(readings) == 0 {
 		return 0, 0, 0
 	}
@@ -69,29 +131,17 @@ func calculateTimeWeightedStats(readings Readings, windowDuration time.Duration,
 	}
 
 	// If 0 or 1 readings in window, use the most recent reading (last known value)
-	// Single reading has zero duration so can't compute time-weighted average
+	// Single reading has zero duration so can't compute time-weighted percentiles
 	if len(windowReadings) <= 1 {
 		return lastReading.Value, lastReading.Value, lastReading.Value
 	}
 
-	// Initialize min and max
-	min = windowReadings[0].Value
-	max = windowReadings[0].Value
-
-	// Calculate time-weighted average and min/max
-	var weightedSum float64
+	// Build weighted value pairs
+	pairs := make([]weightedValue, 0, len(windowReadings))
 	var totalDuration float64
 
 	for i := 0; i < len(windowReadings); i++ {
 		value := windowReadings[i].Value
-
-		// Update min/max
-		if value < min {
-			min = value
-		}
-		if value > max {
-			max = value
-		}
 
 		// Calculate duration this reading was active
 		var duration float64
@@ -103,15 +153,19 @@ func calculateTimeWeightedStats(readings Readings, windowDuration time.Duration,
 			duration = now.Sub(windowReadings[i].Timestamp).Seconds()
 		}
 
-		weightedSum += value * duration
+		pairs = append(pairs, weightedValue{value: value, duration: duration})
 		totalDuration += duration
 	}
 
-	if totalDuration > 0 {
-		avg = weightedSum / totalDuration
-	}
+	// Sort pairs by value for percentile calculation
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].value < pairs[j].value
+	})
 
-	return avg, min, max
+	// Calculate time-weighted percentiles in a single pass
+	p1, p50, p99 = calculateTimeWeightedPercentiles(pairs, totalDuration)
+
+	return p1, p50, p99
 }
 
 // calculateStats computes time-weighted statistics for different time windows
@@ -122,13 +176,13 @@ func calculateStats(data *FloatTopicData, readings Readings) {
 
 	// Calculate time-weighted statistics for each window
 	now := time.Now()
-	avg1, min1, max1 := calculateTimeWeightedStats(readings, 1*time.Minute, now)
-	avg5, min5, max5 := calculateTimeWeightedStats(readings, 5*time.Minute, now)
-	avg15, min15, max15 := calculateTimeWeightedStats(readings, 15*time.Minute, now)
+	p1_1, p50_1, p99_1 := calculateTimeWeightedStats(readings, 1*time.Minute, now)
+	p1_5, p50_5, p99_5 := calculateTimeWeightedStats(readings, 5*time.Minute, now)
+	p1_15, p50_15, p99_15 := calculateTimeWeightedStats(readings, 15*time.Minute, now)
 
-	data.Average = TimeWindows{_1: avg1, _5: avg5, _15: avg15}
-	data.Min = TimeWindows{_1: min1, _5: min5, _15: min15}
-	data.Max = TimeWindows{_1: max1, _5: max5, _15: max15}
+	data.P50 = TimeWindows{_1: p50_1, _5: p50_5, _15: p50_15}
+	data.P1 = TimeWindows{_1: p1_1, _5: p1_5, _15: p1_15}
+	data.P99 = TimeWindows{_1: p99_1, _5: p99_5, _15: p99_15}
 }
 
 // cloneTopicData creates a deep copy of topicData for safe concurrent access
@@ -139,9 +193,9 @@ func cloneTopicData(topicData map[string]any) map[string]any {
 		case *FloatTopicData:
 			clone[topic] = &FloatTopicData{
 				Current: d.Current,
-				Average: d.Average,
-				Min:     d.Min,
-				Max:     d.Max,
+				P1:      d.P1,
+				P50:     d.P50,
+				P99:     d.P99,
 			}
 		case *StringTopicData:
 			clone[topic] = &StringTopicData{

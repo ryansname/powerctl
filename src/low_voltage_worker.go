@@ -23,11 +23,11 @@ func lowVoltageWorker(
 	for {
 		select {
 		case data := <-dataChan:
-			voltage15MinMin := data.GetFloat(config.BatteryVoltageTopic).Min._15
+			voltage15MinP1 := data.GetFloat(config.BatteryVoltageTopic).P1._15
 
-			if voltage15MinMin < config.LowVoltageThreshold && !invertersOff {
+			if voltage15MinP1 < config.LowVoltageThreshold && !invertersOff {
 				log.Printf("%s: LOW VOLTAGE (%.2fV < %.2fV) - turning off %d inverters\n",
-					config.Name, voltage15MinMin, config.LowVoltageThreshold,
+					config.Name, voltage15MinP1, config.LowVoltageThreshold,
 					len(config.InverterSwitchIDs))
 
 				for _, entityID := range config.InverterSwitchIDs {
