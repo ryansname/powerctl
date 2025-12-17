@@ -169,6 +169,7 @@ The application uses a goroutine-based architecture with message passing via cha
 11. **mqttWorker** (src/mqtt_worker.go)
    - Connects to Home Assistant MQTT broker at `homeassistant.lan:1883`
    - Subscribes to multiple sensor topics simultaneously
+   - Filters out invalid values ("Undefined", "unavailable") from dropped sensors
    - Forwards received messages to statsWorker via channel
    - Sends MQTT client to mqttSenderWorker when connected
    - Handles reconnection automatically via paho.mqtt client options

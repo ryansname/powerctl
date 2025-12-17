@@ -49,9 +49,9 @@ func mqttWorker(
 			token := client.Subscribe(topic, 0, func(client mqtt.Client, msg mqtt.Message) {
 				value := string(msg.Payload())
 
-				// Skip "Undefined" values from HA - sensor has dropped out
-				// TODO: Track how long sensors have been undefined and send notification
-				if value == "Undefined" {
+				// Skip invalid values from HA - sensor has dropped out
+				// TODO: Track how long sensors have been invalid and send notification
+				if value == "Undefined" || value == "unavailable" {
 					return
 				}
 
