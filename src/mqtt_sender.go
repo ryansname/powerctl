@@ -49,6 +49,25 @@ func (s *MQTTSender) CallService(domain, service, entityID string) {
 	}
 }
 
+// SelectOption sends a select.select_option service call via the Node-RED proxy
+func (s *MQTTSender) SelectOption(entityID, option string) {
+	payload, _ := json.Marshal(map[string]any{
+		"domain":    "select",
+		"service":   "select_option",
+		"entity_id": entityID,
+		"data": map[string]string{
+			"option": option,
+		},
+	})
+
+	s.ch <- MQTTMessage{
+		Topic:   "nodered/proxy/call_service",
+		Payload: payload,
+		QoS:     1,
+		Retain:  false,
+	}
+}
+
 // CreateBatteryEntity creates a Home Assistant battery entity via MQTT discovery
 func (s *MQTTSender) CreateBatteryEntity(
 	batteryName string,

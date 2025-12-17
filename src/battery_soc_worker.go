@@ -22,17 +22,9 @@ func calculateAvailableWh(
 	energyOut := (outflowTotal - calibOutflows) * 1000
 	energyOutWithLosses := energyOut * (1.0 + conversionLossRate)
 
-	// Calculate available energy
+	// Calculate available energy, clamped to valid range
 	available := capacityWh + energyIn - energyOutWithLosses
-
-	// Clamp to valid range
-	if available < 0 {
-		return 0
-	}
-	if available > capacityWh {
-		return capacityWh
-	}
-	return available
+	return max(0, min(available, capacityWh))
 }
 
 // batterySOCWorker reads calibration from DisplayData and performs energy accounting

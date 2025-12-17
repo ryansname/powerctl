@@ -76,13 +76,14 @@ The application uses a goroutine-based architecture with message passing via cha
    - Automatically cancels the application context if a goroutine panics
    - Logs panic information for debugging
 
-2. **statsWorker** (src/stats.go:140-290)
+2. **statsWorker** (src/stats.go:153-335)
    - Receives SensorMessage structs via a channel
    - Maintains separate state for each topic (readings, current, previous values)
    - Calculates real-time statistics using time-weighted averaging per topic
    - 1, 5, and 15 minute time-weighted averages, minimums, and maximums
    - Automatically cleans up readings older than 15 minutes every 30 seconds
    - Updates are debounced (max 1 update per second)
+   - **Unit normalization**: Converts kW→W and kWh→Wh for Tesla/HA sensors (see `kiloToBaseUnitTopics` map)
    - **Startup readiness**: Waits for all expected topics before sending data
    - Logs missing topics every 30 seconds until all received
    - Sends DisplayData to broadcastWorker
@@ -120,15 +121,52 @@ The application uses a goroutine-based architecture with message passing via cha
      - Re-arms after 16 minutes to allow voltage recovery before checking again
    - Uses Node-RED MQTT proxy (`nodered/proxy/call_service`) to call Home Assistant services
 
-7. **mqttSenderWorker** (src/mqtt_sender.go)
-   - Dedicated worker for outgoing MQTT messages
-   - Receives MQTTMessage structs via channel (100-message buffer)
-   - Handles message queuing automatically
-   - Publishes to MQTT broker with configurable QoS and retain
-   - Logs publish failures
-   - Launched automatically when MQTT connection is established
+7. **powerExcessCalculator** (src/power_excess_calculator.go)
+   - Calculates excess power available for dump loads
+   - **Battery inputs** (capped at 900W total):
+     - Tesla battery remaining: If 5min avg > 4kWh → Add 1000W
+     - Battery 2 available energy: If 5min avg > 2.5kWh → Add 450W
+     - Battery 3 available energy: If 5min avg > 3kWh → Add 450W
+   - **Solar input** (added after cap):
+     - Solar 1 power: If 5min avg > 1kW → Add 1000W
+   - Outputs excess watts to dumpLoadEnabler via channel
 
-8. **mqttWorker** (src/mqtt_worker.go)
+8. **dumpLoadEnabler** (src/dump_load_enabler.go)
+   - Controls miner workmode based on excess power
+   - **Thresholds**:
+     - \> 1.7kW → "Super" mode
+     - \> 1.2kW → "Standard" mode
+     - \> 800W → "Eco" mode
+     - Otherwise → "Sleep" mode
+   - Only sends command when workmode changes
+   - Uses `MQTTSender.SelectOption()` to set miner workmode
+
+9. **unifiedInverterEnabler** (src/unified_inverter_enabler.go)
+   - Single worker managing all 9 inverters across both batteries
+   - **Mode selection** (checked in order):
+     - Powerwall Low Mode: If Powerwall SOC 15min min < 30%
+     - Max Inverter Mode: If solar forecast > 3kWh AND solar_1_power 5min avg > 250W
+     - Powerwall Last Mode: Otherwise
+   - **Target power calculation**:
+     - Max Inverter Mode: 10kW target (effectively all inverters)
+     - Powerwall Low Mode: 100% × load_power 15min max
+     - Powerwall Last Mode: 2/3 × load_power 15min avg
+   - **Limit**: 5000W - solar_1_power 15min max (accounts for solar already flowing)
+   - **Battery allocation**:
+     - Priority to batteries in "Float Charging" with > 95% SOC
+     - Otherwise split 50/50, Battery 3 gets extra for odd counts
+   - **Cooldown**: 1 minute after any modification
+   - Each inverter: 255W (9 inverters = 2,295W max)
+
+10. **mqttSenderWorker** (src/mqtt_sender.go)
+    - Dedicated worker for outgoing MQTT messages
+    - Receives MQTTMessage structs via channel (100-message buffer)
+    - Handles message queuing automatically
+    - Publishes to MQTT broker with configurable QoS and retain
+    - Logs publish failures
+    - Launched automatically when MQTT connection is established
+
+11. **mqttWorker** (src/mqtt_worker.go)
    - Connects to Home Assistant MQTT broker at `homeassistant.lan:1883`
    - Subscribes to multiple sensor topics simultaneously
    - Forwards received messages to statsWorker via channel
@@ -143,6 +181,7 @@ The application uses a goroutine-based architecture with message passing via cha
 - **MQTTSender** (src/mqtt_sender.go): Wrapper around outgoing channel with helper methods
   - `Send(msg MQTTMessage)` - Sends a raw MQTT message
   - `CallService(domain, service, entityID string)` - Sends a Home Assistant service call via Node-RED proxy
+  - `SelectOption(entityID, option string)` - Sends a select.select_option service call
   - `CreateBatteryEntity(...)` - Creates a Home Assistant entity via MQTT discovery
 
 **Statistics:**
@@ -150,9 +189,10 @@ The application uses a goroutine-based architecture with message passing via cha
 - **FloatTopicData**: Holds current value and statistics for a numeric sensor topic
 - **StringTopicData**: Holds current value for a string sensor topic
 - **DisplayData**: Container for topic data broadcast to downstream workers
-  - **Helper methods** (src/main.go:25-50):
+  - **Helper methods** (src/main.go:25-55):
     - `GetFloat(topic string) *FloatTopicData` - Extracts FloatTopicData with type safety (access `.Current`, `.Average._15`, etc.)
     - `GetString(topic string) string` - Extracts string value with type safety
+    - `GetBoolean(topic string) bool` - Returns true if string value is "on", false otherwise (for switch states)
     - `SumTopics(topics []string) float64` - Sums multiple float topics (uses `.Current` values)
 - **TimeWindows**: Holds values across 1, 5, and 15 minute windows (accessed as `._1`, `._5`, `._15`)
 
@@ -162,10 +202,18 @@ The application uses a goroutine-based architecture with message passing via cha
   - Charge state topic, voltage topic, calibration thresholds
   - Inverter switch entity IDs for protection control
   - Helper methods: `CalibConfig()`, `SOCConfig()`, `LowVoltageProtectionConfig(threshold)`
+- **BuildUnifiedInverterConfig** (src/battery_config.go): Creates UnifiedInverterConfig from two BatteryConfigs
 - **BatteryCalibConfig** (src/battery_config.go): Configuration for calibration worker (derived from BatteryConfig)
 - **BatterySOCConfig** (src/battery_config.go): Configuration for SOC worker (derived from BatteryConfig)
 - **LowVoltageConfig** (src/battery_config.go): Configuration for low voltage protection worker
 - **CalibrationTopics** (src/battery_config.go): Statestream topic paths for calibration data
+
+**Unified Inverter Enabler:**
+- **UnifiedInverterConfig** (src/unified_inverter_enabler.go): Configuration for unified inverter management
+  - Battery2, Battery3 (BatteryInverterGroup): Inverters per battery with entity IDs and state topics
+  - SolarForecastTopic, Solar1PowerTopic, LoadPowerTopic: Input topics for mode/target calculation
+  - WattsPerInverter (255W), MaxTransferPower (5000W), CooldownDuration (5 min)
+- **InverterEnablerState**: Runtime state with per-battery round-robin queues and cooldown tracking
 
 ### Statistics Algorithm
 
@@ -188,7 +236,9 @@ MQTT Broker → mqttWorker → SensorMessage → statsWorker → DisplayData →
                                                                                            ├─→ batterySOCWorker (Battery 2)
                                                                                            ├─→ batterySOCWorker (Battery 3)
                                                                                            ├─→ lowVoltageWorker (Battery 2)
-                                                                                           └─→ lowVoltageWorker (Battery 3)
+                                                                                           ├─→ lowVoltageWorker (Battery 3)
+                                                                                           ├─→ unifiedInverterEnabler
+                                                                                           └─→ powerExcessCalculator → excessChan → dumpLoadEnabler
 ```
 
 **Outgoing (to MQTT/Home Assistant):**
@@ -201,6 +251,12 @@ batterySOCWorker → MQTTMessage → mqttOutgoingChan → mqttSenderWorker → M
 
 lowVoltageWorker → MQTTMessage → mqttOutgoingChan → mqttSenderWorker → MQTT Broker → Node-RED → Home Assistant
 (service calls)    channel      (100 msg buffer)                                       (nodered/proxy/call_service)
+
+unifiedInverterEnabler → MQTTMessage → mqttOutgoingChan → mqttSenderWorker → MQTT Broker → Node-RED → Home Assistant
+(switch control)          channel      (100 msg buffer)                                       (switch.turn_on/turn_off)
+
+dumpLoadEnabler → MQTTMessage → mqttOutgoingChan → mqttSenderWorker → MQTT Broker → Node-RED → Home Assistant
+(workmode)         channel      (100 msg buffer)                                       (select.select_option)
 ```
 
 **Calibration Data Loop:**
@@ -216,6 +272,9 @@ batteryCalibWorker → MQTT attributes topic → Home Assistant statestream → 
 - **Home Assistant statestream** republishes attributes as sensor topics for consumption
 - **batterySOCWorker** reads calibration data from DisplayData and calculates battery percentage
 - **lowVoltageWorker** monitors 15-min minimum voltage and triggers inverter shutoff via Node-RED proxy
+- **powerExcessCalculator** aggregates battery and power data to calculate excess watts, sends to dumpLoadEnabler
+- **dumpLoadEnabler** adjusts miner workmode based on excess power thresholds
+- **unifiedInverterEnabler** manages all inverters with mode-based target power and round-robin distribution
 - **mqttSenderWorker** handles all outgoing MQTT with automatic queuing
 - Each topic's statistics are tracked independently and broadcast together
 
@@ -295,6 +354,27 @@ A Node-RED flow is configured to proxy Home Assistant service calls via MQTT.
 
 This allows powerctl to control any Home Assistant entity by publishing to the MQTT broker.
 
+### Tracking Home Assistant Entity State
+
+**IMPORTANT:** Never track Home Assistant entity state locally in workers (e.g., using maps or variables to remember the "current" state of switches or selects). External actors (users, automations, other systems) can change entity states at any time, making local state invalid.
+
+**Instead:** Subscribe to the entity's state topic via statsWorker and read the actual state from DisplayData:
+```go
+// Wrong - local state tracking becomes stale
+currentState := inverterStates[entityID]  // Don't do this
+
+// Right - read actual state from Home Assistant
+currentState := data.GetBoolean(stateTopic)  // For switches (returns true if "on")
+currentWorkmode := data.GetString(stateTopic)  // For selects (returns the option string)
+```
+
+Entity state topics follow the pattern:
+- Switches: `homeassistant/switch/{object_id}/state` (values: "on", "off")
+- Selects: `homeassistant/select/{object_id}/state` (values: the current option)
+- Sensors: `homeassistant/sensor/{object_id}/state`
+
+Add these topics to the subscription list in main.go so statsWorker tracks them.
+
 ### Dependencies
 
 - `github.com/eclipse/paho.mqtt.golang` - MQTT client
@@ -340,6 +420,19 @@ Battery calibration (statestream topics from Home Assistant):
 - `homeassistant/sensor/battery_2_state_of_charge/calibration_outflows`
 - `homeassistant/sensor/battery_3_state_of_charge/calibration_inflows`
 - `homeassistant/sensor/battery_3_state_of_charge/calibration_outflows`
+
+Power excess calculation (defined in src/power_excess_calculator.go):
+- `homeassistant/sensor/home_sweet_home_tg118095000r1a_battery_remaining/state` (Tesla battery)
+- `homeassistant/sensor/battery_2_available_energy/state`
+- `homeassistant/sensor/battery_3_available_energy/state`
+- `homeassistant/sensor/solar_1_power/state` (Solar 1 power)
+
+Unified inverter enabler (defined in src/battery_config.go):
+- `homeassistant/sensor/solcast_pv_forecast_forecast_today/state` (Solar forecast kWh)
+- `homeassistant/sensor/solar_1_power/state` (Current solar power)
+- `homeassistant/sensor/home_sweet_home_load_power_2/state` (Load power)
+- `homeassistant/sensor/home_sweet_home_charge/state` (Powerwall SOC %)
+- `homeassistant/switch/powerhouse_inverter_[1-9]_switch_0/state` (Inverter switch states)
 
 **MQTT Publishing:**
 

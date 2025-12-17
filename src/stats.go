@@ -7,6 +7,18 @@ import (
 	"time"
 )
 
+// Topics that report in kW or kWh and need conversion to W or Wh (multiply by 1000)
+// This centralizes unit conversion so downstream workers always see W and Wh
+var kiloToBaseUnitTopics = map[string]bool{
+	// Power sensors (kW → W)
+	"homeassistant/sensor/home_sweet_home_battery_power_2/state": true,
+	"homeassistant/sensor/home_sweet_home_site_power/state":      true,
+	"homeassistant/sensor/home_sweet_home_load_power_2/state":    true,
+	// Energy sensors (kWh → Wh)
+	"homeassistant/sensor/home_sweet_home_tg118095000r1a_battery_remaining/state": true,
+	"homeassistant/sensor/solcast_pv_forecast_forecast_today/state":               true,
+}
+
 // Reading represents a timestamped sensor reading
 type Reading struct {
 	Value     float64
@@ -56,8 +68,9 @@ func calculateTimeWeightedStats(readings Readings, windowDuration time.Duration,
 		}
 	}
 
-	// If no readings in window, use the most recent reading (last known value)
-	if len(windowReadings) == 0 {
+	// If 0 or 1 readings in window, use the most recent reading (last known value)
+	// Single reading has zero duration so can't compute time-weighted average
+	if len(windowReadings) <= 1 {
 		return lastReading.Value, lastReading.Value, lastReading.Value
 	}
 
@@ -173,6 +186,11 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 			// Try to parse as float first
 			value, err := strconv.ParseFloat(msg.Value, 64)
 			if err == nil {
+				// Apply kW/kWh to W/Wh conversion if needed
+				if kiloToBaseUnitTopics[msg.Topic] {
+					value *= 1000
+				}
+
 				// Handle as float topic
 				var data *FloatTopicData
 				if existing, exists := topicData[msg.Topic]; exists {
@@ -265,6 +283,8 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 			debounceTimerC = nil
 
 		case <-startupCheckTicker.C:
+			log.Printf("Startup check: received %d/%d topics\n", len(topicData), len(expectedTopics))
+
 			// Periodically check for missing topics
 			if allTopicsReceived {
 				continue

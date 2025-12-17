@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -40,6 +41,12 @@ func (d *DisplayData) GetString(topic string) string {
 	return ""
 }
 
+// GetBoolean extracts a boolean value from DisplayData
+// Returns true if the string value is "on", false otherwise
+func (d *DisplayData) GetBoolean(topic string) bool {
+	return d.GetString(topic) == "on"
+}
+
 // SumTopics calculates the sum of all specified topics
 func (d *DisplayData) SumTopics(topics []string) float64 {
 	var total float64
@@ -61,6 +68,7 @@ func buildTopicsList(batteries []BatteryConfig) []string {
 	}
 	return topics
 }
+
 
 // SafeGo launches a goroutine with panic recovery and retry logic.
 // On panic, retries with exponential backoff (max 10 retries).
@@ -118,10 +126,7 @@ func SafeGo(
 			select {
 			case <-time.After(delay):
 				// Double delay for next time, cap at max
-				delay *= 2
-				if delay > maxDelay {
-					delay = maxDelay
-				}
+				delay = min(delay*2, maxDelay)
 			case <-ctx.Done():
 				return
 			}
@@ -214,8 +219,20 @@ func main() {
 
 	batteries := []BatteryConfig{battery2, battery3}
 
-	// Build topics list from battery configs
+	// Build topics list from battery configs and power excess calculator
 	topics := buildTopicsList(batteries)
+	topics = append(topics, PowerExcessTopics()...)
+
+	// Build unified inverter enabler config and add its topics
+	unifiedInverterConfig := BuildUnifiedInverterConfig(battery2, battery3)
+	topics = append(topics, unifiedInverterConfig.Topics()...)
+
+	// Add miner workmode topic for dump load enabler
+	topics = append(topics, TopicMinerWorkmode)
+
+	// Sort and dedupe topics list
+	slices.Sort(topics)
+	topics = slices.Compact(topics)
 
 	// Create channels for communication between workers
 	msgChan := make(chan SensorMessage, 10)
@@ -294,6 +311,28 @@ func main() {
 			lowVoltageWorker(ctx, lowVoltageChan, lowVoltageConfig, mqttSender)
 		})
 	}
+
+	// Launch power excess calculator and dump load enabler
+	powerExcessChan := make(chan DisplayData, 10)
+	excessValueChan := make(chan float64, 10)
+	dumpLoadDataChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, powerExcessChan, dumpLoadDataChan)
+
+	SafeGo(ctx, cancel, "power-excess-calculator", func(ctx context.Context) {
+		powerExcessCalculator(ctx, powerExcessChan, excessValueChan)
+	})
+
+	SafeGo(ctx, cancel, "dump-load-enabler", func(ctx context.Context) {
+		dumpLoadEnabler(ctx, excessValueChan, dumpLoadDataChan, mqttSender)
+	})
+
+	// Launch unified inverter enabler
+	unifiedInverterChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, unifiedInverterChan)
+
+	SafeGo(ctx, cancel, "unified-inverter-enabler", func(ctx context.Context) {
+		unifiedInverterEnabler(ctx, unifiedInverterChan, unifiedInverterConfig, mqttSender)
+	})
 
 	// Launch broadcast worker (fans out to all downstream workers)
 	SafeGo(ctx, cancel, "broadcast-worker", func(ctx context.Context) {
