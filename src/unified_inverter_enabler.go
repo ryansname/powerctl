@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"math"
 	"time"
@@ -132,13 +131,11 @@ func calculateTargetPower(data DisplayData, config UnifiedInverterConfig, mode O
 	switch mode {
 	case MaxInverterMode:
 		target = 10000.0 // Will be limited by actual hardware anyway
-		fmt.Println(data.GetFloat(config.Solar1PowerTopic).P99._15)
 	case PowerwallLowMode:
 		loadPower15MinP99 := data.GetFloat(config.LoadPowerTopic).P99._15
 		target = loadPower15MinP99 // 100% of peak load when Powerwall is low
 	case PowerwallLastMode:
-		loadPower15MinAvg := data.GetFloat(config.LoadPowerTopic).P50._15
-		target = loadPower15MinAvg * (2.0 / 3.0)
+		target = data.GetFloat(config.LoadPowerTopic).P66._15 * (2.0 / 3.0)
 	}
 
 	// Apply limit: available capacity = 5000W - solar_1_power_15min_P99

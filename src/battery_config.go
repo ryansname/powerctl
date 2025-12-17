@@ -129,7 +129,7 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 		WattsPerInverter:             255.0,
 		MaxTransferPower:             5000.0,
 		MaxInverterModeSolarForecast: 3000.0, // Wh (converted from kWh)
-		MaxInverterModeSolarPower:    250.0,
+		MaxInverterModeSolarPower:    1000.0,
 		PowerwallLowThreshold:        30.0,
 		CooldownDuration:             1 * time.Minute,
 	}

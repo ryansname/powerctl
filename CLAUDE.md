@@ -145,12 +145,12 @@ The application uses a goroutine-based architecture with message passing via cha
    - Single worker managing all 9 inverters across both batteries
    - **Mode selection** (checked in order):
      - Powerwall Low Mode: If Powerwall SOC 15min min < 30%
-     - Max Inverter Mode: If solar forecast > 3kWh AND solar_1_power 5min avg > 250W
+     - Max Inverter Mode: If solar forecast > 3kWh AND solar_1_power 5min avg > 1kW
      - Powerwall Last Mode: Otherwise
    - **Target power calculation**:
      - Max Inverter Mode: 10kW target (effectively all inverters)
-     - Powerwall Low Mode: 100% × load_power 15min max
-     - Powerwall Last Mode: 2/3 × load_power 15min avg
+     - Powerwall Low Mode: load_power 15min P99
+     - Powerwall Last Mode: 2/3 × load_power 15min P66
    - **Limit**: 5000W - solar_1_power 15min max (accounts for solar already flowing)
    - **Battery allocation**:
      - Priority to batteries in "Float Charging" with > 95% SOC
@@ -191,6 +191,7 @@ The application uses a goroutine-based architecture with message passing via cha
   - `Current`: Most recent value
   - `P1`: 1st percentile (filters out low outliers) for 1, 5, and 15 minute windows
   - `P50`: 50th percentile (median) for 1, 5, and 15 minute windows
+  - `P66`: 66th percentile for 1, 5, and 15 minute windows
   - `P99`: 99th percentile (filters out high outliers) for 1, 5, and 15 minute windows
 - **StringTopicData**: Holds current value for a string sensor topic
 - **DisplayData**: Container for topic data broadcast to downstream workers
@@ -230,9 +231,10 @@ The application uses time-weighted percentiles to account for irregular message 
    - Durations are accumulated until reaching the percentile threshold
    - Example: P50 (median) is the value at 50% of total duration
 4. **P50** = time-weighted median - stable values have more influence than brief spikes
-5. **P1/P99** = 1st/99th percentile - filters out extreme outliers (brief spikes/dips don't affect these)
-6. **Last known value preservation**: If no messages arrive in a time window, statistics show the last known value instead of zero
-7. At least one reading is always kept (even if older than 15 minutes) to maintain the last known value
+5. **P66** = 66th percentile - useful for "typical high" values
+6. **P1/P99** = 1st/99th percentile - filters out extreme outliers (brief spikes/dips don't affect these)
+7. **Last known value preservation**: If no messages arrive in a time window, statistics show the last known value instead of zero
+8. At least one reading is always kept (even if older than 15 minutes) to maintain the last known value
 
 ### Message Flow
 
