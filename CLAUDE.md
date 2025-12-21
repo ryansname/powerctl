@@ -43,6 +43,7 @@ make clean  # Remove built binary
 ```bash
 go build -o powerctl ./src  # Build the binary
 ./powerctl                  # Run the application
+./powerctl --force-enable   # Run with force-enable (ignores powerctl_enabled switch)
 ```
 
 ### Dependencies
@@ -76,7 +77,7 @@ The application uses a goroutine-based architecture with message passing via cha
    - Automatically cancels the application context if a goroutine panics
    - Logs panic information for debugging
 
-2. **statsWorker** (src/stats.go:153-335)
+2. **statsWorker** (src/stats.go:240-460)
    - Receives SensorMessage structs via a channel
    - Maintains separate state for each topic (readings, current, previous values)
    - Calculates real-time statistics using time-weighted averaging per topic
@@ -86,6 +87,7 @@ The application uses a goroutine-based architecture with message passing via cha
    - **Unit normalization**: Converts kW→W and kWh→Wh for Tesla/HA sensors (see `kiloToBaseUnitTopics` map)
    - **Startup readiness**: Waits for all expected topics before sending data
    - Logs missing topics every 30 seconds until all received
+   - **Self-published topic initialization**: After 20 seconds, initializes missing self-published topics (battery SOC/energy to 0.0, powerctl_enabled to true) - see `selfPublishedFloatTopics` and `selfPublishedBoolTopics` lists
    - Sends DisplayData to broadcastWorker
 
 3. **broadcastWorker** (src/broadcast_worker.go)
@@ -161,9 +163,14 @@ The application uses a goroutine-based architecture with message passing via cha
 10. **mqttSenderWorker** (src/mqtt_sender.go)
     - Dedicated worker for outgoing MQTT messages
     - Receives MQTTMessage structs via channel (100-message buffer)
+    - Receives DisplayData from broadcastWorker to track enabled state
     - Handles message queuing automatically
     - Publishes to MQTT broker with configurable QoS and retain
     - Logs publish failures
+    - **Enable/disable filtering**:
+      - Subscribes to `homeassistant/switch/powerctl_enabled/state`
+      - When disabled, drops outgoing messages (except discovery config topics)
+      - `--force-enable` flag bypasses this filter for local development
     - Launched automatically when MQTT connection is established
 
 11. **mqttWorker** (src/mqtt_worker.go)
@@ -194,11 +201,12 @@ The application uses a goroutine-based architecture with message passing via cha
   - `P66`: 66th percentile for 1, 5, and 15 minute windows
   - `P99`: 99th percentile (filters out high outliers) for 1, 5, and 15 minute windows
 - **StringTopicData**: Holds current value for a string sensor topic
+- **BooleanTopicData**: Holds current value for boolean topics (on/off switches, detected by case-insensitive "on"/"off" values)
 - **DisplayData**: Container for topic data broadcast to downstream workers
   - **Helper methods** (src/main.go:25-55):
     - `GetFloat(topic string) *FloatTopicData` - Extracts FloatTopicData with type safety (access `.Current`, `.P50._15`, etc.)
     - `GetString(topic string) string` - Extracts string value with type safety
-    - `GetBoolean(topic string) bool` - Returns true if string value is "on", false otherwise (for switch states)
+    - `GetBoolean(topic string) bool` - Extracts boolean value from BooleanTopicData (for switch states)
     - `SumTopics(topics []string) float64` - Sums multiple float topics (uses `.Current` values)
 - **TimeWindows**: Holds values across 1, 5, and 15 minute windows (accessed as `._1`, `._5`, `._15`)
 
@@ -248,7 +256,8 @@ MQTT Broker → mqttWorker → SensorMessage → statsWorker → DisplayData →
                                                                                            ├─→ lowVoltageWorker (Battery 2)
                                                                                            ├─→ lowVoltageWorker (Battery 3)
                                                                                            ├─→ unifiedInverterEnabler
-                                                                                           └─→ powerExcessCalculator → excessChan → dumpLoadEnabler
+                                                                                           ├─→ powerExcessCalculator → excessChan → dumpLoadEnabler
+                                                                                           └─→ mqttSenderWorker (for enabled state tracking)
 ```
 
 **Outgoing (to MQTT/Home Assistant):**
@@ -444,6 +453,9 @@ Unified inverter enabler (defined in src/battery_config.go):
 - `homeassistant/sensor/home_sweet_home_charge/state` (Powerwall SOC %)
 - `homeassistant/switch/powerhouse_inverter_[1-9]_switch_0/state` (Inverter switch states)
 
+Powerctl control (defined in src/mqtt_sender.go):
+- `homeassistant/switch/powerctl_enabled/state` (Enabled state for message filtering)
+
 **MQTT Publishing:**
 
 Battery entities are auto-created at startup via Home Assistant MQTT discovery (`MQTTSender.CreateBatteryEntity`):
@@ -454,12 +466,20 @@ Battery entities are auto-created at startup via Home Assistant MQTT discovery (
 - Attributes topics: `homeassistant/sensor/battery_2/attributes` (JSON with calibration_inflows + calibration_outflows)
 - Attributes topics: `homeassistant/sensor/battery_3/attributes` (JSON with calibration_inflows + calibration_outflows)
 
+Powerctl switch is auto-created at startup via MQTT discovery (`MQTTSender.CreatePowerctlSwitch`):
+- Config topic: `homeassistant/switch/powerctl_enabled/config`
+- State topic: `homeassistant/switch/powerctl_enabled/state` (managed by Home Assistant, optimistic mode)
+
 **Home Assistant Statestream:**
 The calibration attributes are republished by Home Assistant's statestream integration as separate sensor topics, which are then subscribed to by mqttWorker and used by batterySOCWorker to calculate state of charge.
 
 **Setup**: Copy `.env.example` to `.env` and fill in your credentials.
 
 **Adding topics**: Edit the `topics` slice in src/main.go to add or remove monitored sensors.
+
+**Command Line Flags:**
+- `--force-enable`: Bypass the powerctl_enabled switch. Use this for local development when the deployed instance should be disabled via the switch in Home Assistant. The deployed instance (without this flag) will stop sending commands when the switch is turned off, while the local instance (with this flag) will continue to operate normally.
+
 - If there are more than 3 arguments to a function definition, put each one on a new line
   - multiple arguments sharing the same type do not count for this purpose, eg.
     - `func(a int, b int, c int)` is 3 arguments

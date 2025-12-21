@@ -5,6 +5,7 @@ import (
 	"log"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -48,6 +49,11 @@ type FloatTopicData struct {
 // StringTopicData holds current value for a string topic
 type StringTopicData struct {
 	Current string
+}
+
+// BooleanTopicData holds current value for a boolean topic (on/off switches)
+type BooleanTopicData struct {
+	Current bool
 }
 
 // weightedValue represents a value with its duration weight for percentile calculation
@@ -213,9 +219,27 @@ func cloneTopicData(topicData map[string]any) map[string]any {
 			clone[topic] = &StringTopicData{
 				Current: d.Current,
 			}
+		case *BooleanTopicData:
+			clone[topic] = &BooleanTopicData{
+				Current: d.Current,
+			}
 		}
 	}
 	return clone
+}
+
+// Topics that should be initialized to 0.0 if not received within timeout
+// These are self-published topics that won't exist on first startup
+var selfPublishedFloatTopics = []string{
+	"homeassistant/sensor/battery_2_available_energy/state",
+	"homeassistant/sensor/battery_2_state_of_charge/state",
+	"homeassistant/sensor/battery_3_available_energy/state",
+	"homeassistant/sensor/battery_3_state_of_charge/state",
+}
+
+// Boolean topics that should be initialized to true if not received within timeout
+var selfPublishedBoolTopics = []string{
+	"homeassistant/switch/powerctl_enabled/state",
 }
 
 // statsWorker receives messages, maintains statistics, and sends to output channel
@@ -229,6 +253,10 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 	allTopicsReceived := false
 	startupCheckTicker := time.NewTicker(30 * time.Second)
 	defer startupCheckTicker.Stop()
+
+	// Timer to initialize self-published topics if not received
+	selfPublishedTimer := time.NewTimer(20 * time.Second)
+	defer selfPublishedTimer.Stop()
 
 	// Debouncing state
 	var lastSendTime time.Time
@@ -286,24 +314,43 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 				// Calculate and store statistics
 				calculateStats(data, topicReadings[msg.Topic])
 			} else {
-				// Handle as string topic
-				var data *StringTopicData
-				if existing, exists := topicData[msg.Topic]; exists {
-					// Check if existing data is actually StringTopicData
-					if stringData, ok := existing.(*StringTopicData); ok {
-						data = stringData
+				// Check if value is a boolean (case-insensitive "on" or "off")
+				lowerValue := strings.ToLower(msg.Value)
+				if lowerValue == "on" || lowerValue == "off" {
+					// Handle as boolean topic
+					var data *BooleanTopicData
+					if existing, exists := topicData[msg.Topic]; exists {
+						if boolData, ok := existing.(*BooleanTopicData); ok {
+							data = boolData
+						} else {
+							log.Printf("ERROR: Topic %s type changed to boolean (value=%s)\n", msg.Topic, msg.Value)
+							return
+						}
 					} else {
-						// Type mismatch: topic was previously float, now string
-						log.Printf("ERROR: Topic %s type changed from float to string (value=%s)\n", msg.Topic, msg.Value)
-						return
+						data = &BooleanTopicData{}
+						topicData[msg.Topic] = data
 					}
+					data.Current = (lowerValue == "on")
 				} else {
-					data = &StringTopicData{}
-					topicData[msg.Topic] = data
-				}
+					// Handle as string topic
+					var data *StringTopicData
+					if existing, exists := topicData[msg.Topic]; exists {
+						// Check if existing data is actually StringTopicData
+						if stringData, ok := existing.(*StringTopicData); ok {
+							data = stringData
+						} else {
+							// Type mismatch: topic was previously float, now string
+							log.Printf("ERROR: Topic %s type changed from float to string (value=%s)\n", msg.Topic, msg.Value)
+							return
+						}
+					} else {
+						data = &StringTopicData{}
+						topicData[msg.Topic] = data
+					}
 
-				// Update current value
-				data.Current = msg.Value
+					// Update current value
+					data.Current = msg.Value
+				}
 			}
 
 			// Check if we've received all expected topics
@@ -373,6 +420,23 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 					len(missingTopics), len(expectedTopics))
 				for _, topic := range missingTopics {
 					log.Printf("  - %s\n", topic)
+				}
+			}
+
+		case <-selfPublishedTimer.C:
+			// Initialize self-published float topics to 0.0 if not yet received
+			for _, topic := range selfPublishedFloatTopics {
+				if _, exists := topicData[topic]; !exists {
+					log.Printf("Initializing missing self-published topic to 0.0: %s\n", topic)
+					topicData[topic] = &FloatTopicData{Current: 0.0}
+					topicReadings[topic] = Readings{{Value: 0.0, Timestamp: time.Now()}}
+				}
+			}
+			// Initialize self-published boolean topics to true if not yet received
+			for _, topic := range selfPublishedBoolTopics {
+				if _, exists := topicData[topic]; !exists {
+					log.Printf("Initializing missing self-published topic to true: %s\n", topic)
+					topicData[topic] = &BooleanTopicData{Current: true}
 				}
 			}
 

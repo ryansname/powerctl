@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -42,9 +43,12 @@ func (d *DisplayData) GetString(topic string) string {
 }
 
 // GetBoolean extracts a boolean value from DisplayData
-// Returns true if the string value is "on", false otherwise
+// Returns the boolean value if topic is a BooleanTopicData, false otherwise
 func (d *DisplayData) GetBoolean(topic string) bool {
-	return d.GetString(topic) == "on"
+	if td, ok := d.TopicData[topic].(*BooleanTopicData); ok {
+		return td.Current
+	}
+	return false
 }
 
 // SumTopics calculates the sum of all specified topics
@@ -135,7 +139,15 @@ func SafeGo(
 }
 
 func main() {
+	// Parse command line flags
+	forceEnable := flag.Bool("force-enable", false, "Bypass powerctl_enabled switch")
+	flag.Parse()
+
 	log.Println("Starting powerctl...")
+
+	if *forceEnable {
+		log.Println("WARNING: --force-enable active, ignoring powerctl_enabled switch")
+	}
 
 	// Load .env file
 	if err := godotenv.Load(); err != nil {
@@ -230,6 +242,9 @@ func main() {
 	// Add miner workmode topic for dump load enabler
 	topics = append(topics, TopicMinerWorkmode)
 
+	// Add powerctl enabled state topic
+	topics = append(topics, TopicPowerctlEnabledState)
+
 	// Sort and dedupe topics list
 	slices.Sort(topics)
 	topics = slices.Compact(topics)
@@ -239,10 +254,11 @@ func main() {
 	statsChan := make(chan DisplayData, 10)
 	mqttOutgoingChan := make(chan MQTTMessage, 100) // Larger buffer for queuing
 	mqttClientChan := make(chan mqtt.Client, 1)     // Buffered to prevent blocking onConnect
+	senderDataChan := make(chan DisplayData, 10)   // For mqttSenderWorker to receive enabled state
 
 	// Launch MQTT sender worker (receives client updates via channel)
 	SafeGo(ctx, cancel, "mqtt-sender-worker", func(ctx context.Context) {
-		mqttSenderWorker(ctx, mqttOutgoingChan, mqttClientChan)
+		mqttSenderWorker(ctx, mqttOutgoingChan, mqttClientChan, senderDataChan, *forceEnable)
 	})
 	log.Println("MQTT sender worker started")
 
@@ -270,6 +286,13 @@ func main() {
 			cancel()
 			log.Fatalf("Failed to create %s Available Energy entity: %v", b.Name, err)
 		}
+	}
+
+	// Create powerctl enabled switch
+	err := mqttSender.CreatePowerctlSwitch()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create powerctl switch: %v", err)
 	}
 
 	log.Println("Home Assistant entities created")
@@ -333,6 +356,9 @@ func main() {
 	SafeGo(ctx, cancel, "unified-inverter-enabler", func(ctx context.Context) {
 		unifiedInverterEnabler(ctx, unifiedInverterChan, unifiedInverterConfig, mqttSender)
 	})
+
+	// Add senderDataChan to downstream channels for mqttSenderWorker to receive enabled state
+	downstreamChans = append(downstreamChans, senderDataChan)
 
 	// Launch broadcast worker (fans out to all downstream workers)
 	SafeGo(ctx, cancel, "broadcast-worker", func(ctx context.Context) {
