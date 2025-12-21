@@ -162,6 +162,12 @@ func main() {
 		log.Fatal("MQTT_USERNAME and MQTT_PASSWORD must be set in .env file")
 	}
 
+	// Get MQTT client ID from environment, default to "powerctl"
+	mqttClientID := os.Getenv("MQTT_CLIENT_ID")
+	if mqttClientID == "" {
+		mqttClientID = "powerctl"
+	}
+
 	// Create context for lifecycle management
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -368,7 +374,7 @@ func main() {
 
 	// Launch MQTT worker
 	SafeGo(ctx, cancel, "mqtt-worker", func(ctx context.Context) {
-		mqttWorker(ctx, "homeassistant.lan", topics, mqttUsername, mqttPassword, msgChan, mqttClientChan)
+		mqttWorker(ctx, "homeassistant.lan", topics, mqttUsername, mqttPassword, mqttClientID, msgChan, mqttClientChan)
 	})
 	log.Println("MQTT worker started")
 

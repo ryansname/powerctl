@@ -405,6 +405,7 @@ Add these topics to the subscription list in main.go so statsWorker tracks them.
 MQTT credentials are loaded from a `.env` file (see `.env.example` for template):
 - `MQTT_USERNAME` - MQTT broker username
 - `MQTT_PASSWORD` - MQTT broker password
+- `MQTT_CLIENT_ID` - Optional client ID (default: "powerctl", use "powerctl-dev" for local development)
 
 MQTT connection settings in main():
 - Broker: `homeassistant.lan`

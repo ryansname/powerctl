@@ -14,14 +14,14 @@ func mqttWorker(
 	ctx context.Context,
 	broker string,
 	topics []string,
-	username, password string,
+	username, password, clientID string,
 	msgChan chan<- SensorMessage,
 	clientChan chan<- mqtt.Client,
 ) {
 	// Connect to MQTT broker
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(fmt.Sprintf("tcp://%s:1883", broker))
-	opts.SetClientID("powerctl")
+	opts.SetClientID(clientID)
 	opts.SetUsername(username)
 	opts.SetPassword(password)
 	opts.SetAutoReconnect(true)
