@@ -54,6 +54,9 @@ type UnifiedInverterConfig struct {
 type InverterEnablerState struct {
 	// Last modification time for cooldown
 	lastModificationTime time.Time
+	// Per-battery lockout state for hysteresis (set when SOC < 12.5%, cleared when > 15%)
+	battery2LockedOut bool
+	battery3LockedOut bool
 }
 
 // unifiedInverterEnabler manages all inverters across both batteries
@@ -85,7 +88,7 @@ func unifiedInverterEnabler(
 			desiredCount := calculateInverterCount(targetWatts, config.WattsPerInverter)
 
 			// Determine battery allocation
-			battery2Count, battery3Count := allocateInverters(data, config, desiredCount)
+			battery2Count, battery3Count := allocateInverters(data, config, desiredCount, state)
 
 			// Apply changes using circular buffer selection
 			changed := applyInverterChanges(data, config, sender, battery2Count, battery3Count)
@@ -158,11 +161,25 @@ func calculateInverterCount(targetWatts, wattsPerInverter float64) int {
 }
 
 // maxInvertersForSOC returns the max inverters allowed based on SOC percentage
-func maxInvertersForSOC(socPercent float64, hardwareMax int) int {
+// Uses hysteresis: once SOC drops below 12.5% (lockout), no inverters until SOC > 15%
+func maxInvertersForSOC(socPercent float64, hardwareMax int, lockedOut *bool) int {
+	// Check for unlock condition first
+	if *lockedOut && socPercent > 15.0 {
+		*lockedOut = false
+	}
+
+	// If locked out, no inverters allowed
+	if *lockedOut {
+		return 0
+	}
+
 	switch {
 	case socPercent < 12.5:
+		*lockedOut = true
+		return 0
+	case socPercent < 17.5:
 		return min(1, hardwareMax)
-	case socPercent < 20:
+	case socPercent < 25:
 		return min(2, hardwareMax)
 	default:
 		return hardwareMax
@@ -170,7 +187,12 @@ func maxInvertersForSOC(socPercent float64, hardwareMax int) int {
 }
 
 // allocateInverters distributes inverter count between batteries
-func allocateInverters(data DisplayData, config UnifiedInverterConfig, totalCount int) (battery2Count, battery3Count int) {
+func allocateInverters(
+	data DisplayData,
+	config UnifiedInverterConfig,
+	totalCount int,
+	state *InverterEnablerState,
+) (battery2Count, battery3Count int) {
 	if totalCount == 0 {
 		return 0, 0
 	}
@@ -178,11 +200,11 @@ func allocateInverters(data DisplayData, config UnifiedInverterConfig, totalCoun
 	battery2Priority := isBatteryPriority(data, config.Battery2)
 	battery3Priority := isBatteryPriority(data, config.Battery3)
 
-	// Apply SOC-based limits
+	// Apply SOC-based limits with hysteresis
 	soc2 := data.GetFloat(config.Battery2.SOCTopic).Current
 	soc3 := data.GetFloat(config.Battery3.SOCTopic).Current
-	maxBattery2 := maxInvertersForSOC(soc2, len(config.Battery2.Inverters))
-	maxBattery3 := maxInvertersForSOC(soc3, len(config.Battery3.Inverters))
+	maxBattery2 := maxInvertersForSOC(soc2, len(config.Battery2.Inverters), &state.battery2LockedOut)
+	maxBattery3 := maxInvertersForSOC(soc3, len(config.Battery3.Inverters), &state.battery3LockedOut)
 
 	switch {
 	case battery2Priority && !battery3Priority:

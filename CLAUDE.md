@@ -157,6 +157,12 @@ The application uses a goroutine-based architecture with message passing via cha
    - **Battery allocation**:
      - Priority to batteries in "Float Charging" with > 95% SOC
      - Otherwise split 50/50, Battery 3 gets extra for odd counts
+   - **SOC-based limits** (per-battery):
+     - SOC < 12.5%: 0 inverters (lockout triggered)
+     - SOC < 17.5%: max 1 inverter
+     - SOC < 25%: max 2 inverters
+     - SOC >= 25%: all inverters allowed
+   - **Hysteresis**: Once a battery enters lockout (0 inverters), it remains locked until SOC > 15%
    - **Cooldown**: 1 minute after any modification
    - Each inverter: 255W (9 inverters = 2,295W max)
 
@@ -227,7 +233,7 @@ The application uses a goroutine-based architecture with message passing via cha
   - Battery2, Battery3 (BatteryInverterGroup): Inverters per battery with entity IDs and state topics
   - SolarForecastTopic, Solar1PowerTopic, LoadPowerTopic: Input topics for mode/target calculation
   - WattsPerInverter (255W), MaxTransferPower (5000W), CooldownDuration (5 min)
-- **InverterEnablerState**: Runtime state with per-battery round-robin queues and cooldown tracking
+- **InverterEnablerState**: Runtime state with cooldown tracking and per-battery SOC lockout flags
 
 ### Statistics Algorithm
 
