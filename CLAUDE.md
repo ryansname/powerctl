@@ -34,7 +34,7 @@ nix-shell  # Enter development environment with Go, claude, and claude-monitor
 ### Using Make (Recommended)
 ```bash
 make build  # Build the binary
-make run    # Build and run the application
+make run    # Build and run with --force-enable (for local dev)
 make check  # Run golangci-lint and tests
 make clean  # Remove built binary
 ```
@@ -99,7 +99,11 @@ The application uses a goroutine-based architecture with message passing via cha
 
 4. **batteryCalibWorker** (src/battery_calib_worker.go)
    - Monitors voltage and charge state to detect calibration events
-   - **Stateless design**: Always publishes when battery is calibrated (Float Charging + voltage ≥ 53.6V)
+   - **100% calibration**: When in Float Charging AND voltage ≥ 53.6V, publishes current inflows/outflows as 100% reference
+   - **99.5% soft cap**: When NOT in Float Charging AND SOC ≥ 99.5%, fudges calibration to cap SOC at 99.5%
+     - Prevents calculated SOC from exceeding 99.5% before battery actually reaches Float Charging
+     - Reduces calibration outflows by 0.05 kWh to bring SOC back down
+     - 2-second cooldown between adjustments to prevent rapid-fire recalibration
    - Publishes calibration reference points (inflow/outflow totals) to MQTT attributes topic
    - MQTT retain flag ensures calibration data persists across restarts
    - Uses DisplayData helper methods (GetFloat, GetString, SumTopics)
