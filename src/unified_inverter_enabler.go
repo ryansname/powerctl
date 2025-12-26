@@ -41,6 +41,7 @@ type UnifiedInverterConfig struct {
 	// Topics for mode selection and target calculation
 	SolarForecastTopic string
 	Solar1PowerTopic   string
+	Solar2PowerTopic   string
 	LoadPowerTopic     string
 	PowerwallSOCTopic  string
 
@@ -84,8 +85,12 @@ func unifiedInverterEnabler(
 			// Calculate target power (max of all requests, limited by all limits)
 			targetWatts, winningRule := calculateTargetPower(data, config)
 
+			// Subtract current solar generation - inverters only need to cover the remainder
+			solarWatts := currentSolarGeneration(data, config)
+			inverterWatts := max(targetWatts-solarWatts, 0)
+
 			// Calculate desired inverter count
-			desiredCount := calculateInverterCount(targetWatts, config.WattsPerInverter)
+			desiredCount := calculateInverterCount(inverterWatts, config.WattsPerInverter)
 
 			// Determine battery allocation
 			battery2Count, battery3Count := allocateInverters(data, config, desiredCount, state)
@@ -114,7 +119,7 @@ func maxInverterRequest(data DisplayData, config UnifiedInverterConfig) PowerReq
 	watts := 0.0
 	if solarForecast > config.MaxInverterModeSolarForecast &&
 		solarPower5MinAvg > config.MaxInverterModeSolarPower {
-		watts = 10000.0
+		watts = 100000.0
 	}
 	return PowerRequest{Name: "MaxInverter", Watts: watts}
 }
@@ -170,6 +175,13 @@ func calculateTargetPower(data DisplayData, config UnifiedInverterConfig) (float
 	}
 
 	return max(target, 0), winningRule
+}
+
+// currentSolarGeneration returns the current solar generation (5min P66) from solar 1 and 2
+func currentSolarGeneration(data DisplayData, config UnifiedInverterConfig) float64 {
+	solar1 := data.GetFloat(config.Solar1PowerTopic).P66._5
+	solar2 := data.GetFloat(config.Solar2PowerTopic).P66._5
+	return solar1 + solar2
 }
 
 // calculateInverterCount computes how many inverters are needed for target power

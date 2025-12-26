@@ -36,6 +36,8 @@ type BatteryCalibConfig struct {
 	OutflowTopics        []string
 	HighVoltageThreshold float64
 	FloatChargeState     string
+	CalibrationTopics    CalibrationTopics // To read/write calibration values
+	SOCTopic             string            // To read current SOC from DisplayData
 }
 
 // BatterySOCConfig holds configuration for the SOC worker
@@ -59,6 +61,7 @@ type LowVoltageConfig struct {
 
 // CalibConfig creates a BatteryCalibConfig from the shared BatteryConfig
 func (c *BatteryConfig) CalibConfig() BatteryCalibConfig {
+	deviceID := strings.ReplaceAll(strings.ToLower(c.Name), " ", "_")
 	return BatteryCalibConfig{
 		Name:                 c.Name,
 		ChargeStateTopic:     c.ChargeStateTopic,
@@ -67,6 +70,8 @@ func (c *BatteryConfig) CalibConfig() BatteryCalibConfig {
 		OutflowTopics:        c.OutflowTopics,
 		HighVoltageThreshold: c.HighVoltageThreshold,
 		FloatChargeState:     c.FloatChargeState,
+		CalibrationTopics:    c.CalibrationTopics,
+		SOCTopic:             "homeassistant/sensor/" + deviceID + "_state_of_charge/state",
 	}
 }
 
@@ -124,6 +129,7 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 		Battery3:                     buildInverterGroup(battery3),
 		SolarForecastTopic:           "homeassistant/sensor/solcast_pv_forecast_forecast_today/state",
 		Solar1PowerTopic:             "homeassistant/sensor/solar_1_power/state",
+		Solar2PowerTopic:             "homeassistant/sensor/primo_5_0_ac_power/state",
 		LoadPowerTopic:               "homeassistant/sensor/home_sweet_home_load_power_2/state",
 		PowerwallSOCTopic:            "homeassistant/sensor/home_sweet_home_charge/state",
 		WattsPerInverter:             255.0,
@@ -140,6 +146,7 @@ func (c UnifiedInverterConfig) Topics() []string {
 	topics := []string{
 		c.SolarForecastTopic,
 		c.Solar1PowerTopic,
+		c.Solar2PowerTopic,
 		c.LoadPowerTopic,
 		c.PowerwallSOCTopic,
 		c.Battery2.ChargeStateTopic,
