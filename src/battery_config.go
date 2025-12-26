@@ -58,7 +58,6 @@ type LowVoltageConfig struct {
 	LowVoltageThreshold float64
 }
 
-
 // CalibConfig creates a BatteryCalibConfig from the shared BatteryConfig
 func (c *BatteryConfig) CalibConfig() BatteryCalibConfig {
 	deviceID := strings.ReplaceAll(strings.ToLower(c.Name), " ", "_")
@@ -134,7 +133,7 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 		PowerwallSOCTopic:            "homeassistant/sensor/home_sweet_home_charge/state",
 		WattsPerInverter:             255.0,
 		MaxTransferPower:             5000.0,
-		MaxInverterModeSolarForecast: 3000.0, // Wh (converted from kWh)
+		MaxInverterModeSolarForecast: 4000.0, // Wh (converted from kWh)
 		MaxInverterModeSolarPower:    1000.0,
 		PowerwallLowThreshold:        30.0,
 		CooldownDuration:             1 * time.Minute,
@@ -164,4 +163,3 @@ func (c UnifiedInverterConfig) Topics() []string {
 
 	return topics
 }
-
