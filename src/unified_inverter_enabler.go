@@ -7,14 +7,17 @@ import (
 	"time"
 )
 
-// OperatingMode determines how target power is calculated
-type OperatingMode int
+// PowerRequest represents a power request from a rule
+type PowerRequest struct {
+	Name  string
+	Watts float64
+}
 
-const (
-	PowerwallLastMode OperatingMode = iota
-	PowerwallLowMode
-	MaxInverterMode
-)
+// PowerLimit represents a power limit from a rule
+type PowerLimit struct {
+	Name  string
+	Watts float64
+}
 
 // InverterInfo holds information about a single inverter
 type InverterInfo struct {
@@ -78,11 +81,8 @@ func unifiedInverterEnabler(
 				continue
 			}
 
-			// Determine operating mode
-			mode := determineMode(data, config)
-
-			// Calculate target power (with limit applied)
-			targetWatts := calculateTargetPower(data, config, mode)
+			// Calculate target power (max of all requests, limited by all limits)
+			targetWatts, winningRule := calculateTargetPower(data, config)
 
 			// Calculate desired inverter count
 			desiredCount := calculateInverterCount(targetWatts, config.WattsPerInverter)
@@ -95,8 +95,8 @@ func unifiedInverterEnabler(
 
 			if changed {
 				state.lastModificationTime = time.Now()
-				log.Printf("Unified inverter enabler: mode=%s, target=%.0fW, B2=%d, B3=%d\n",
-					modeName(mode), targetWatts, battery2Count, battery3Count)
+				log.Printf("Unified inverter enabler: rule=%s, target=%.0fW, B2=%d, B3=%d\n",
+					winningRule, targetWatts, battery2Count, battery3Count)
 			}
 
 		case <-ctx.Done():
@@ -106,48 +106,70 @@ func unifiedInverterEnabler(
 	}
 }
 
-// determineMode selects operating mode based on Powerwall SOC and solar conditions
-func determineMode(data DisplayData, config UnifiedInverterConfig) OperatingMode {
-	// Check Powerwall SOC first - if low, prioritize draining local batteries
-	// Use 15min P1 to avoid flip-flopping between modes (filters out brief low readings)
-	powerwallSOC15MinP1 := data.GetFloat(config.PowerwallSOCTopic).P1._15
-	if powerwallSOC15MinP1 < config.PowerwallLowThreshold {
-		return PowerwallLowMode
-	}
-
-	// Check solar conditions for max inverter mode
+// maxInverterRequest returns 10kW if solar conditions are good, else 0
+func maxInverterRequest(data DisplayData, config UnifiedInverterConfig) PowerRequest {
 	solarForecast := data.GetFloat(config.SolarForecastTopic).Current
 	solarPower5MinAvg := data.GetFloat(config.Solar1PowerTopic).P50._5
 
+	watts := 0.0
 	if solarForecast > config.MaxInverterModeSolarForecast &&
 		solarPower5MinAvg > config.MaxInverterModeSolarPower {
-		return MaxInverterMode
+		watts = 10000.0
 	}
-
-	return PowerwallLastMode
+	return PowerRequest{Name: "MaxInverter", Watts: watts}
 }
 
-// calculateTargetPower computes target watts based on mode with limit applied
-func calculateTargetPower(data DisplayData, config UnifiedInverterConfig, mode OperatingMode) float64 {
-	var target float64
+// powerwallLastRequest returns 2/3 of the 15min P66 load power
+func powerwallLastRequest(data DisplayData, config UnifiedInverterConfig) PowerRequest {
+	loadPower15MinP66 := data.GetFloat(config.LoadPowerTopic).P66._15
+	return PowerRequest{Name: "PowerwallLast", Watts: loadPower15MinP66 * (2.0 / 3.0)}
+}
 
-	switch mode {
-	case MaxInverterMode:
-		target = 10000.0 // Will be limited by actual hardware anyway
-	case PowerwallLowMode:
-		loadPower15MinP99 := data.GetFloat(config.LoadPowerTopic).P99._15
-		target = loadPower15MinP99 // 100% of peak load when Powerwall is low
-	case PowerwallLastMode:
-		target = data.GetFloat(config.LoadPowerTopic).P66._15 * (2.0 / 3.0)
+// powerwallLowRequest returns 15min P99 load if powerwall SOC is low, else 0
+func powerwallLowRequest(data DisplayData, config UnifiedInverterConfig) PowerRequest {
+	powerwallSOC15MinP1 := data.GetFloat(config.PowerwallSOCTopic).P1._15
+
+	watts := 0.0
+	if powerwallSOC15MinP1 < config.PowerwallLowThreshold {
+		watts = data.GetFloat(config.LoadPowerTopic).P99._15
 	}
+	return PowerRequest{Name: "PowerwallLow", Watts: watts}
+}
 
-	// Apply limit: available capacity = 5000W - solar_1_power_15min_P99
+// powerhouseTransferLimit returns the available capacity after accounting for solar generation
+func powerhouseTransferLimit(data DisplayData, config UnifiedInverterConfig) PowerLimit {
 	solar1Power15MinP99 := data.GetFloat(config.Solar1PowerTopic).P99._15
 	availableCapacity := config.MaxTransferPower - solar1Power15MinP99
-	target = min(target, availableCapacity)
-	target = max(target, 0)
+	return PowerLimit{Name: "PowerhouseTransfer", Watts: availableCapacity}
+}
 
-	return target
+// calculateTargetPower computes target watts by taking max of all requests and applying all limits
+func calculateTargetPower(data DisplayData, config UnifiedInverterConfig) (float64, string) {
+	// Calculate all requests, take max
+	requests := []PowerRequest{
+		maxInverterRequest(data, config),
+		powerwallLastRequest(data, config),
+		powerwallLowRequest(data, config),
+	}
+
+	target := 0.0
+	winningRule := ""
+	for _, r := range requests {
+		if r.Watts > target {
+			target = r.Watts
+			winningRule = r.Name
+		}
+	}
+
+	// Calculate all limits, apply each
+	limits := []PowerLimit{
+		powerhouseTransferLimit(data, config),
+	}
+	for _, l := range limits {
+		target = min(target, l.Watts)
+	}
+
+	return max(target, 0), winningRule
 }
 
 // calculateInverterCount computes how many inverters are needed for target power
@@ -286,18 +308,4 @@ func applyInverterChanges(
 	}
 
 	return changed
-}
-
-// modeName returns a string representation of the operating mode
-func modeName(mode OperatingMode) string {
-	switch mode {
-	case MaxInverterMode:
-		return "MaxInverter"
-	case PowerwallLowMode:
-		return "PowerwallLow"
-	case PowerwallLastMode:
-		return "PowerwallLast"
-	default:
-		return "Unknown"
-	}
 }
