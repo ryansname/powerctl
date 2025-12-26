@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"strings"
+	"time"
 )
 
 // batteryCalibWorker monitors voltage and charge state to publish calibration data
@@ -13,6 +15,9 @@ func batteryCalibWorker(
 	config BatteryCalibConfig,
 	sender *MQTTSender,
 ) {
+	var lastSoftCapTime time.Time
+	const softCapCooldown = 2 * time.Second
+
 	for {
 		select {
 		case data := <-dataChan:
@@ -20,28 +25,51 @@ func batteryCalibWorker(
 			chargeState := data.GetString(config.ChargeStateTopic)
 
 			isFloatCharging := strings.Contains(chargeState, config.FloatChargeState)
-			isCalibrated := isFloatCharging && voltage >= config.HighVoltageThreshold
 
-			if isCalibrated {
-				inflows := data.SumTopics(config.InflowTopics)
-				outflows := data.SumTopics(config.OutflowTopics)
+			if isFloatCharging {
+				// In Float Charging mode - only do 100% calibration if voltage is high enough
+				if voltage >= config.HighVoltageThreshold {
+					inflows := data.SumTopics(config.InflowTopics)
+					outflows := data.SumTopics(config.OutflowTopics)
+					publishCalibration(sender, config.Name, inflows, outflows)
+				}
+				// Otherwise do nothing - don't soft cap during Float Charging
+			} else {
+				// NOT in Float Charging - check for 99.5% soft cap (with cooldown)
+				currentSOC := data.GetFloat(config.SOCTopic).Current
+				calibInflows := data.GetFloat(config.CalibrationTopics.Inflows).Current
+				calibOutflows := data.GetFloat(config.CalibrationTopics.Outflows).Current
 
-				deviceId := strings.ReplaceAll(strings.ToLower(config.Name), " ", "_")
-				payload, _ := json.Marshal(map[string]interface{}{
-					"calibration_inflows":  inflows,
-					"calibration_outflows": outflows,
-				})
+				if time.Since(lastSoftCapTime) >= softCapCooldown && currentSOC >= 99.5 {
+					// Fudge: reduce calibOutflows slightly to bring SOC down
+					// Preserve original calibInflows, only adjust outflows
+					fudgedOutflows := calibOutflows - 0.05 // subtract 0.05 kWh
 
-				sender.Send(MQTTMessage{
-					Topic:   "homeassistant/sensor/" + deviceId + "/attributes",
-					Payload: payload,
-					QoS:     1,
-					Retain:  true,
-				})
+					publishCalibration(sender, config.Name, calibInflows, fudgedOutflows)
+					lastSoftCapTime = time.Now()
+					log.Printf("%s: Adjusting calibration to reduce displayed SOC (%.1f%% -> 99.5%%)",
+						config.Name, currentSOC)
+				}
 			}
 
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// publishCalibration publishes calibration reference points to MQTT
+func publishCalibration(sender *MQTTSender, name string, inflows, outflows float64) {
+	deviceId := strings.ReplaceAll(strings.ToLower(name), " ", "_")
+	payload, _ := json.Marshal(map[string]interface{}{
+		"calibration_inflows":  inflows,
+		"calibration_outflows": outflows,
+	})
+
+	sender.Send(MQTTMessage{
+		Topic:   "homeassistant/sensor/" + deviceId + "/attributes",
+		Payload: payload,
+		QoS:     1,
+		Retain:  true,
+	})
 }
