@@ -21,9 +21,10 @@ func dumpLoadEnabler(
 	ctx context.Context,
 	excessChan <-chan float64,
 	dataChan <-chan DisplayData,
-	sender *MQTTSender,
+	sender *MQTTSender, //nolint:unparam // will be used when feature is enabled
 ) {
 	log.Println("Dump load enabler started")
+	_ = sender // will be used when feature is enabled
 
 	var latestExcess float64
 	var latestData DisplayData
@@ -63,7 +64,7 @@ func dumpLoadEnabler(
 			currentWorkmode := latestData.GetString(TopicMinerWorkmode)
 
 			// Only send command if workmode differs from actual state
-			if desiredWorkmode != currentWorkmode {
+			if desiredWorkmode != currentWorkmode { //nolint:staticcheck // will be implemented
 				// log.Printf("Dump load: excess=%.0fW, changing workmode %s -> %s\n",
 				// 	latestExcess, currentWorkmode, desiredWorkmode)
 				// sender.SelectOption(MinerWorkmodeEntity, desiredWorkmode)
