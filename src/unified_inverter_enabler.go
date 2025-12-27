@@ -134,13 +134,16 @@ type InverterEnablerState struct {
 	lastDebugOutput string
 }
 
-// ModeResult represents the outcome of mode selection
-// Both modes use per-battery watts for uniform handling
+// ModeResult represents the outcome of mode selection (in inverter counts)
 type ModeResult struct {
 	RuleName      string
-	TotalWatts    float64
-	Battery2Watts float64
-	Battery3Watts float64
+	Battery2Count int
+	Battery3Count int
+}
+
+// TotalCount returns the total number of inverters
+func (m ModeResult) TotalCount() int {
+	return m.Battery2Count + m.Battery3Count
 }
 
 // DebugModeInfo contains all individual mode values for debug output
@@ -153,7 +156,7 @@ type DebugModeInfo struct {
 	Winner        string
 }
 
-// checkBatteryOverflow returns effective watts for overflow mode using step-based control.
+// checkBatteryOverflow returns inverter count for overflow mode using step-based control.
 // Step up (+1): Float Charging AND voltage 5min P1 > OverflowIncreaseVoltageThreshold
 // Step down (-1): voltage 1min P50 < OverflowDecreaseVoltageThreshold
 // Changes are rate-limited to one step per OverflowStepInterval.
@@ -162,7 +165,7 @@ func checkBatteryOverflow(
 	battery BatteryInverterGroup,
 	config UnifiedInverterConfig,
 	overflow *OverflowState,
-) float64 {
+) int {
 	chargeState := data.GetString(battery.ChargeStateTopic)
 	isFloatCharging := strings.Contains(chargeState, config.OverflowFloatChargeState)
 
@@ -177,7 +180,7 @@ func checkBatteryOverflow(
 		voltageData.Current,
 		config.OverflowFastStartMinVoltage,
 	)
-	effectiveCount := overflow.Step(
+	return overflow.Step(
 		isFloatCharging,
 		voltage5MinP1,
 		voltage1MinP50,
@@ -186,52 +189,45 @@ func checkBatteryOverflow(
 		len(battery.Inverters),
 		config.OverflowStepInterval,
 	)
-
-	return float64(effectiveCount) * config.WattsPerInverter
 }
 
-// splitOverallWatts distributes overall watts between batteries with 50/50 split
-// SOC limits are applied during split so watts can overflow to the other battery
-func splitOverallWatts(
+// splitOverallCount distributes inverter count between batteries with 50/50 split
+// SOC limits are applied during split so count can overflow to the other battery
+func splitOverallCount(
 	data DisplayData,
 	config UnifiedInverterConfig,
-	totalWatts float64,
+	totalCount int,
 	state *InverterEnablerState,
-) (b2Watts, b3Watts float64) {
-	if totalWatts <= 0 {
+) (b2Count, b3Count int) {
+	if totalCount <= 0 {
 		return 0, 0
 	}
 
-	// Calculate SOC-limited maximums (in watts)
+	// Calculate SOC-limited maximums
 	soc2 := data.GetFloat(config.Battery2.SOCTopic).Current
 	soc3 := data.GetFloat(config.Battery3.SOCTopic).Current
-	maxB2Inverters := maxInvertersForSOC(soc2, len(config.Battery2.Inverters), &state.battery2LockedOut)
-	maxB3Inverters := maxInvertersForSOC(soc3, len(config.Battery3.Inverters), &state.battery3LockedOut)
-	maxB2Watts := float64(maxB2Inverters) * config.WattsPerInverter
-	maxB3Watts := float64(maxB3Inverters) * config.WattsPerInverter
+	maxB2 := maxInvertersForSOC(soc2, len(config.Battery2.Inverters), &state.battery2LockedOut)
+	maxB3 := maxInvertersForSOC(soc3, len(config.Battery3.Inverters), &state.battery3LockedOut)
 
 	// Split 50/50, prefer Battery 3 for odd amounts
-	b3Watts = min((totalWatts+config.WattsPerInverter)/2, maxB3Watts)
-	b2Watts = min(totalWatts-b3Watts, maxB2Watts)
-	// Handle overflow if one battery hit SOC limit
-	if b3Watts >= maxB3Watts {
-		b2Watts = min(totalWatts-b3Watts, maxB2Watts)
-	}
-	if b2Watts >= maxB2Watts {
-		b3Watts = min(totalWatts-b2Watts, maxB3Watts)
+	b3Count = min((totalCount+1)/2, maxB3)
+	b2Count = min(totalCount-b3Count, maxB2)
+	// Handle overflow if B2 hit SOC limit - give remainder to B3
+	if b2Count < totalCount-b3Count {
+		b3Count = min(totalCount-b2Count, maxB3)
 	}
 
-	return b2Watts, b3Watts
+	return b2Count, b3Count
 }
 
 // selectMode compares overall mode vs per-battery overflow mode
-// and returns whichever produces higher total power output
+// and returns whichever produces higher total inverter count
 func selectMode(
 	data DisplayData,
 	config UnifiedInverterConfig,
 	state *InverterEnablerState,
 ) (ModeResult, DebugModeInfo) {
-	// Calculate individual request values for debug
+	// Calculate individual request values for debug (in watts for display)
 	maxInv := maxInverterRequest(data, config)
 	pwLast := powerwallLastRequest(data, config)
 	pwLow := powerwallLowRequest(data, config)
@@ -240,31 +236,29 @@ func selectMode(
 	targetWatts, winningRule := calculateTargetPower(data, config)
 	solarWatts := currentSolarGeneration(data, config)
 	overallInverterWatts := max(targetWatts-solarWatts, 0)
-	overallInverterCount := calculateInverterCount(overallInverterWatts, config.WattsPerInverter)
-	overallEffective := float64(overallInverterCount) * config.WattsPerInverter
+	overallCount := calculateInverterCount(overallInverterWatts, config.WattsPerInverter)
 
-	// Calculate per-battery overflow with step-based control
-	overflow2Watts := checkBatteryOverflow(data, config.Battery2, config, &state.battery2Overflow)
-	overflow3Watts := checkBatteryOverflow(data, config.Battery3, config, &state.battery3Overflow)
+	// Calculate per-battery overflow counts
+	overflow2Count := checkBatteryOverflow(data, config.Battery2, config, &state.battery2Overflow)
+	overflow3Count := checkBatteryOverflow(data, config.Battery3, config, &state.battery3Overflow)
+	overflowTotal := overflow2Count + overflow3Count
 
-	perBatteryEffective := overflow2Watts + overflow3Watts
-
-	// Build debug info
+	// Build debug info (watts for display)
 	debug := DebugModeInfo{
 		MaxInverter:   maxInv.Watts,
 		PowerwallLast: pwLast.Watts,
 		PowerwallLow:  pwLow.Watts,
-		Overflow2:     overflow2Watts,
-		Overflow3:     overflow3Watts,
+		Overflow2:     float64(overflow2Count) * config.WattsPerInverter,
+		Overflow3:     float64(overflow3Count) * config.WattsPerInverter,
 	}
 
-	// Compare and select (per-battery wins only if > overall)
-	if perBatteryEffective > overallEffective {
+	// Compare and select (overflow wins only if > overall)
+	if overflowTotal > overallCount {
 		var ruleName string
 		switch {
-		case overflow2Watts > 0 && overflow3Watts > 0:
+		case overflow2Count > 0 && overflow3Count > 0:
 			ruleName = "Overflow(B2+B3)"
-		case overflow2Watts > 0:
+		case overflow2Count > 0:
 			ruleName = "Overflow(B2)"
 		default:
 			ruleName = "Overflow(B3)"
@@ -273,30 +267,20 @@ func selectMode(
 		debug.Winner = ruleName
 		return ModeResult{
 			RuleName:      ruleName,
-			TotalWatts:    perBatteryEffective,
-			Battery2Watts: overflow2Watts,
-			Battery3Watts: overflow3Watts,
+			Battery2Count: overflow2Count,
+			Battery3Count: overflow3Count,
 		}, debug
 	}
 
-	// Overall mode: split into per-battery watts (with SOC limits for overflow handling)
-	b2Watts, b3Watts := splitOverallWatts(data, config, overallEffective, state)
+	// Overall mode: split into per-battery counts (with SOC limits for overflow handling)
+	b2Count, b3Count := splitOverallCount(data, config, overallCount, state)
 
 	debug.Winner = winningRule
 	return ModeResult{
 		RuleName:      winningRule,
-		TotalWatts:    overallEffective,
-		Battery2Watts: b2Watts,
-		Battery3Watts: b3Watts,
+		Battery2Count: b2Count,
+		Battery3Count: b3Count,
 	}, debug
-}
-
-// wattsToInverterCount converts watts to inverter count
-func wattsToInverterCount(watts, wattsPerInverter float64) int {
-	if watts <= 0 {
-		return 0
-	}
-	return int(watts / wattsPerInverter)
 }
 
 // formatDebugOutput formats debug mode values as a GFM table for Home Assistant
@@ -370,17 +354,14 @@ func unifiedInverterEnabler(
 				continue
 			}
 
-			// Convert watts to counts
-			battery2Count := wattsToInverterCount(modeResult.Battery2Watts, config.WattsPerInverter)
-			battery3Count := wattsToInverterCount(modeResult.Battery3Watts, config.WattsPerInverter)
-
 			// Apply changes
-			changed := applyInverterChanges(data, config, sender, battery2Count, battery3Count)
+			changed := applyInverterChanges(data, config, sender, modeResult.Battery2Count, modeResult.Battery3Count)
 
 			if changed {
 				state.lastModificationTime = time.Now()
+				totalWatts := float64(modeResult.TotalCount()) * config.WattsPerInverter
 				log.Printf("Unified inverter enabler: rule=%s, watts=%.0fW, B2=%d, B3=%d\n",
-					modeResult.RuleName, modeResult.TotalWatts, battery2Count, battery3Count)
+					modeResult.RuleName, totalWatts, modeResult.Battery2Count, modeResult.Battery3Count)
 			}
 
 		case <-ctx.Done():

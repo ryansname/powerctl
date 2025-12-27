@@ -161,13 +161,13 @@ The application uses a goroutine-based architecture with message passing via cha
      - Rate-limited to one change per 4 minutes
      - No solar subtraction (batteries are full, dumping excess)
    - **Mode selection**:
-     - Calculate overall mode effective watts (after solar subtraction and SOC limits)
-     - Calculate per-battery overflow watts (sum of both batteries, no solar subtraction)
-     - Compare: use whichever produces higher total power output
+     - Calculate overall mode inverter count (after solar subtraction and SOC limits)
+     - Calculate per-battery overflow count (sum of both batteries, no solar subtraction)
+     - Compare: use whichever produces higher total inverter count
    - **Limit**: 5000W - solar_1_power 15min P99 (accounts for solar already flowing)
    - **Battery allocation** (for overall mode):
-     - Split 50/50, Battery 3 gets extra for odd amounts
-     - SOC limits applied during split so watts can overflow to the other battery
+     - Split 50/50 in inverter counts, Battery 3 gets extra for odd counts
+     - SOC limits applied during split so count can overflow to the other battery
    - **SOC-based limits** (per-battery, for overall mode):
      - SOC < 12.5%: 0 inverters (lockout triggered)
      - SOC < 17.5%: max 1 inverter
