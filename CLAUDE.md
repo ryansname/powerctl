@@ -149,19 +149,25 @@ The application uses a goroutine-based architecture with message passing via cha
 
 9. **unifiedInverterEnabler** (src/unified_inverter_enabler.go)
    - Single worker managing all 9 inverters across both batteries
-   - **Mode selection** (checked in order):
-     - Powerwall Low Mode: If Powerwall SOC 15min min < 30%
-     - Max Inverter Mode: If solar forecast > 3kWh AND solar_1_power 5min avg > 1kW
-     - Powerwall Last Mode: Otherwise
-   - **Target power calculation**:
-     - Max Inverter Mode: 10kW target (effectively all inverters)
-     - Powerwall Low Mode: load_power 15min P99
-     - Powerwall Last Mode: 2/3 × load_power 15min P66
-   - **Limit**: 5000W - solar_1_power 15min max (accounts for solar already flowing)
-   - **Battery allocation**:
+   - **Overall modes** (existing, take max request then subtract solar):
+     - Powerwall Low Mode: If Powerwall SOC 15min P1 < 30% → load_power 15min P99
+     - Max Inverter Mode: If solar forecast > 3kWh AND solar_1_power 5min P50 > 1kW → 100kW
+     - Powerwall Last Mode: Otherwise → 2/3 × load_power 15min P66
+   - **Per-battery Overflow mode** (new, calculated independently per battery):
+     - Triggers when: Float Charging AND voltage 5min P50 > 53.4V
+     - Target: raw_target = (solar_1_power 5min P50 / 3kW) × 4.8kW
+     - Inverter count: floor(raw_target / 250W), capped at hardware max
+     - No solar subtraction (batteries are full, dumping excess)
+   - **Mode selection**:
+     - Calculate overall mode effective watts (after solar subtraction and SOC limits)
+     - Calculate per-battery overflow watts (sum of both batteries, no solar subtraction)
+     - Compare: use whichever produces higher total power output
+   - **Limit**: 5000W - solar_1_power 15min P99 (accounts for solar already flowing)
+   - **Battery allocation** (for overall mode):
      - Priority to batteries in "Float Charging" with > 95% SOC
-     - Otherwise split 50/50, Battery 3 gets extra for odd counts
-   - **SOC-based limits** (per-battery):
+     - Otherwise split 50/50, Battery 3 gets extra for odd amounts
+     - SOC limits applied during split for proper overflow handling
+   - **SOC-based limits** (per-battery, for overall mode):
      - SOC < 12.5%: 0 inverters (lockout triggered)
      - SOC < 17.5%: max 1 inverter
      - SOC < 25%: max 2 inverters

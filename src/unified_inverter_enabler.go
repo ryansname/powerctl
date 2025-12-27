@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -31,6 +32,7 @@ type BatteryInverterGroup struct {
 	Inverters        []InverterInfo
 	ChargeStateTopic string
 	SOCTopic         string
+	VoltageTopic     string // From BatteryConfig.BatteryVoltageTopic
 }
 
 // UnifiedInverterConfig holds configuration for the unified inverter enabler
@@ -52,6 +54,12 @@ type UnifiedInverterConfig struct {
 	MaxInverterModeSolarPower    float64
 	PowerwallLowThreshold        float64
 	CooldownDuration             time.Duration
+
+	// Overflow mode configuration
+	OverflowVoltageThreshold float64 // 53.4V
+	OverflowFloatChargeState string  // "Float Charging"
+	OverflowSolarDivisor     float64 // 3000W (solar 1 p_max)
+	OverflowMaxPower         float64 // 4800W (per-battery solar bank p_max)
 }
 
 // InverterEnablerState holds runtime state for the unified inverter enabler
@@ -61,6 +69,146 @@ type InverterEnablerState struct {
 	// Per-battery lockout state for hysteresis (set when SOC < 12.5%, cleared when > 15%)
 	battery2LockedOut bool
 	battery3LockedOut bool
+}
+
+// ModeResult represents the outcome of mode selection
+// Both modes use per-battery watts for uniform handling
+type ModeResult struct {
+	RuleName      string
+	TotalWatts    float64
+	Battery2Watts float64
+	Battery3Watts float64
+}
+
+// checkBatteryOverflow returns effective watts for overflow mode (0 if not triggered)
+// Does NOT apply SOC limits - Float Charging + high voltage implies high SOC anyway
+func checkBatteryOverflow(
+	data DisplayData,
+	battery BatteryInverterGroup,
+	solar1Power5MinP50 float64,
+	config UnifiedInverterConfig,
+) float64 {
+	// Check trigger conditions
+	chargeState := data.GetString(battery.ChargeStateTopic)
+	isFloatCharging := strings.Contains(chargeState, config.OverflowFloatChargeState)
+
+	voltage5MinP50 := data.GetFloat(battery.VoltageTopic).P50._5
+	isHighVoltage := voltage5MinP50 > config.OverflowVoltageThreshold
+
+	if !isFloatCharging || !isHighVoltage {
+		return 0
+	}
+
+	// raw_target = (solar_1_power / 3kW) * 4.8kW
+	rawTarget := (solar1Power5MinP50 / config.OverflowSolarDivisor) * config.OverflowMaxPower
+
+	// floor(raw_target / 250W) then cap at hardware max
+	inverterCount := int(rawTarget / 250.0)
+	inverterCount = min(inverterCount, len(battery.Inverters))
+
+	return float64(inverterCount) * config.WattsPerInverter
+}
+
+// splitOverallWatts distributes overall watts between batteries based on priority and SOC limits
+// SOC limits are applied during split so watts can overflow to the other battery
+func splitOverallWatts(
+	data DisplayData,
+	config UnifiedInverterConfig,
+	totalWatts float64,
+	state *InverterEnablerState,
+) (b2Watts, b3Watts float64) {
+	if totalWatts <= 0 {
+		return 0, 0
+	}
+
+	battery2Priority := isBatteryPriority(data, config.Battery2)
+	battery3Priority := isBatteryPriority(data, config.Battery3)
+
+	// Calculate SOC-limited maximums (in watts)
+	soc2 := data.GetFloat(config.Battery2.SOCTopic).Current
+	soc3 := data.GetFloat(config.Battery3.SOCTopic).Current
+	maxB2Inverters := maxInvertersForSOC(soc2, len(config.Battery2.Inverters), &state.battery2LockedOut)
+	maxB3Inverters := maxInvertersForSOC(soc3, len(config.Battery3.Inverters), &state.battery3LockedOut)
+	maxB2Watts := float64(maxB2Inverters) * config.WattsPerInverter
+	maxB3Watts := float64(maxB3Inverters) * config.WattsPerInverter
+
+	switch {
+	case battery2Priority && !battery3Priority:
+		b2Watts = min(totalWatts, maxB2Watts)
+		b3Watts = min(totalWatts-b2Watts, maxB3Watts)
+	case battery3Priority && !battery2Priority:
+		b3Watts = min(totalWatts, maxB3Watts)
+		b2Watts = min(totalWatts-b3Watts, maxB2Watts)
+	default:
+		// Split 50/50, prefer Battery 3 for odd amounts
+		b3Watts = min((totalWatts+config.WattsPerInverter)/2, maxB3Watts)
+		b2Watts = min(totalWatts-b3Watts, maxB2Watts)
+		// Handle overflow if one battery hit SOC limit
+		if b3Watts >= maxB3Watts {
+			b2Watts = min(totalWatts-b3Watts, maxB2Watts)
+		}
+		if b2Watts >= maxB2Watts {
+			b3Watts = min(totalWatts-b2Watts, maxB3Watts)
+		}
+	}
+
+	return b2Watts, b3Watts
+}
+
+// selectMode compares overall mode vs per-battery overflow mode
+// and returns whichever produces higher total power output
+func selectMode(data DisplayData, config UnifiedInverterConfig, state *InverterEnablerState) ModeResult {
+	// Calculate overall mode result
+	targetWatts, winningRule := calculateTargetPower(data, config)
+	solarWatts := currentSolarGeneration(data, config)
+	overallInverterWatts := max(targetWatts-solarWatts, 0)
+	overallInverterCount := calculateInverterCount(overallInverterWatts, config.WattsPerInverter)
+	overallEffective := float64(overallInverterCount) * config.WattsPerInverter
+
+	// Calculate per-battery overflow (0 = not triggered)
+	solar1Power5MinP50 := data.GetFloat(config.Solar1PowerTopic).P50._5
+	overflow2Watts := checkBatteryOverflow(data, config.Battery2, solar1Power5MinP50, config)
+	overflow3Watts := checkBatteryOverflow(data, config.Battery3, solar1Power5MinP50, config)
+
+	perBatteryEffective := overflow2Watts + overflow3Watts
+
+	// Compare and select (per-battery wins only if > overall)
+	if perBatteryEffective > overallEffective {
+		var ruleName string
+		switch {
+		case overflow2Watts > 0 && overflow3Watts > 0:
+			ruleName = "Overflow(B2+B3)"
+		case overflow2Watts > 0:
+			ruleName = "Overflow(B2)"
+		default:
+			ruleName = "Overflow(B3)"
+		}
+
+		return ModeResult{
+			RuleName:      ruleName,
+			TotalWatts:    perBatteryEffective,
+			Battery2Watts: overflow2Watts,
+			Battery3Watts: overflow3Watts,
+		}
+	}
+
+	// Overall mode: split into per-battery watts (with SOC limits for overflow handling)
+	b2Watts, b3Watts := splitOverallWatts(data, config, overallEffective, state)
+
+	return ModeResult{
+		RuleName:      winningRule,
+		TotalWatts:    overallEffective,
+		Battery2Watts: b2Watts,
+		Battery3Watts: b3Watts,
+	}
+}
+
+// wattsToInverterCount converts watts to inverter count
+func wattsToInverterCount(watts, wattsPerInverter float64) int {
+	if watts <= 0 {
+		return 0
+	}
+	return int(watts / wattsPerInverter)
 }
 
 // unifiedInverterEnabler manages all inverters across both batteries
@@ -82,26 +230,20 @@ func unifiedInverterEnabler(
 				continue
 			}
 
-			// Calculate target power (max of all requests, limited by all limits)
-			targetWatts, winningRule := calculateTargetPower(data, config)
+			// Select mode and get per-battery watts (SOC limits already applied for overall mode)
+			modeResult := selectMode(data, config, state)
 
-			// Subtract current solar generation - inverters only need to cover the remainder
-			solarWatts := currentSolarGeneration(data, config)
-			inverterWatts := max(targetWatts-solarWatts, 0)
+			// Convert watts to counts
+			battery2Count := wattsToInverterCount(modeResult.Battery2Watts, config.WattsPerInverter)
+			battery3Count := wattsToInverterCount(modeResult.Battery3Watts, config.WattsPerInverter)
 
-			// Calculate desired inverter count
-			desiredCount := calculateInverterCount(inverterWatts, config.WattsPerInverter)
-
-			// Determine battery allocation
-			battery2Count, battery3Count := allocateInverters(data, config, desiredCount, state)
-
-			// Apply changes using circular buffer selection
+			// Apply changes
 			changed := applyInverterChanges(data, config, sender, battery2Count, battery3Count)
 
 			if changed {
 				state.lastModificationTime = time.Now()
-				log.Printf("Unified inverter enabler: rule=%s, target=%.0fW, B2=%d, B3=%d\n",
-					winningRule, targetWatts, battery2Count, battery3Count)
+				log.Printf("Unified inverter enabler: rule=%s, watts=%.0fW, B2=%d, B3=%d\n",
+					modeResult.RuleName, modeResult.TotalWatts, battery2Count, battery3Count)
 			}
 
 		case <-ctx.Done():
@@ -218,58 +360,6 @@ func maxInvertersForSOC(socPercent float64, hardwareMax int, lockedOut *bool) in
 	default:
 		return hardwareMax
 	}
-}
-
-// allocateInverters distributes inverter count between batteries
-func allocateInverters(
-	data DisplayData,
-	config UnifiedInverterConfig,
-	totalCount int,
-	state *InverterEnablerState,
-) (battery2Count, battery3Count int) {
-	if totalCount == 0 {
-		return 0, 0
-	}
-
-	battery2Priority := isBatteryPriority(data, config.Battery2)
-	battery3Priority := isBatteryPriority(data, config.Battery3)
-
-	// Apply SOC-based limits with hysteresis
-	soc2 := data.GetFloat(config.Battery2.SOCTopic).Current
-	soc3 := data.GetFloat(config.Battery3.SOCTopic).Current
-	maxBattery2 := maxInvertersForSOC(soc2, len(config.Battery2.Inverters), &state.battery2LockedOut)
-	maxBattery3 := maxInvertersForSOC(soc3, len(config.Battery3.Inverters), &state.battery3LockedOut)
-
-	switch {
-	case battery2Priority && !battery3Priority:
-		// Battery 2 priority: use it first, overflow to Battery 3
-		battery2Count = min(totalCount, maxBattery2)
-		remaining := totalCount - battery2Count
-		battery3Count = min(remaining, maxBattery3)
-	case battery3Priority && !battery2Priority:
-		// Battery 3 priority: use it first, overflow to Battery 2
-		battery3Count = min(totalCount, maxBattery3)
-		remaining := totalCount - battery3Count
-		battery2Count = min(remaining, maxBattery2)
-	default:
-		// Both priority or neither: split 50/50, prefer Battery 3 for odd
-		battery3Count = (totalCount + 1) / 2
-		battery2Count = totalCount - battery3Count
-
-		// Respect maximums with overflow
-		if battery3Count > maxBattery3 {
-			overflow := battery3Count - maxBattery3
-			battery3Count = maxBattery3
-			battery2Count = min(battery2Count+overflow, maxBattery2)
-		}
-		if battery2Count > maxBattery2 {
-			overflow := battery2Count - maxBattery2
-			battery2Count = maxBattery2
-			battery3Count = min(battery3Count+overflow, maxBattery3)
-		}
-	}
-
-	return battery2Count, battery3Count
 }
 
 // isBatteryPriority checks if battery is in Float Charging state with > 95% SOC
