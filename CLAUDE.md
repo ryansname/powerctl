@@ -153,10 +153,12 @@ The application uses a goroutine-based architecture with message passing via cha
      - Powerwall Low Mode: If Powerwall SOC 15min P1 < 30% → load_power 15min P99
      - Max Inverter Mode: If solar forecast > 3kWh AND solar_1_power 5min P50 > 1kW → 100kW
      - Powerwall Last Mode: Otherwise → 2/3 × load_power 15min P66
-   - **Per-battery Overflow mode** (new, calculated independently per battery):
-     - Triggers when: Float Charging AND voltage 5min P50 > 53.4V
-     - Target: raw_target = (solar_1_power 5min P50 / 3kW) × 4.8kW
-     - Inverter count: floor(raw_target / 250W), capped at hardware max
+   - **Per-battery Overflow mode** (step-based, calculated independently per battery):
+     - No target calculation; count changes by ±1 based on voltage conditions
+     - **Fast start**: If Float Charging on first evaluation, start at max inverters
+     - **Step up (+1)**: Float Charging AND voltage 5min P1 > 53.55V
+     - **Step down (-1)**: voltage 1min P50 < 53.3V
+     - Rate-limited to one change per 4 minutes
      - No solar subtraction (batteries are full, dumping excess)
    - **Mode selection**:
      - Calculate overall mode effective watts (after solar subtraction and SOC limits)

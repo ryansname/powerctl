@@ -138,10 +138,10 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 		MaxInverterModeSolarPower:    1000.0,
 		PowerwallLowThreshold:        30.0,
 		CooldownDuration:             1 * time.Minute,
-		OverflowVoltageThreshold:     53.4,
-		OverflowFloatChargeState:     "Float Charging",
-		OverflowSolarDivisor:         3000.0,
-		OverflowMaxPower:             4800.0,
+		OverflowFloatChargeState:         "Float Charging",
+		OverflowStepInterval:             4 * time.Minute,
+		OverflowIncreaseVoltageThreshold: 53.55,
+		OverflowDecreaseVoltageThreshold: 53.3,
 	}
 }
 

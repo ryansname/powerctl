@@ -56,10 +56,51 @@ type UnifiedInverterConfig struct {
 	CooldownDuration             time.Duration
 
 	// Overflow mode configuration
-	OverflowVoltageThreshold float64 // 53.4V
-	OverflowFloatChargeState string  // "Float Charging"
-	OverflowSolarDivisor     float64 // 3000W (solar 1 p_max)
-	OverflowMaxPower         float64 // 4800W (per-battery solar bank p_max)
+	OverflowFloatChargeState         string        // "Float Charging"
+	OverflowStepInterval             time.Duration // 4 min - time between count changes
+	OverflowIncreaseVoltageThreshold float64       // 53.55V - voltage 5min P1 must exceed to increase
+	OverflowDecreaseVoltageThreshold float64       // 53.3V - voltage 1min P50 must drop below to decrease
+}
+
+// OverflowState tracks per-battery overflow inverter count with step-based changes
+type OverflowState struct {
+	CurrentCount   int
+	LastChangeTime time.Time
+}
+
+// Step adjusts count by ±1 based on voltage conditions, rate-limited to one change per interval.
+// Fast start: if Float Charging and never changed, start at max inverters.
+// Step up: Float Charging AND voltage 5min P1 > increaseThreshold
+// Step down: voltage 1min P50 < decreaseThreshold
+func (s *OverflowState) Step(
+	isFloatCharging bool,
+	voltage5MinP1 float64,
+	voltage1MinP50 float64,
+	increaseThreshold float64,
+	decreaseThreshold float64,
+	maxCount int,
+	stepInterval time.Duration,
+) int {
+	// Fast start: if Float Charging and we've never made a change, start at max
+	if s.LastChangeTime.IsZero() && isFloatCharging {
+		s.CurrentCount = maxCount
+		s.LastChangeTime = time.Now()
+		return s.CurrentCount
+	}
+
+	if time.Since(s.LastChangeTime) < stepInterval {
+		return s.CurrentCount
+	}
+
+	if isFloatCharging && voltage5MinP1 > increaseThreshold && s.CurrentCount < maxCount {
+		s.CurrentCount++
+		s.LastChangeTime = time.Now()
+	} else if voltage1MinP50 < decreaseThreshold && s.CurrentCount > 0 {
+		s.CurrentCount--
+		s.LastChangeTime = time.Now()
+	}
+
+	return s.CurrentCount
 }
 
 // InverterEnablerState holds runtime state for the unified inverter enabler
@@ -69,6 +110,9 @@ type InverterEnablerState struct {
 	// Per-battery lockout state for hysteresis (set when SOC < 12.5%, cleared when > 15%)
 	battery2LockedOut bool
 	battery3LockedOut bool
+	// Per-battery overflow state for rate limiting
+	battery2Overflow OverflowState
+	battery3Overflow OverflowState
 }
 
 // ModeResult represents the outcome of mode selection
@@ -80,33 +124,34 @@ type ModeResult struct {
 	Battery3Watts float64
 }
 
-// checkBatteryOverflow returns effective watts for overflow mode (0 if not triggered)
-// Does NOT apply SOC limits - Float Charging + high voltage implies high SOC anyway
+// checkBatteryOverflow returns effective watts for overflow mode using step-based control.
+// Step up (+1): Float Charging AND voltage 5min P1 > OverflowIncreaseVoltageThreshold
+// Step down (-1): voltage 1min P50 < OverflowDecreaseVoltageThreshold
+// Changes are rate-limited to one step per OverflowStepInterval.
 func checkBatteryOverflow(
 	data DisplayData,
 	battery BatteryInverterGroup,
-	solar1Power5MinP50 float64,
 	config UnifiedInverterConfig,
+	overflow *OverflowState,
 ) float64 {
-	// Check trigger conditions
 	chargeState := data.GetString(battery.ChargeStateTopic)
 	isFloatCharging := strings.Contains(chargeState, config.OverflowFloatChargeState)
 
-	voltage5MinP50 := data.GetFloat(battery.VoltageTopic).P50._5
-	isHighVoltage := voltage5MinP50 > config.OverflowVoltageThreshold
+	voltageData := data.GetFloat(battery.VoltageTopic)
+	voltage5MinP1 := voltageData.P1._5
+	voltage1MinP50 := voltageData.P50._1
 
-	if !isFloatCharging || !isHighVoltage {
-		return 0
-	}
+	effectiveCount := overflow.Step(
+		isFloatCharging,
+		voltage5MinP1,
+		voltage1MinP50,
+		config.OverflowIncreaseVoltageThreshold,
+		config.OverflowDecreaseVoltageThreshold,
+		len(battery.Inverters),
+		config.OverflowStepInterval,
+	)
 
-	// raw_target = (solar_1_power / 3kW) * 4.8kW
-	rawTarget := (solar1Power5MinP50 / config.OverflowSolarDivisor) * config.OverflowMaxPower
-
-	// floor(raw_target / 250W) then cap at hardware max
-	inverterCount := int(rawTarget / 250.0)
-	inverterCount = min(inverterCount, len(battery.Inverters))
-
-	return float64(inverterCount) * config.WattsPerInverter
+	return float64(effectiveCount) * config.WattsPerInverter
 }
 
 // splitOverallWatts distributes overall watts between batteries based on priority and SOC limits
@@ -165,10 +210,9 @@ func selectMode(data DisplayData, config UnifiedInverterConfig, state *InverterE
 	overallInverterCount := calculateInverterCount(overallInverterWatts, config.WattsPerInverter)
 	overallEffective := float64(overallInverterCount) * config.WattsPerInverter
 
-	// Calculate per-battery overflow (0 = not triggered)
-	solar1Power5MinP50 := data.GetFloat(config.Solar1PowerTopic).P50._5
-	overflow2Watts := checkBatteryOverflow(data, config.Battery2, solar1Power5MinP50, config)
-	overflow3Watts := checkBatteryOverflow(data, config.Battery3, solar1Power5MinP50, config)
+	// Calculate per-battery overflow with step-based control
+	overflow2Watts := checkBatteryOverflow(data, config.Battery2, config, &state.battery2Overflow)
+	overflow3Watts := checkBatteryOverflow(data, config.Battery3, config, &state.battery3Overflow)
 
 	perBatteryEffective := overflow2Watts + overflow3Watts
 
