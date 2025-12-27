@@ -43,7 +43,7 @@ func batteryCalibWorker(
 				if time.Since(lastSoftCapTime) >= softCapCooldown && currentSOC >= 99.5 {
 					// Fudge: reduce calibOutflows slightly to bring SOC down
 					// Preserve original calibInflows, only adjust outflows
-					fudgedOutflows := calibOutflows - 0.05 // subtract 0.05 kWh
+					fudgedOutflows := calibOutflows - 0.005 // subtract 0.005 kWh
 
 					publishCalibration(sender, config.Name, calibInflows, fudgedOutflows)
 					lastSoftCapTime = time.Now()

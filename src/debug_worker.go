@@ -101,11 +101,8 @@ func (w WatchSpec) GetValue(data DisplayData) string {
 	return formatDebugValue(value)
 }
 
-// formatDebugValue formats a float with smart precision
+// formatDebugValue formats a float with 2 decimal places
 func formatDebugValue(v float64) string {
-	if v >= 100 || v <= -100 {
-		return fmt.Sprintf("%.0f", v)
-	}
 	return fmt.Sprintf("%.2f", v)
 }
 
