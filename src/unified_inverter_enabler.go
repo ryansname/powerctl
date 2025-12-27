@@ -227,16 +227,21 @@ func selectMode(
 	config UnifiedInverterConfig,
 	state *InverterEnablerState,
 ) (ModeResult, DebugModeInfo) {
-	// Calculate individual request values for debug (in watts for display)
-	maxInv := maxInverterRequest(data, config)
-	pwLast := powerwallLastRequest(data, config)
-	pwLow := powerwallLowRequest(data, config)
+	// Pre-compute values needed by multiple modes
+	currentSolar := currentSolarGeneration(data, config)
 
-	// Calculate overall mode result
-	targetWatts, winningRule := calculateTargetPower(data, config)
-	solarWatts := currentSolarGeneration(data, config)
-	overallInverterWatts := max(targetWatts-solarWatts, 0)
-	overallCount := calculateInverterCount(overallInverterWatts, config.WattsPerInverter)
+	// Calculate all requests (each mode handles its own solar logic)
+	requests := []PowerRequest{
+		maxInverterRequest(data, config),
+		powerwallLastRequest(data, config, currentSolar),
+		powerwallLowRequest(data, config, currentSolar),
+	}
+	limits := []PowerLimit{
+		powerhouseTransferLimit(data, config),
+	}
+
+	targetWatts, winningRule := calculateTargetPower(requests, limits)
+	overallCount := calculateInverterCount(targetWatts, config.WattsPerInverter)
 
 	// Calculate per-battery overflow counts
 	overflow2Count := checkBatteryOverflow(data, config.Battery2, config, &state.battery2Overflow)
@@ -245,9 +250,9 @@ func selectMode(
 
 	// Build debug info (watts for display)
 	debug := DebugModeInfo{
-		MaxInverter:   maxInv.Watts,
-		PowerwallLast: pwLast.Watts,
-		PowerwallLow:  pwLow.Watts,
+		MaxInverter:   requests[0].Watts,
+		PowerwallLast: requests[1].Watts,
+		PowerwallLow:  requests[2].Watts,
 		Overflow2:     float64(overflow2Count) * config.WattsPerInverter,
 		Overflow3:     float64(overflow3Count) * config.WattsPerInverter,
 	}
@@ -384,21 +389,31 @@ func maxInverterRequest(data DisplayData, config UnifiedInverterConfig) PowerReq
 	return PowerRequest{Name: "MaxInverter", Watts: watts}
 }
 
-// powerwallLastRequest returns 2/3 of the 15min P66 load power
-func powerwallLastRequest(data DisplayData, config UnifiedInverterConfig) PowerRequest {
+// powerwallLastRequest returns 2/3 of the 15min P66 load power, minus current solar generation
+func powerwallLastRequest(
+	data DisplayData,
+	config UnifiedInverterConfig,
+	currentSolar float64,
+) PowerRequest {
 	loadPower15MinP66 := data.GetFloat(config.LoadPowerTopic).P66._15
-	return PowerRequest{Name: "PowerwallLast", Watts: loadPower15MinP66 * (2.0 / 3.0)}
+	targetLoad := loadPower15MinP66 * (2.0 / 3.0)
+	return PowerRequest{Name: "PowerwallLast", Watts: max(targetLoad-currentSolar, 0)}
 }
 
-// powerwallLowRequest returns 15min P99 load if powerwall SOC is low, else 0
-func powerwallLowRequest(data DisplayData, config UnifiedInverterConfig) PowerRequest {
+// powerwallLowRequest returns 15min P99 load minus current solar if powerwall SOC is low, else 0
+func powerwallLowRequest(
+	data DisplayData,
+	config UnifiedInverterConfig,
+	currentSolar float64,
+) PowerRequest {
 	powerwallSOC15MinP1 := data.GetFloat(config.PowerwallSOCTopic).P1._15
 
-	watts := 0.0
-	if powerwallSOC15MinP1 < config.PowerwallLowThreshold {
-		watts = data.GetFloat(config.LoadPowerTopic).P99._15
+	if powerwallSOC15MinP1 >= config.PowerwallLowThreshold {
+		return PowerRequest{Name: "PowerwallLow", Watts: 0}
 	}
-	return PowerRequest{Name: "PowerwallLow", Watts: watts}
+
+	loadPower := data.GetFloat(config.LoadPowerTopic).P99._15
+	return PowerRequest{Name: "PowerwallLow", Watts: max(loadPower-currentSolar, 0)}
 }
 
 // powerhouseTransferLimit returns the available capacity after accounting for solar generation
@@ -409,14 +424,7 @@ func powerhouseTransferLimit(data DisplayData, config UnifiedInverterConfig) Pow
 }
 
 // calculateTargetPower computes target watts by taking max of all requests and applying all limits
-func calculateTargetPower(data DisplayData, config UnifiedInverterConfig) (float64, string) {
-	// Calculate all requests, take max
-	requests := []PowerRequest{
-		maxInverterRequest(data, config),
-		powerwallLastRequest(data, config),
-		powerwallLowRequest(data, config),
-	}
-
+func calculateTargetPower(requests []PowerRequest, limits []PowerLimit) (float64, string) {
 	target := 0.0
 	winningRule := ""
 	for _, r := range requests {
@@ -426,10 +434,6 @@ func calculateTargetPower(data DisplayData, config UnifiedInverterConfig) (float
 		}
 	}
 
-	// Calculate all limits, apply each
-	limits := []PowerLimit{
-		powerhouseTransferLimit(data, config),
-	}
 	for _, l := range limits {
 		target = min(target, l.Watts)
 	}

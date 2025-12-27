@@ -149,10 +149,11 @@ The application uses a goroutine-based architecture with message passing via cha
 
 9. **unifiedInverterEnabler** (src/unified_inverter_enabler.go)
    - Single worker managing all 9 inverters across both batteries
-   - **Overall modes** (existing, take max request then subtract solar):
-     - Powerwall Low Mode: If Powerwall SOC 15min P1 < 30% → load_power 15min P99
-     - Max Inverter Mode: If solar forecast > 3kWh AND solar_1_power 5min P50 > 1kW → 100kW
-     - Powerwall Last Mode: Otherwise → 2/3 × load_power 15min P66
+   - **Overall modes** (each mode handles its own solar subtraction if needed):
+     - Powerwall Low Mode: If Powerwall SOC 15min P1 < 30% → (load_power 15min P99 - current solar)
+     - Max Inverter Mode: If solar forecast > 3kWh AND solar_1_power 5min P50 > 1kW → 100kW (no solar subtraction)
+     - Powerwall Last Mode: Otherwise → (2/3 × load_power 15min P66 - current solar)
+   - **Current solar generation**: solar_1 + solar_2 (5min P66), computed once and passed to modes that need it
    - **Per-battery Overflow mode** (step-based, calculated independently per battery):
      - No target calculation; count changes by ±1 based on voltage conditions
      - **Fast start**: If Float Charging AND voltage > 53V on first evaluation, start at current enabled count
@@ -161,7 +162,7 @@ The application uses a goroutine-based architecture with message passing via cha
      - Rate-limited to one change per 4 minutes
      - No solar subtraction (batteries are full, dumping excess)
    - **Mode selection**:
-     - Calculate overall mode inverter count (after solar subtraction and SOC limits)
+     - Calculate overall mode inverter count (modes already include solar subtraction if needed)
      - Calculate per-battery overflow count (sum of both batteries, no solar subtraction)
      - Compare: use whichever produces higher total inverter count
    - **Limit**: 5000W - solar_1_power 15min P99 (accounts for solar already flowing)
