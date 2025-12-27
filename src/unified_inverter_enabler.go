@@ -191,100 +191,123 @@ func checkBatteryOverflow(
 	)
 }
 
-// splitOverallCount distributes inverter count between batteries with 50/50 split
-// SOC limits are applied during split so count can overflow to the other battery
-func splitOverallCount(
-	data DisplayData,
-	config UnifiedInverterConfig,
-	totalCount int,
-	state *InverterEnablerState,
-) (b2Count, b3Count int) {
-	if totalCount <= 0 {
-		return 0, 0
+// applyLimitToPerBattery applies a global limit to per-battery counts.
+// When reducing, it reduces from the higher count first (B3 wins ties).
+func applyLimitToPerBattery(b2Count, b3Count int, limitWatts, wattsPerInverter float64) (int, int) {
+	maxTotal := int(limitWatts / wattsPerInverter)
+	for b2Count+b3Count > maxTotal {
+		switch {
+		case b2Count > b3Count:
+			b2Count--
+		case b3Count > 0:
+			b3Count--
+		default:
+			b2Count--
+		}
 	}
-
-	// Calculate SOC-limited maximums
-	soc2 := data.GetFloat(config.Battery2.SOCTopic).Current
-	soc3 := data.GetFloat(config.Battery3.SOCTopic).Current
-	maxB2 := maxInvertersForSOC(soc2, len(config.Battery2.Inverters), &state.battery2LockedOut)
-	maxB3 := maxInvertersForSOC(soc3, len(config.Battery3.Inverters), &state.battery3LockedOut)
-
-	// Split 50/50, prefer Battery 3 for odd amounts
-	b3Count = min((totalCount+1)/2, maxB3)
-	b2Count = min(totalCount-b3Count, maxB2)
-	// Handle overflow if B2 hit SOC limit - give remainder to B3
-	if b2Count < totalCount-b3Count {
-		b3Count = min(totalCount-b2Count, maxB3)
-	}
-
 	return b2Count, b3Count
 }
 
-// selectMode compares overall mode vs per-battery overflow mode
-// and returns whichever produces higher total inverter count
+// roundRobinFromBase adds inverters to reach targetTotal using strict alternation.
+// Starts from B3: B3 → B2 → B3 → B2... (skips if at max).
+// max2/max3 come from maxInvertersForSOC to respect SOC limits.
+func roundRobinFromBase(base2, base3, targetTotal, max2, max3 int) (b2Count, b3Count int) {
+	b2Count, b3Count = base2, base3
+	turn := 3 // Start with B3
+	for b2Count+b3Count < targetTotal {
+		if turn == 3 {
+			if b3Count < max3 {
+				b3Count++
+			}
+			turn = 2
+		} else {
+			if b2Count < max2 {
+				b2Count++
+			}
+			turn = 3
+		}
+		if b2Count >= max2 && b3Count >= max3 {
+			break
+		}
+	}
+	return
+}
+
+// overflowRuleName returns the rule name for overflow mode based on which batteries contribute
+func overflowRuleName(b2Count, b3Count int) string {
+	switch {
+	case b2Count > 0 && b3Count > 0:
+		return "Overflow(B2+B3)"
+	case b2Count > 0:
+		return "Overflow(B2)"
+	case b3Count > 0:
+		return "Overflow(B3)"
+	default:
+		return ""
+	}
+}
+
+// selectMode calculates per-battery overflow and global targets, applying limits,
+// and returns whichever produces higher total inverter count.
+// If global is higher, it starts from limited overflow base and round-robins additional inverters.
 func selectMode(
 	data DisplayData,
 	config UnifiedInverterConfig,
 	state *InverterEnablerState,
 ) (ModeResult, DebugModeInfo) {
-	// Pre-compute values needed by multiple modes
-	currentSolar := currentSolarGeneration(data, config)
+	// 1. Calculate per-battery overflow counts (step-based)
+	overflow2 := checkBatteryOverflow(data, config.Battery2, config, &state.battery2Overflow)
+	overflow3 := checkBatteryOverflow(data, config.Battery3, config, &state.battery3Overflow)
 
-	// Calculate all requests (each mode handles its own solar logic)
+	// 2. Apply global limit to overflow (PowerhouseTransfer limit)
+	limit := powerhouseTransferLimit(data, config)
+	limitedB2, limitedB3 := applyLimitToPerBattery(overflow2, overflow3, limit.Watts, config.WattsPerInverter)
+	limitedOverflowTotal := limitedB2 + limitedB3
+
+	// 3. Calculate global targets (already includes limits)
+	currentSolar := currentSolarGeneration(data, config)
 	requests := []PowerRequest{
 		maxInverterRequest(data, config),
 		powerwallLastRequest(data, config, currentSolar),
 		powerwallLowRequest(data, config, currentSolar),
 	}
-	limits := []PowerLimit{
-		powerhouseTransferLimit(data, config),
-	}
-
+	limits := []PowerLimit{limit}
 	targetWatts, winningRule := calculateTargetPower(requests, limits)
-	overallCount := calculateInverterCount(targetWatts, config.WattsPerInverter)
+	globalCount := calculateInverterCount(targetWatts, config.WattsPerInverter)
 
-	// Calculate per-battery overflow counts
-	overflow2Count := checkBatteryOverflow(data, config.Battery2, config, &state.battery2Overflow)
-	overflow3Count := checkBatteryOverflow(data, config.Battery3, config, &state.battery3Overflow)
-	overflowTotal := overflow2Count + overflow3Count
-
-	// Build debug info (watts for display)
+	// Build debug info (before limiting for display)
 	debug := DebugModeInfo{
 		MaxInverter:   requests[0].Watts,
 		PowerwallLast: requests[1].Watts,
 		PowerwallLow:  requests[2].Watts,
-		Overflow2:     float64(overflow2Count) * config.WattsPerInverter,
-		Overflow3:     float64(overflow3Count) * config.WattsPerInverter,
+		Overflow2:     float64(overflow2) * config.WattsPerInverter,
+		Overflow3:     float64(overflow3) * config.WattsPerInverter,
 	}
 
-	// Compare and select (overflow wins only if > overall)
-	if overflowTotal > overallCount {
-		var ruleName string
-		switch {
-		case overflow2Count > 0 && overflow3Count > 0:
-			ruleName = "Overflow(B2+B3)"
-		case overflow2Count > 0:
-			ruleName = "Overflow(B2)"
-		default:
-			ruleName = "Overflow(B3)"
+	// 4. Compare and select
+	if globalCount > limitedOverflowTotal {
+		// Global target is higher: round-robin from limited overflow base
+		soc2 := data.GetFloat(config.Battery2.SOCTopic).Current
+		soc3 := data.GetFloat(config.Battery3.SOCTopic).Current
+		maxB2 := maxInvertersForSOC(soc2, len(config.Battery2.Inverters), &state.battery2LockedOut)
+		maxB3 := maxInvertersForSOC(soc3, len(config.Battery3.Inverters), &state.battery3LockedOut)
+		b2, b3 := roundRobinFromBase(limitedB2, limitedB3, globalCount, maxB2, maxB3)
+
+		// Winner is the global rule (only if non-zero)
+		if targetWatts > 0 {
+			debug.Winner = winningRule
 		}
-
-		debug.Winner = ruleName
-		return ModeResult{
-			RuleName:      ruleName,
-			Battery2Count: overflow2Count,
-			Battery3Count: overflow3Count,
-		}, debug
+		return ModeResult{RuleName: winningRule, Battery2Count: b2, Battery3Count: b3}, debug
 	}
 
-	// Overall mode: split into per-battery counts (with SOC limits for overflow handling)
-	b2Count, b3Count := splitOverallCount(data, config, overallCount, state)
-
-	debug.Winner = winningRule
+	// Per-battery overflow wins (or tie)
+	if limitedOverflowTotal > 0 {
+		debug.Winner = overflowRuleName(limitedB2, limitedB3)
+	}
 	return ModeResult{
-		RuleName:      winningRule,
-		Battery2Count: b2Count,
-		Battery3Count: b3Count,
+		RuleName:      debug.Winner,
+		Battery2Count: limitedB2,
+		Battery3Count: limitedB3,
 	}, debug
 }
 
@@ -313,12 +336,13 @@ func formatDebugOutput(debug DebugModeInfo) string {
 	sb.WriteString("|------|------:|--|\n")
 	for _, v := range values {
 		marker := ""
-		if strings.Contains(debug.Winner, v.name) ||
+		isWinner := strings.Contains(debug.Winner, v.name) ||
 			(v.name == "Max Inverter" && debug.Winner == "MaxInverter") ||
 			(v.name == "Powerwall Last" && debug.Winner == "PowerwallLast") ||
 			(v.name == "Powerwall Low" && debug.Winner == "PowerwallLow") ||
 			(v.name == "Overflow (B2)" && strings.Contains(debug.Winner, "B2")) ||
-			(v.name == "Overflow (B3)" && strings.Contains(debug.Winner, "B3")) {
+			(v.name == "Overflow (B3)" && strings.Contains(debug.Winner, "B3"))
+		if isWinner && v.watts > 0 {
 			marker = "✓"
 		}
 		sb.WriteString(fmt.Sprintf("| %s | %.0f | %s |\n", v.name, v.watts, marker))

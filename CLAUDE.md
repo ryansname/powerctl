@@ -161,14 +161,20 @@ The application uses a goroutine-based architecture with message passing via cha
      - **Step down (-1)**: voltage 1min P50 < 53.3V
      - Rate-limited to one change per 4 minutes
      - No solar subtraction (batteries are full, dumping excess)
-   - **Mode selection**:
-     - Calculate overall mode inverter count (modes already include solar subtraction if needed)
-     - Calculate per-battery overflow count (sum of both batteries, no solar subtraction)
-     - Compare: use whichever produces higher total inverter count
+   - **Mode selection** (per-battery first, then global):
+     1. Calculate per-battery overflow counts (step-based, independent per battery)
+     2. Apply global limit (5000W - solar_1_power 15min P99) to per-battery counts
+        - When reducing, reduce from higher count first (B3 wins ties)
+     3. Calculate global mode targets with limits (max of all requests, capped by limit)
+     4. Compare global inverter count vs limited overflow total:
+        - If global > overflow: start from limited overflow counts, round-robin additional inverters (B3→B2→B3→B2...)
+        - Otherwise: use limited overflow counts
+     5. Zero targets are not considered "selected" (no winner marked)
    - **Limit**: 5000W - solar_1_power 15min P99 (accounts for solar already flowing)
-   - **Battery allocation** (for overall mode):
-     - Split 50/50 in inverter counts, Battery 3 gets extra for odd counts
-     - SOC limits applied during split so count can overflow to the other battery
+   - **Round-robin allocation** (when global target exceeds overflow):
+     - Start from limited per-battery overflow counts
+     - Add inverters in strict alternation: B3 first, then B2, then B3...
+     - SOC limits still apply (via maxInvertersForSOC)
    - **SOC-based limits** (per-battery, for overall mode):
      - SOC < 12.5%: 0 inverters (lockout triggered)
      - SOC < 17.5%: max 1 inverter
