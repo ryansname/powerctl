@@ -1,0 +1,7 @@
+- Compressing mqtt_sender.go
+  - Multiple split calls to call_service
+
+- Derived sensors in stats worker
+  - Stats worker could inject derived display data (e.g., current_solar_generation = solar1 + solar2)
+  - Avoids repeating calculations in multiple downstream workers
+  - Needs mechanism to define derived value configs (source topics, aggregation method, percentile/window)
