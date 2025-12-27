@@ -9,7 +9,7 @@ run: build
 check: build
 	golangci-lint run
 	go test ./...
-	nix-build -A goModules
+	nix-build -A goModules --no-out-link
 
 clean:
 	rm -f powerctl

@@ -13,3 +13,6 @@ powerctl
 *.dll
 *.so
 *.dylib
+
+# Nix build output
+result
