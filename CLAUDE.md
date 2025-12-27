@@ -35,7 +35,7 @@ nix-shell  # Enter development environment with Go, claude, and claude-monitor
 ```bash
 make build  # Build the binary
 make run    # Build and run with --force-enable --debug (for local dev)
-make check  # Run golangci-lint and tests
+make check  # Run golangci-lint, tests, and verify vendorHash
 make clean  # Remove built binary
 ```
 
