@@ -141,6 +141,7 @@ func SafeGo(
 func main() {
 	// Parse command line flags
 	forceEnable := flag.Bool("force-enable", false, "Bypass powerctl_enabled switch")
+	debugMode := flag.Bool("debug", false, "Enable debug introspection worker")
 	flag.Parse()
 
 	log.Println("Starting powerctl...")
@@ -365,6 +366,15 @@ func main() {
 
 	// Add senderDataChan to downstream channels for mqttSenderWorker to receive enabled state
 	downstreamChans = append(downstreamChans, senderDataChan)
+
+	// Launch debug worker if enabled
+	if *debugMode {
+		debugChan := make(chan DisplayData, 10)
+		downstreamChans = append(downstreamChans, debugChan)
+		SafeGo(ctx, cancel, "debug-worker", func(ctx context.Context) {
+			debugWorker(ctx, cancel, debugChan)
+		})
+	}
 
 	// Launch broadcast worker (fans out to all downstream workers)
 	SafeGo(ctx, cancel, "broadcast-worker", func(ctx context.Context) {

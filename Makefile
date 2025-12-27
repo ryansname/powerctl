@@ -4,7 +4,7 @@ build:
 	go build -o powerctl ./src
 
 run: build
-	./powerctl --force-enable
+	./powerctl --force-enable --debug
 
 check: build
 	golangci-lint run

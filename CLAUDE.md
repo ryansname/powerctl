@@ -34,7 +34,7 @@ nix-shell  # Enter development environment with Go, claude, and claude-monitor
 ### Using Make (Recommended)
 ```bash
 make build  # Build the binary
-make run    # Build and run with --force-enable (for local dev)
+make run    # Build and run with --force-enable --debug (for local dev)
 make check  # Run golangci-lint and tests
 make clean  # Remove built binary
 ```
@@ -197,6 +197,25 @@ The application uses a goroutine-based architecture with message passing via cha
    - Sends MQTT client to mqttSenderWorker when connected
    - Handles reconnection automatically via paho.mqtt client options
 
+12. **debugWorker** (src/debug_worker.go)
+   - Interactive introspection of DisplayData values via stdin
+   - Enabled via `--debug` flag (included in `make run`)
+   - Uses readline for command history and line editing
+   - Prompt stays at bottom while output appears above
+   - Only prints rows when values change
+   - **Commands**:
+     - `list` - List all available topics with type indicators
+     - `watch <topic>` - Watch current value
+     - `watch <topic> -m <1|5|15> -p <1|50|66|99>` - Watch specific time window and percentile
+     - `unwatch <topic>` - Remove watch (exact or fuzzy match if single)
+     - `unwatch <topic> -m <minutes> -p <percentile>` - Remove specific watch
+     - `unwatch --all` - Remove all watches
+     - `help` - Show command help
+   - **Output format**: Tabular with columns sorted alphabetically by short name
+   - **Smart formatting**: Integers for values ≥100, 2 decimals for smaller values
+   - **Change highlighting**: Changed values shown in yellow
+   - Reprints header when watches are added/removed
+
 ### Data Structures
 
 **MQTT Communication:**
@@ -273,7 +292,8 @@ MQTT Broker → mqttWorker → SensorMessage → statsWorker → DisplayData →
                                                                                            ├─→ lowVoltageWorker (Battery 3)
                                                                                            ├─→ unifiedInverterEnabler
                                                                                            ├─→ powerExcessCalculator → excessChan → dumpLoadEnabler
-                                                                                           └─→ mqttSenderWorker (for enabled state tracking)
+                                                                                           ├─→ mqttSenderWorker (for enabled state tracking)
+                                                                                           └─→ debugWorker (if --debug enabled)
 ```
 
 **Outgoing (to MQTT/Home Assistant):**
@@ -415,6 +435,7 @@ Add these topics to the subscription list in main.go so statsWorker tracks them.
 - `github.com/eclipse/paho.mqtt.golang` - MQTT client
 - `github.com/joho/godotenv` - Environment variable loading
 - `github.com/stretchr/testify` - Test assertions
+- `github.com/chzyer/readline` - Readline for debug worker command history
 
 ### Configuration
 
@@ -496,6 +517,7 @@ The calibration attributes are republished by Home Assistant's statestream integ
 
 **Command Line Flags:**
 - `--force-enable`: Bypass the powerctl_enabled switch. Use this for local development when the deployed instance should be disabled via the switch in Home Assistant. The deployed instance (without this flag) will stop sending commands when the switch is turned off, while the local instance (with this flag) will continue to operate normally.
+- `--debug`: Enable the debug introspection worker. Provides an interactive prompt for watching sensor values in real-time. Included in `make run` for local development.
 
 - If there are more than 3 arguments to a function definition, put each one on a new line
   - multiple arguments sharing the same type do not count for this purpose, eg.
