@@ -166,9 +166,8 @@ The application uses a goroutine-based architecture with message passing via cha
      - Compare: use whichever produces higher total power output
    - **Limit**: 5000W - solar_1_power 15min P99 (accounts for solar already flowing)
    - **Battery allocation** (for overall mode):
-     - Priority to batteries in "Float Charging" with > 95% SOC
-     - Otherwise split 50/50, Battery 3 gets extra for odd amounts
-     - SOC limits applied during split for proper overflow handling
+     - Split 50/50, Battery 3 gets extra for odd amounts
+     - SOC limits applied during split so watts can overflow to the other battery
    - **SOC-based limits** (per-battery, for overall mode):
      - SOC < 12.5%: 0 inverters (lockout triggered)
      - SOC < 17.5%: max 1 inverter

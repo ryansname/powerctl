@@ -190,7 +190,7 @@ func checkBatteryOverflow(
 	return float64(effectiveCount) * config.WattsPerInverter
 }
 
-// splitOverallWatts distributes overall watts between batteries based on priority and SOC limits
+// splitOverallWatts distributes overall watts between batteries with 50/50 split
 // SOC limits are applied during split so watts can overflow to the other battery
 func splitOverallWatts(
 	data DisplayData,
@@ -202,9 +202,6 @@ func splitOverallWatts(
 		return 0, 0
 	}
 
-	battery2Priority := isBatteryPriority(data, config.Battery2)
-	battery3Priority := isBatteryPriority(data, config.Battery3)
-
 	// Calculate SOC-limited maximums (in watts)
 	soc2 := data.GetFloat(config.Battery2.SOCTopic).Current
 	soc3 := data.GetFloat(config.Battery3.SOCTopic).Current
@@ -213,24 +210,15 @@ func splitOverallWatts(
 	maxB2Watts := float64(maxB2Inverters) * config.WattsPerInverter
 	maxB3Watts := float64(maxB3Inverters) * config.WattsPerInverter
 
-	switch {
-	case battery2Priority && !battery3Priority:
-		b2Watts = min(totalWatts, maxB2Watts)
+	// Split 50/50, prefer Battery 3 for odd amounts
+	b3Watts = min((totalWatts+config.WattsPerInverter)/2, maxB3Watts)
+	b2Watts = min(totalWatts-b3Watts, maxB2Watts)
+	// Handle overflow if one battery hit SOC limit
+	if b3Watts >= maxB3Watts {
+		b2Watts = min(totalWatts-b3Watts, maxB2Watts)
+	}
+	if b2Watts >= maxB2Watts {
 		b3Watts = min(totalWatts-b2Watts, maxB3Watts)
-	case battery3Priority && !battery2Priority:
-		b3Watts = min(totalWatts, maxB3Watts)
-		b2Watts = min(totalWatts-b3Watts, maxB2Watts)
-	default:
-		// Split 50/50, prefer Battery 3 for odd amounts
-		b3Watts = min((totalWatts+config.WattsPerInverter)/2, maxB3Watts)
-		b2Watts = min(totalWatts-b3Watts, maxB2Watts)
-		// Handle overflow if one battery hit SOC limit
-		if b3Watts >= maxB3Watts {
-			b2Watts = min(totalWatts-b3Watts, maxB2Watts)
-		}
-		if b2Watts >= maxB2Watts {
-			b3Watts = min(totalWatts-b2Watts, maxB3Watts)
-		}
 	}
 
 	return b2Watts, b3Watts
@@ -509,17 +497,6 @@ func maxInvertersForSOC(socPercent float64, hardwareMax int, lockedOut *bool) in
 	default:
 		return hardwareMax
 	}
-}
-
-// isBatteryPriority checks if battery is in Float Charging state with > 95% SOC
-func isBatteryPriority(data DisplayData, battery BatteryInverterGroup) bool {
-	chargeState := data.GetString(battery.ChargeStateTopic)
-	isFloatCharging := chargeState == "Float Charging"
-
-	socPercent := data.GetFloat(battery.SOCTopic).Current
-	isHighSOC := socPercent > 95.0
-
-	return isFloatCharging && isHighSOC
 }
 
 // applyInverterChanges enables/disables inverters to match desired counts
