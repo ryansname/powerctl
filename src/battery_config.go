@@ -142,6 +142,7 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 		OverflowStepInterval:             4 * time.Minute,
 		OverflowIncreaseVoltageThreshold: 53.55,
 		OverflowDecreaseVoltageThreshold: 53.3,
+		OverflowFastStartMinVoltage:      53.0,
 	}
 }
 

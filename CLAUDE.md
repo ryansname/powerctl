@@ -155,7 +155,7 @@ The application uses a goroutine-based architecture with message passing via cha
      - Powerwall Last Mode: Otherwise → 2/3 × load_power 15min P66
    - **Per-battery Overflow mode** (step-based, calculated independently per battery):
      - No target calculation; count changes by ±1 based on voltage conditions
-     - **Fast start**: If Float Charging on first evaluation, start at max inverters
+     - **Fast start**: If Float Charging AND voltage > 53V on first evaluation, start at current enabled count
      - **Step up (+1)**: Float Charging AND voltage 5min P1 > 53.55V
      - **Step down (-1)**: voltage 1min P50 < 53.3V
      - Rate-limited to one change per 4 minutes
@@ -177,6 +177,10 @@ The application uses a goroutine-based architecture with message passing via cha
    - **Hysteresis**: Once a battery enters lockout (0 inverters), it remains locked until SOC > 15%
    - **Cooldown**: 1 minute after any modification
    - Each inverter: 255W (9 inverters = 2,295W max)
+   - **Debug output**: Publishes all mode values to `input_text.powerhouse_control_debug`
+     - GFM table showing Max Inverter, Powerwall Last, Powerwall Low, Overflow (B2), Overflow (B3)
+     - Sorted by watts descending, winning mode marked with ✓
+     - Only publishes when values change via `MQTTSender.SetInputText()`
 
 10. **mqttSenderWorker** (src/mqtt_sender.go)
     - Dedicated worker for outgoing MQTT messages

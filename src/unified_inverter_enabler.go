@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math"
+	"sort"
 	"strings"
 	"time"
 )
@@ -60,6 +62,7 @@ type UnifiedInverterConfig struct {
 	OverflowStepInterval             time.Duration // 4 min - time between count changes
 	OverflowIncreaseVoltageThreshold float64       // 53.55V - voltage 5min P1 must exceed to increase
 	OverflowDecreaseVoltageThreshold float64       // 53.3V - voltage 1min P50 must drop below to decrease
+	OverflowFastStartMinVoltage      float64       // 53.0V - voltage must exceed for fast-start
 }
 
 // OverflowState tracks per-battery overflow inverter count with step-based changes
@@ -69,7 +72,6 @@ type OverflowState struct {
 }
 
 // Step adjusts count by ±1 based on voltage conditions, rate-limited to one change per interval.
-// Fast start: if Float Charging and never changed, start at max inverters.
 // Step up: Float Charging AND voltage 5min P1 > increaseThreshold
 // Step down: voltage 1min P50 < decreaseThreshold
 func (s *OverflowState) Step(
@@ -81,13 +83,6 @@ func (s *OverflowState) Step(
 	maxCount int,
 	stepInterval time.Duration,
 ) int {
-	// Fast start: if Float Charging and we've never made a change, start at max
-	if s.LastChangeTime.IsZero() && isFloatCharging {
-		s.CurrentCount = maxCount
-		s.LastChangeTime = time.Now()
-		return s.CurrentCount
-	}
-
 	if time.Since(s.LastChangeTime) < stepInterval {
 		return s.CurrentCount
 	}
@@ -103,6 +98,28 @@ func (s *OverflowState) Step(
 	return s.CurrentCount
 }
 
+// InitFromDisplayData initializes overflow state from current inverter states.
+// Only triggers on first Float Charging evaluation with voltage > minVoltage (fast-start).
+func (s *OverflowState) InitFromDisplayData(
+	data DisplayData,
+	battery BatteryInverterGroup,
+	isFloatCharging bool,
+	currentVoltage float64,
+	minVoltage float64,
+) {
+	if !s.LastChangeTime.IsZero() || !isFloatCharging || currentVoltage < minVoltage {
+		return
+	}
+	count := 0
+	for _, inv := range battery.Inverters {
+		if data.GetBoolean(inv.StateTopic) {
+			count++
+		}
+	}
+	s.CurrentCount = count
+	s.LastChangeTime = time.Now()
+}
+
 // InverterEnablerState holds runtime state for the unified inverter enabler
 type InverterEnablerState struct {
 	// Last modification time for cooldown
@@ -113,6 +130,8 @@ type InverterEnablerState struct {
 	// Per-battery overflow state for rate limiting
 	battery2Overflow OverflowState
 	battery3Overflow OverflowState
+	// Last published debug output for change detection
+	lastDebugOutput string
 }
 
 // ModeResult represents the outcome of mode selection
@@ -122,6 +141,16 @@ type ModeResult struct {
 	TotalWatts    float64
 	Battery2Watts float64
 	Battery3Watts float64
+}
+
+// DebugModeInfo contains all individual mode values for debug output
+type DebugModeInfo struct {
+	MaxInverter   float64
+	PowerwallLast float64
+	PowerwallLow  float64
+	Overflow2     float64
+	Overflow3     float64
+	Winner        string
 }
 
 // checkBatteryOverflow returns effective watts for overflow mode using step-based control.
@@ -141,6 +170,13 @@ func checkBatteryOverflow(
 	voltage5MinP1 := voltageData.P1._5
 	voltage1MinP50 := voltageData.P50._1
 
+	overflow.InitFromDisplayData(
+		data,
+		battery,
+		isFloatCharging,
+		voltageData.Current,
+		config.OverflowFastStartMinVoltage,
+	)
 	effectiveCount := overflow.Step(
 		isFloatCharging,
 		voltage5MinP1,
@@ -202,7 +238,16 @@ func splitOverallWatts(
 
 // selectMode compares overall mode vs per-battery overflow mode
 // and returns whichever produces higher total power output
-func selectMode(data DisplayData, config UnifiedInverterConfig, state *InverterEnablerState) ModeResult {
+func selectMode(
+	data DisplayData,
+	config UnifiedInverterConfig,
+	state *InverterEnablerState,
+) (ModeResult, DebugModeInfo) {
+	// Calculate individual request values for debug
+	maxInv := maxInverterRequest(data, config)
+	pwLast := powerwallLastRequest(data, config)
+	pwLow := powerwallLowRequest(data, config)
+
 	// Calculate overall mode result
 	targetWatts, winningRule := calculateTargetPower(data, config)
 	solarWatts := currentSolarGeneration(data, config)
@@ -216,6 +261,15 @@ func selectMode(data DisplayData, config UnifiedInverterConfig, state *InverterE
 
 	perBatteryEffective := overflow2Watts + overflow3Watts
 
+	// Build debug info
+	debug := DebugModeInfo{
+		MaxInverter:   maxInv.Watts,
+		PowerwallLast: pwLast.Watts,
+		PowerwallLow:  pwLow.Watts,
+		Overflow2:     overflow2Watts,
+		Overflow3:     overflow3Watts,
+	}
+
 	// Compare and select (per-battery wins only if > overall)
 	if perBatteryEffective > overallEffective {
 		var ruleName string
@@ -228,23 +282,25 @@ func selectMode(data DisplayData, config UnifiedInverterConfig, state *InverterE
 			ruleName = "Overflow(B3)"
 		}
 
+		debug.Winner = ruleName
 		return ModeResult{
 			RuleName:      ruleName,
 			TotalWatts:    perBatteryEffective,
 			Battery2Watts: overflow2Watts,
 			Battery3Watts: overflow3Watts,
-		}
+		}, debug
 	}
 
 	// Overall mode: split into per-battery watts (with SOC limits for overflow handling)
 	b2Watts, b3Watts := splitOverallWatts(data, config, overallEffective, state)
 
+	debug.Winner = winningRule
 	return ModeResult{
 		RuleName:      winningRule,
 		TotalWatts:    overallEffective,
 		Battery2Watts: b2Watts,
 		Battery3Watts: b3Watts,
-	}
+	}, debug
 }
 
 // wattsToInverterCount converts watts to inverter count
@@ -253,6 +309,45 @@ func wattsToInverterCount(watts, wattsPerInverter float64) int {
 		return 0
 	}
 	return int(watts / wattsPerInverter)
+}
+
+// formatDebugOutput formats debug mode values as a GFM table for Home Assistant
+func formatDebugOutput(debug DebugModeInfo) string {
+	type modeValue struct {
+		name  string
+		watts float64
+	}
+
+	values := []modeValue{
+		{"Max Inverter", debug.MaxInverter},
+		{"Powerwall Last", debug.PowerwallLast},
+		{"Powerwall Low", debug.PowerwallLow},
+		{"Overflow (B2)", debug.Overflow2},
+		{"Overflow (B3)", debug.Overflow3},
+	}
+
+	// Sort by watts descending
+	sort.Slice(values, func(i, j int) bool {
+		return values[i].watts > values[j].watts
+	})
+
+	var sb strings.Builder
+	sb.WriteString("| Mode | Watts |  |\n")
+	sb.WriteString("|------|------:|--|\n")
+	for _, v := range values {
+		marker := ""
+		if strings.Contains(debug.Winner, v.name) ||
+			(v.name == "Max Inverter" && debug.Winner == "MaxInverter") ||
+			(v.name == "Powerwall Last" && debug.Winner == "PowerwallLast") ||
+			(v.name == "Powerwall Low" && debug.Winner == "PowerwallLow") ||
+			(v.name == "Overflow (B2)" && strings.Contains(debug.Winner, "B2")) ||
+			(v.name == "Overflow (B3)" && strings.Contains(debug.Winner, "B3")) {
+			marker = "✓"
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %.0f | %s |\n", v.name, v.watts, marker))
+	}
+
+	return sb.String()
 }
 
 // unifiedInverterEnabler manages all inverters across both batteries
@@ -269,13 +364,23 @@ func unifiedInverterEnabler(
 	for {
 		select {
 		case data := <-dataChan:
-			// Check cooldown
+			// Calculate mode (even during cooldown for debug output)
+			modeResult, debugInfo := selectMode(data, config, state)
+
+			// Publish debug output only when it changes
+			debugOutput := formatDebugOutput(debugInfo)
+			if debugOutput != state.lastDebugOutput {
+				sender.SetInputText(
+					"input_text.powerhouse_control_debug",
+					debugOutput,
+				)
+				state.lastDebugOutput = debugOutput
+			}
+
+			// Check cooldown for inverter changes
 			if time.Since(state.lastModificationTime) < config.CooldownDuration {
 				continue
 			}
-
-			// Select mode and get per-battery watts (SOC limits already applied for overall mode)
-			modeResult := selectMode(data, config, state)
 
 			// Convert watts to counts
 			battery2Count := wattsToInverterCount(modeResult.Battery2Watts, config.WattsPerInverter)
