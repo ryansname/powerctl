@@ -400,7 +400,7 @@ func unifiedInverterEnabler(
 	}
 }
 
-// maxInverterRequest returns 10kW if solar conditions are good, else 0
+// maxInverterRequest returns total inverter wattage if solar conditions are good, else 0
 func maxInverterRequest(data DisplayData, config UnifiedInverterConfig) PowerRequest {
 	solarForecast := data.GetFloat(config.SolarForecastTopic).Current
 	solarPower5MinAvg := data.GetFloat(config.Solar1PowerTopic).P50._5
@@ -408,7 +408,7 @@ func maxInverterRequest(data DisplayData, config UnifiedInverterConfig) PowerReq
 	watts := 0.0
 	if solarForecast > config.MaxInverterModeSolarForecast &&
 		solarPower5MinAvg > config.MaxInverterModeSolarPower {
-		watts = 100000.0
+		watts = float64(len(config.Battery2.Inverters)+len(config.Battery3.Inverters)) * config.WattsPerInverter
 	}
 	return PowerRequest{Name: "MaxInverter", Watts: watts}
 }
