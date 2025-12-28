@@ -148,7 +148,7 @@ The application uses a goroutine-based architecture with message passing via cha
      - \> 800W → "Eco" mode
      - Otherwise → "Sleep" mode
    - Only sends command when workmode changes
-   - Uses `MQTTSender.SelectOption()` to set miner workmode
+   - Uses `MQTTSender.CallService()` to set miner workmode
 
 9. **unifiedInverterEnabler** (src/unified_inverter_enabler.go)
    - Single worker managing all 9 inverters across both batteries
@@ -189,7 +189,7 @@ The application uses a goroutine-based architecture with message passing via cha
    - **Debug output**: Publishes all mode values to `input_text.powerhouse_control_debug`
      - GFM table showing Max Inverter, Powerwall Last, Powerwall Low, Overflow (B2), Overflow (B3)
      - Sorted by watts descending, winning mode marked with ✓
-     - Only publishes when values change via `MQTTSender.SetInputText()`
+     - Only publishes when values change via `MQTTSender.CallService()`
 
 10. **mqttSenderWorker** (src/mqtt_sender.go)
     - Dedicated worker for outgoing MQTT messages
@@ -239,8 +239,7 @@ The application uses a goroutine-based architecture with message passing via cha
 - **MQTTMessage**: Outgoing MQTT message with topic, payload, QoS, and retain flag
 - **MQTTSender** (src/mqtt_sender.go): Wrapper around outgoing channel with helper methods
   - `Send(msg MQTTMessage)` - Sends a raw MQTT message
-  - `CallService(domain, service, entityID string)` - Sends a Home Assistant service call via Node-RED proxy
-  - `SelectOption(entityID, option string)` - Sends a select.select_option service call
+  - `CallService(domain, service, entityID string, data map[string]string)` - Sends a Home Assistant service call via Node-RED proxy (pass nil for data if not needed)
   - `CreateBatteryEntity(...)` - Creates a Home Assistant entity via MQTT discovery
 
 **Statistics:**

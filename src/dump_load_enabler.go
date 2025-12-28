@@ -67,7 +67,7 @@ func dumpLoadEnabler(
 			if desiredWorkmode != currentWorkmode { //nolint:staticcheck // will be implemented
 				// log.Printf("Dump load: excess=%.0fW, changing workmode %s -> %s\n",
 				// 	latestExcess, currentWorkmode, desiredWorkmode)
-				// sender.SelectOption(MinerWorkmodeEntity, desiredWorkmode)
+				// sender.CallService("select", "select_option", MinerWorkmodeEntity, map[string]string{"option": desiredWorkmode})
 			}
 
 		case <-ctx.Done():

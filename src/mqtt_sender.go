@@ -34,54 +34,20 @@ func (s *MQTTSender) Send(msg MQTTMessage) {
 }
 
 // CallService sends a Home Assistant service call via the Node-RED proxy
-func (s *MQTTSender) CallService(domain, service, entityID string) {
-	payload, _ := json.Marshal(map[string]string{
+func (s *MQTTSender) CallService(domain, service, entityID string, data map[string]string) {
+	payload := map[string]any{
 		"domain":    domain,
 		"service":   service,
 		"entity_id": entityID,
-	})
-
-	s.ch <- MQTTMessage{
-		Topic:   "nodered/proxy/call_service",
-		Payload: payload,
-		QoS:     1,
-		Retain:  false,
 	}
-}
-
-// SelectOption sends a select.select_option service call via the Node-RED proxy
-func (s *MQTTSender) SelectOption(entityID, option string) {
-	payload, _ := json.Marshal(map[string]any{
-		"domain":    "select",
-		"service":   "select_option",
-		"entity_id": entityID,
-		"data": map[string]string{
-			"option": option,
-		},
-	})
-
-	s.ch <- MQTTMessage{
-		Topic:   "nodered/proxy/call_service",
-		Payload: payload,
-		QoS:     1,
-		Retain:  false,
+	if data != nil {
+		payload["data"] = data
 	}
-}
-
-// SetInputText sends an input_text.set_value service call via the Node-RED proxy
-func (s *MQTTSender) SetInputText(entityID, value string) {
-	payload, _ := json.Marshal(map[string]any{
-		"domain":    "input_text",
-		"service":   "set_value",
-		"entity_id": entityID,
-		"data": map[string]string{
-			"value": value,
-		},
-	})
+	payloadBytes, _ := json.Marshal(payload)
 
 	s.ch <- MQTTMessage{
 		Topic:   "nodered/proxy/call_service",
-		Payload: payload,
+		Payload: payloadBytes,
 		QoS:     1,
 		Retain:  false,
 	}

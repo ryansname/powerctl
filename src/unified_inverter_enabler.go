@@ -371,10 +371,7 @@ func unifiedInverterEnabler(
 			// Publish debug output only when it changes
 			debugOutput := formatDebugOutput(debugInfo)
 			if debugOutput != state.lastDebugOutput {
-				sender.SetInputText(
-					"input_text.powerhouse_control_debug",
-					debugOutput,
-				)
+				sender.CallService("input_text", "set_value", "input_text.powerhouse_control_debug", map[string]string{"value": debugOutput})
 				state.lastDebugOutput = debugOutput
 			}
 
@@ -534,10 +531,10 @@ func applyInverterChanges(
 			if current != desired {
 				if desired {
 					log.Printf("Enabling %s (%s)\n", inv.EntityID, b.name)
-					sender.CallService("switch", "turn_on", inv.EntityID)
+					sender.CallService("switch", "turn_on", inv.EntityID, nil)
 				} else {
 					log.Printf("Disabling %s (%s)\n", inv.EntityID, b.name)
-					sender.CallService("switch", "turn_off", inv.EntityID)
+					sender.CallService("switch", "turn_off", inv.EntityID, nil)
 				}
 				changed = true
 			}

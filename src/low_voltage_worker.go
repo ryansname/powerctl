@@ -31,7 +31,7 @@ func lowVoltageWorker(
 					len(config.InverterSwitchIDs))
 
 				for _, entityID := range config.InverterSwitchIDs {
-					sender.CallService("switch", "turn_off", entityID)
+					sender.CallService("switch", "turn_off", entityID, nil)
 					log.Printf("%s: Sent turn_off command for %s\n", config.Name, entityID)
 				}
 
