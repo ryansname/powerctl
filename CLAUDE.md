@@ -129,6 +129,9 @@ The application uses a goroutine-based architecture with message passing via cha
 
 7. **powerExcessCalculator** (src/power_excess_calculator.go)
    - Calculates excess power available for dump loads
+   - **Topic constants**: Defines shared topic constants used across multiple workers:
+     - `TopicBattery1Energy`, `TopicBattery2Energy`, `TopicBattery3Energy` - Battery energy topics
+     - `TopicSolar1Power` - Solar 1 power topic (also used by unifiedInverterEnabler)
    - **Battery inputs** (capped at 900W total):
      - Tesla battery remaining: If 5min avg > 4kWh → Add 1000W
      - Battery 2 available energy: If 5min avg > 2.5kWh → Add 450W
@@ -190,13 +193,14 @@ The application uses a goroutine-based architecture with message passing via cha
 
 10. **mqttSenderWorker** (src/mqtt_sender.go)
     - Dedicated worker for outgoing MQTT messages
+    - **Topic constant**: Defines `TopicPowerctlEnabledState` for the powerctl enabled switch state topic
     - Receives MQTTMessage structs via channel (100-message buffer)
     - Receives DisplayData from broadcastWorker to track enabled state
     - Handles message queuing automatically
     - Publishes to MQTT broker with configurable QoS and retain
     - Logs publish failures
     - **Enable/disable filtering**:
-      - Subscribes to `homeassistant/switch/powerctl_enabled/state`
+      - Subscribes to `TopicPowerctlEnabledState` (`homeassistant/switch/powerctl_enabled/state`)
       - When disabled, drops outgoing messages (except discovery config topics)
       - `--force-enable` flag bypasses this filter for local development
     - Launched automatically when MQTT connection is established

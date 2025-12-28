@@ -128,7 +128,7 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 		Battery2:                     buildInverterGroup(battery2),
 		Battery3:                     buildInverterGroup(battery3),
 		SolarForecastTopic:           "homeassistant/sensor/solcast_pv_forecast_forecast_today/state",
-		Solar1PowerTopic:             "homeassistant/sensor/solar_1_power/state",
+		Solar1PowerTopic:             TopicSolar1Power,
 		Solar2PowerTopic:             "homeassistant/sensor/primo_5_0_ac_power/state",
 		LoadPowerTopic:               "homeassistant/sensor/home_sweet_home_load_power_2/state",
 		PowerwallSOCTopic:            "homeassistant/sensor/home_sweet_home_charge/state",

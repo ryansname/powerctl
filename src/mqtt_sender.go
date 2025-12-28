@@ -174,7 +174,7 @@ func (s *MQTTSender) CreatePowerctlSwitch() error {
 
 	config := haSwitchConfig{
 		Name:         "Enabled",
-		StateTopic:   "homeassistant/switch/powerctl_enabled/state",
+		StateTopic:   TopicPowerctlEnabledState,
 		CommandTopic: "homeassistant/switch/powerctl_enabled/set",
 		UniqueId:     "powerctl_enabled",
 		Icon:         "mdi:power",

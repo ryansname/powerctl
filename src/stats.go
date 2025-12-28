@@ -231,15 +231,15 @@ func cloneTopicData(topicData map[string]any) map[string]any {
 // Topics that should be initialized to 0.0 if not received within timeout
 // These are self-published topics that won't exist on first startup
 var selfPublishedFloatTopics = []string{
-	"homeassistant/sensor/battery_2_available_energy/state",
+	TopicBattery2Energy,
 	"homeassistant/sensor/battery_2_state_of_charge/state",
-	"homeassistant/sensor/battery_3_available_energy/state",
+	TopicBattery3Energy,
 	"homeassistant/sensor/battery_3_state_of_charge/state",
 }
 
 // Boolean topics that should be initialized to true if not received within timeout
 var selfPublishedBoolTopics = []string{
-	"homeassistant/switch/powerctl_enabled/state",
+	TopicPowerctlEnabledState,
 }
 
 // statsWorker receives messages, maintains statistics, and sends to output channel
