@@ -77,18 +77,17 @@ The application uses a goroutine-based architecture with message passing via cha
    - Automatically cancels the application context if a goroutine panics
    - Logs panic information for debugging
 
-2. **statsWorker** (src/stats.go:240-460)
+2. **statsWorker** (src/stats.go:310-520)
    - Receives SensorMessage structs via a channel
-   - Maintains separate state for each topic (readings, current, previous values)
-   - Calculates real-time statistics using time-weighted averaging per topic
-   - 1, 5, and 15 minute time-weighted averages, minimums, and maximums
+   - Maintains separate state for each topic (readings, current values)
+   - **Selective percentile calculation**: Only calculates percentiles for topics in `requiredPercentiles` registry
    - Automatically cleans up readings older than 15 minutes every 30 seconds
-   - Updates are debounced (max 1 update per second)
+   - **1-second ticker**: Recalculates percentiles and broadcasts DisplayData at regular intervals
    - **Unit normalization**: Converts kW→W and kWh→Wh for Tesla/HA sensors (see `kiloToBaseUnitTopics` map)
    - **Startup readiness**: Waits for all expected topics before sending data
    - Logs missing topics every 30 seconds until all received
    - **Self-published topic initialization**: After 20 seconds, initializes missing self-published topics (battery SOC/energy to 0.0, powerctl_enabled to true) - see `selfPublishedFloatTopics` and `selfPublishedBoolTopics` lists
-   - Sends DisplayData to broadcastWorker
+   - Sends DisplayData to broadcastWorker every second (not on every message)
 
 3. **broadcastWorker** (src/broadcast_worker.go)
    - Implements the actor pattern for fan-out
@@ -246,21 +245,20 @@ The application uses a goroutine-based architecture with message passing via cha
 
 **Statistics:**
 - **Reading**: Timestamped sensor value
-- **FloatTopicData**: Holds current value and statistics for a numeric sensor topic
+- **FloatTopicData**: Holds current value for a numeric sensor topic
   - `Current`: Most recent value
-  - `P1`: 1st percentile (filters out low outliers) for 1, 5, and 15 minute windows
-  - `P50`: 50th percentile (median) for 1, 5, and 15 minute windows
-  - `P66`: 66th percentile for 1, 5, and 15 minute windows
-  - `P99`: 99th percentile (filters out high outliers) for 1, 5, and 15 minute windows
 - **StringTopicData**: Holds current value for a string sensor topic
 - **BooleanTopicData**: Holds current value for boolean topics (on/off switches, detected by case-insensitive "on"/"off" values)
+- **PercentileKey**: Identifies a specific percentile calculation (Topic, Percentile, Window)
 - **DisplayData**: Container for topic data broadcast to downstream workers
-  - **Helper methods** (src/main.go:25-55):
-    - `GetFloat(topic string) *FloatTopicData` - Extracts FloatTopicData with type safety (access `.Current`, `.P50._15`, etc.)
+  - `TopicData`: Map of topic -> FloatTopicData/StringTopicData/BooleanTopicData
+  - `Percentiles`: Map of PercentileKey -> float64 (only contains registered percentiles)
+  - **Helper methods** (src/main.go):
+    - `GetFloat(topic string) *FloatTopicData` - Extracts FloatTopicData with type safety (access `.Current`)
+    - `GetPercentile(topic string, percentile int, window time.Duration) float64` - Returns registered percentile value (panics if not registered). Use constants: `P1`, `P50`, `P66`, `P99` for percentiles; `Window5Min`, `Window15Min` for windows.
     - `GetString(topic string) string` - Extracts string value with type safety
     - `GetBoolean(topic string) bool` - Extracts boolean value from BooleanTopicData (for switch states)
     - `SumTopics(topics []string) float64` - Sums multiple float topics (uses `.Current` values)
-- **TimeWindows**: Holds values across 1, 5, and 15 minute windows (accessed as `._1`, `._5`, `._15`)
 
 **Battery Monitoring:**
 - **BatteryConfig** (src/battery_config.go): Shared configuration for each battery
@@ -298,6 +296,37 @@ The application uses time-weighted percentiles to account for irregular message 
 6. **P1/P99** = 1st/99th percentile - filters out extreme outliers (brief spikes/dips don't affect these)
 7. **Last known value preservation**: If no messages arrive in a time window, statistics show the last known value instead of zero
 8. At least one reading is always kept (even if older than 15 minutes) to maintain the last known value
+
+### Percentile Registry (Optimization)
+
+To reduce computational overhead, percentiles are only calculated for topics that actually use them. The `requiredPercentiles` map in src/stats.go defines which percentile/window combinations each topic needs:
+
+```go
+var requiredPercentiles = map[string][]PercentileSpec{
+    TopicSolar1Power: {
+        {P50, Window5Min},   // data.GetPercentile(TopicSolar1Power, P50, Window5Min)
+        {P66, Window5Min},   // data.GetPercentile(TopicSolar1Power, P66, Window5Min)
+        {P99, Window15Min},  // data.GetPercentile(TopicSolar1Power, P99, Window15Min)
+    },
+    // ... only ~10 topics need percentiles
+}
+```
+
+**Benefits:**
+- Topics not in the registry only track `Current` value (no percentile calculation)
+- Percentiles are stored in a separate map, accessed via `GetPercentile(topic, percentile, window)` using constants
+- `GetPercentile` panics if requesting an unregistered percentile (catches bugs at development time)
+- Calculations are grouped by window to share filtering and sorting work
+- Reduces overall percentile calculation work by ~95%
+
+**Live Updates:**
+- A 1-second ticker recalculates percentiles for all registered topics and broadcasts DisplayData
+- This is the only source of downstream broadcasts (no debouncing on message arrival)
+- Keeps percentiles fresh as time passes (since weights depend on duration)
+- Only ~10 topics × ~2 window calculations = minimal overhead
+
+**Adding new percentile usage:**
+When a worker needs a new percentile/window combination, add it to `requiredPercentiles` in src/stats.go.
 
 ### Message Flow
 

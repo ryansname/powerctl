@@ -37,19 +37,19 @@ func powerExcessCalculator(
 			excessWatts := 0.0
 
 			// Tesla battery remaining: If 5min avg above 4kWh -> Add 1000W
-			teslaRemaining := data.GetFloat(TopicBattery1Energy).P50._5
+			teslaRemaining := data.GetPercentile(TopicBattery1Energy, P50, Window5Min)
 			if teslaRemaining > 4000 { // Wh (converted from kWh in statsWorker)
 				excessWatts += 1000
 			}
 
 			// Battery 2 available energy: If 5min avg above 2.5kWh -> Add 450W
-			battery2Energy := data.GetFloat(TopicBattery2Energy).P50._5
+			battery2Energy := data.GetPercentile(TopicBattery2Energy, P50, Window5Min)
 			if battery2Energy > 2500 { // Wh
 				excessWatts += 450
 			}
 
 			// Battery 3 available energy: If 5min avg above 3kWh -> Add 450W
-			battery3Energy := data.GetFloat(TopicBattery3Energy).P50._5
+			battery3Energy := data.GetPercentile(TopicBattery3Energy, P50, Window5Min)
 			if battery3Energy > 3000 { // Wh
 				excessWatts += 450
 			}
@@ -58,7 +58,7 @@ func powerExcessCalculator(
 			excessWatts = min(excessWatts, 900)
 
 			// Solar 1 power: If 5min avg above 1kW -> Add 1000W
-			solar1Power := data.GetFloat(TopicSolar1Power).P50._5
+			solar1Power := data.GetPercentile(TopicSolar1Power, P50, Window5Min)
 			if solar1Power > 1000 {
 				excessWatts += 1000
 			}

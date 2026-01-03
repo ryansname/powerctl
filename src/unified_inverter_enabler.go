@@ -377,7 +377,7 @@ func unifiedInverterEnabler(
 // maxInverterRequest returns total inverter wattage if solar conditions are good, else 0
 func maxInverterRequest(data DisplayData, config UnifiedInverterConfig) PowerRequest {
 	solarForecast := data.GetFloat(config.SolarForecastTopic).Current
-	solarPower5MinAvg := data.GetFloat(config.Solar1PowerTopic).P50._5
+	solarPower5MinAvg := data.GetPercentile(config.Solar1PowerTopic, P50, Window5Min)
 
 	watts := 0.0
 	if solarForecast > config.MaxInverterModeSolarForecast &&
@@ -393,7 +393,7 @@ func powerwallLastRequest(
 	config UnifiedInverterConfig,
 	currentSolar float64,
 ) PowerRequest {
-	loadPower15MinP66 := data.GetFloat(config.LoadPowerTopic).P66._15
+	loadPower15MinP66 := data.GetPercentile(config.LoadPowerTopic, P66, Window15Min)
 	targetLoad := loadPower15MinP66 * (2.0 / 3.0)
 	return PowerRequest{Name: "PowerwallLast", Watts: max(targetLoad-currentSolar, 0)}
 }
@@ -404,19 +404,19 @@ func powerwallLowRequest(
 	config UnifiedInverterConfig,
 	currentSolar float64,
 ) PowerRequest {
-	powerwallSOC15MinP1 := data.GetFloat(config.PowerwallSOCTopic).P1._15
+	powerwallSOC15MinP1 := data.GetPercentile(config.PowerwallSOCTopic, P1, Window15Min)
 
 	if powerwallSOC15MinP1 >= config.PowerwallLowThreshold {
 		return PowerRequest{Name: "PowerwallLow", Watts: 0}
 	}
 
-	loadPower := data.GetFloat(config.LoadPowerTopic).P99._15
+	loadPower := data.GetPercentile(config.LoadPowerTopic, P99, Window15Min)
 	return PowerRequest{Name: "PowerwallLow", Watts: max(loadPower-currentSolar, 0)}
 }
 
 // powerhouseTransferLimit returns the available capacity after accounting for solar generation
 func powerhouseTransferLimit(data DisplayData, config UnifiedInverterConfig) PowerLimit {
-	solar1Power15MinP99 := data.GetFloat(config.Solar1PowerTopic).P99._15
+	solar1Power15MinP99 := data.GetPercentile(config.Solar1PowerTopic, P99, Window15Min)
 	availableCapacity := config.MaxTransferPower - solar1Power15MinP99
 	return PowerLimit{Name: "PowerhouseTransfer", Watts: availableCapacity}
 }
@@ -441,8 +441,8 @@ func calculateTargetPower(requests []PowerRequest, limits []PowerLimit) (float64
 
 // currentSolarGeneration returns the current solar generation (5min P66) from solar 1 and 2
 func currentSolarGeneration(data DisplayData, config UnifiedInverterConfig) float64 {
-	solar1 := data.GetFloat(config.Solar1PowerTopic).P66._5
-	solar2 := data.GetFloat(config.Solar2PowerTopic).P66._5
+	solar1 := data.GetPercentile(config.Solar1PowerTopic, P66, Window5Min)
+	solar2 := data.GetPercentile(config.Solar2PowerTopic, P66, Window5Min)
 	return solar1 + solar2
 }
 

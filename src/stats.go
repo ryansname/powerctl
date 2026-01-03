@@ -9,6 +9,20 @@ import (
 	"time"
 )
 
+// Window constants for GetPercentile
+const (
+	Window5Min  = 5 * time.Minute
+	Window15Min = 15 * time.Minute
+)
+
+// Percentile constants for GetPercentile
+const (
+	P1  = 1
+	P50 = 50
+	P66 = 66
+	P99 = 99
+)
+
 // Topics that report in kW or kWh and need conversion to W or Wh (multiply by 1000)
 // This centralizes unit conversion so downstream workers always see W and Wh
 var kiloToBaseUnitTopics = map[string]bool{
@@ -21,6 +35,47 @@ var kiloToBaseUnitTopics = map[string]bool{
 	"homeassistant/sensor/solcast_pv_forecast_forecast_today/state":               true,
 }
 
+// PercentileSpec defines a specific percentile and time window combination
+type PercentileSpec struct {
+	Percentile int           // 1, 50, 66, or 99
+	Window     time.Duration // 1, 5, or 15 minutes
+}
+
+// requiredPercentiles maps topics to the specific percentile/window combinations they need.
+// Topics not in this map will only have their Current value tracked (no percentile calculations).
+// This dramatically reduces computation by only calculating what's actually used.
+var requiredPercentiles = map[string][]PercentileSpec{
+	// Voltage topics - used by lowVoltageWorker for P1._15
+	"homeassistant/sensor/solar_5_battery_voltage/state": {{1, 15 * time.Minute}},
+	"homeassistant/sensor/solar_3_battery_voltage/state": {{1, 15 * time.Minute}},
+
+	// Powerwall SOC - used by unifiedInverterEnabler for P1._15
+	"homeassistant/sensor/home_sweet_home_charge/state": {{1, 15 * time.Minute}},
+
+	// Load power - used by unifiedInverterEnabler for P66._15 and P99._15
+	"homeassistant/sensor/home_sweet_home_load_power_2/state": {
+		{66, 15 * time.Minute},
+		{99, 15 * time.Minute},
+	},
+
+	// Solar 1 power - used by multiple workers for P50._5, P66._5, P99._15
+	TopicSolar1Power: {
+		{50, 5 * time.Minute},
+		{66, 5 * time.Minute},
+		{99, 15 * time.Minute},
+	},
+
+	// Solar 2 power (primo) - used by unifiedInverterEnabler for P66._5
+	"homeassistant/sensor/primo_5_0_ac_power/state": {{66, 5 * time.Minute}},
+
+	// Tesla battery remaining - used by powerExcessCalculator for P50._5
+	"homeassistant/sensor/home_sweet_home_tg118095000r1a_battery_remaining/state": {{50, 5 * time.Minute}},
+
+	// Battery available energy - used by powerExcessCalculator for P50._5
+	TopicBattery2Energy: {{50, 5 * time.Minute}},
+	TopicBattery3Energy: {{50, 5 * time.Minute}},
+}
+
 // Reading represents a timestamped sensor reading
 type Reading struct {
 	Value     float64
@@ -30,20 +85,16 @@ type Reading struct {
 // Readings is a collection of timestamped readings
 type Readings []Reading
 
-// TimeWindows holds values across 1, 5, and 15 minute windows
-type TimeWindows struct {
-	_1  float64
-	_5  float64
-	_15 float64
-}
-
-// FloatTopicData holds current value and statistics for a float topic
+// FloatTopicData holds the current value for a float topic
 type FloatTopicData struct {
 	Current float64
-	P1      TimeWindows // 1st percentile (filters out low outliers)
-	P50     TimeWindows // 50th percentile (median)
-	P66     TimeWindows // 66th percentile
-	P99     TimeWindows // 99th percentile (filters out high outliers)
+}
+
+// PercentileKey identifies a specific percentile calculation
+type PercentileKey struct {
+	Topic      string
+	Percentile int
+	Window     time.Duration
 }
 
 // StringTopicData holds current value for a string topic
@@ -62,78 +113,48 @@ type weightedValue struct {
 	duration float64
 }
 
-// calculateTimeWeightedPercentiles returns P1, P50, P66, and P99 in a single pass
-// where each value is weighted by how long it persisted.
-// The pairs slice must be sorted by value in ascending order.
-func calculateTimeWeightedPercentiles(pairs []weightedValue, totalDuration float64) (p1, p50, p66, p99 float64) {
+// calculateSelectedPercentile calculates a single time-weighted percentile for a window.
+// The percentile parameter should be 1, 50, 66, or 99.
+func calculateSelectedPercentile(
+	pairs []weightedValue,
+	totalDuration float64,
+	percentile int,
+	fallbackValue float64,
+) float64 {
 	if len(pairs) == 0 {
-		return 0, 0, 0, 0
+		return fallbackValue
 	}
 	if len(pairs) == 1 {
-		v := pairs[0].value
-		return v, v, v, v
+		return pairs[0].value
 	}
 
-	// Target durations for each percentile
-	target1 := totalDuration * 0.01
-	target50 := totalDuration * 0.50
-	target66 := totalDuration * 0.66
-	target99 := totalDuration * 0.99
-
-	// Walk through sorted pairs once, capturing values as we cross thresholds
+	target := totalDuration * float64(percentile) / 100.0
 	var cumulative float64
-	var found1, found50, found66, found99 bool
 
 	for _, pair := range pairs {
 		cumulative += pair.duration
-
-		if !found1 && cumulative >= target1 {
-			p1 = pair.value
-			found1 = true
-		}
-		if !found50 && cumulative >= target50 {
-			p50 = pair.value
-			found50 = true
-		}
-		if !found66 && cumulative >= target66 {
-			p66 = pair.value
-			found66 = true
-		}
-		if !found99 && cumulative >= target99 {
-			p99 = pair.value
-			found99 = true
-			break // All found, no need to continue
+		if cumulative >= target {
+			return pair.value
 		}
 	}
 
-	// Fallback to last value for any not found (shouldn't happen)
-	lastValue := pairs[len(pairs)-1].value
-	if !found1 {
-		p1 = lastValue
-	}
-	if !found50 {
-		p50 = lastValue
-	}
-	if !found66 {
-		p66 = lastValue
-	}
-	if !found99 {
-		p99 = lastValue
-	}
-
-	return p1, p50, p66, p99
+	return pairs[len(pairs)-1].value
 }
 
-// calculateTimeWeightedStats computes time-weighted statistics for a time window
-// Each reading is weighted by the duration it was active (time until next reading)
-// Returns: p1 (1st percentile), p50 (median), p66, p99 (99th percentile)
-func calculateTimeWeightedStats(readings Readings, windowDuration time.Duration, now time.Time) (p1, p50, p66, p99 float64) {
+// prepareWindowData filters readings for a time window and prepares sorted weighted pairs.
+// Returns the sorted pairs, total duration, and fallback value for empty windows.
+func prepareWindowData(
+	readings Readings,
+	windowDuration time.Duration,
+	now time.Time,
+) (pairs []weightedValue, totalDuration float64, fallbackValue float64) {
 	if len(readings) == 0 {
-		return 0, 0, 0, 0
+		return nil, 0, 0
 	}
 
-	// Capture last reading for fallback (guaranteed non-empty from check above)
+	// Capture last reading for fallback
 	lastReading := readings[len(readings)-1]
+	fallbackValue = lastReading.Value
 
 	cutoff := now.Add(-windowDuration)
 
@@ -145,27 +166,21 @@ func calculateTimeWeightedStats(readings Readings, windowDuration time.Duration,
 		}
 	}
 
-	// If 0 or 1 readings in window, use the most recent reading (last known value)
-	// Single reading has zero duration so can't compute time-weighted percentiles
+	// If 0 or 1 readings in window, use fallback
 	if len(windowReadings) <= 1 {
-		v := lastReading.Value
-		return v, v, v, v
+		return nil, 0, fallbackValue
 	}
 
 	// Build weighted value pairs
-	pairs := make([]weightedValue, 0, len(windowReadings))
-	var totalDuration float64
+	pairs = make([]weightedValue, 0, len(windowReadings))
 
 	for i := 0; i < len(windowReadings); i++ {
 		value := windowReadings[i].Value
 
-		// Calculate duration this reading was active
 		var duration float64
 		if i < len(windowReadings)-1 {
-			// Duration until next reading
 			duration = windowReadings[i+1].Timestamp.Sub(windowReadings[i].Timestamp).Seconds()
 		} else {
-			// Last reading: duration from reading until now
 			duration = now.Sub(windowReadings[i].Timestamp).Seconds()
 		}
 
@@ -178,28 +193,51 @@ func calculateTimeWeightedStats(readings Readings, windowDuration time.Duration,
 		return pairs[i].value < pairs[j].value
 	})
 
-	// Calculate time-weighted percentiles in a single pass
-	p1, p50, p66, p99 = calculateTimeWeightedPercentiles(pairs, totalDuration)
-
-	return p1, p50, p66, p99
+	return pairs, totalDuration, fallbackValue
 }
 
-// calculateStats computes time-weighted statistics for different time windows
-func calculateStats(data *FloatTopicData, readings Readings) {
-	if len(readings) == 0 {
+// calculateRequiredStats calculates only the percentiles specified in the registry for a topic.
+// Results are written to the percentiles map.
+func calculateRequiredStats(topic string, readings Readings, percentiles map[PercentileKey]float64) {
+	specs, needsPercentiles := requiredPercentiles[topic]
+	if !needsPercentiles || len(readings) == 0 {
 		return
 	}
 
-	// Calculate time-weighted statistics for each window
 	now := time.Now()
-	p1_1, p50_1, p66_1, p99_1 := calculateTimeWeightedStats(readings, 1*time.Minute, now)
-	p1_5, p50_5, p66_5, p99_5 := calculateTimeWeightedStats(readings, 5*time.Minute, now)
-	p1_15, p50_15, p66_15, p99_15 := calculateTimeWeightedStats(readings, 15*time.Minute, now)
 
-	data.P1 = TimeWindows{_1: p1_1, _5: p1_5, _15: p1_15}
-	data.P50 = TimeWindows{_1: p50_1, _5: p50_5, _15: p50_15}
-	data.P66 = TimeWindows{_1: p66_1, _5: p66_5, _15: p66_15}
-	data.P99 = TimeWindows{_1: p99_1, _5: p99_5, _15: p99_15}
+	// Group specs by window to avoid redundant filtering/sorting
+	type windowWork struct {
+		pairs         []weightedValue
+		totalDuration float64
+		fallback      float64
+	}
+	windowCache := make(map[time.Duration]*windowWork)
+
+	for _, spec := range specs {
+		// Prepare window data (cached per window duration)
+		work, exists := windowCache[spec.Window]
+		if !exists {
+			pairs, totalDuration, fallback := prepareWindowData(readings, spec.Window, now)
+			work = &windowWork{
+				pairs:         pairs,
+				totalDuration: totalDuration,
+				fallback:      fallback,
+			}
+			windowCache[spec.Window] = work
+		}
+
+		// Calculate the specific percentile
+		var value float64
+		if work.pairs == nil {
+			value = work.fallback
+		} else {
+			value = calculateSelectedPercentile(work.pairs, work.totalDuration, spec.Percentile, work.fallback)
+		}
+
+		// Store in the percentiles map
+		percentiles[PercentileKey{topic, spec.Percentile, spec.Window}] = value
+	}
 }
 
 // cloneTopicData creates a deep copy of topicData for safe concurrent access
@@ -208,22 +246,21 @@ func cloneTopicData(topicData map[string]any) map[string]any {
 	for topic, data := range topicData {
 		switch d := data.(type) {
 		case *FloatTopicData:
-			clone[topic] = &FloatTopicData{
-				Current: d.Current,
-				P1:      d.P1,
-				P50:     d.P50,
-				P66:     d.P66,
-				P99:     d.P99,
-			}
+			clone[topic] = &FloatTopicData{Current: d.Current}
 		case *StringTopicData:
-			clone[topic] = &StringTopicData{
-				Current: d.Current,
-			}
+			clone[topic] = &StringTopicData{Current: d.Current}
 		case *BooleanTopicData:
-			clone[topic] = &BooleanTopicData{
-				Current: d.Current,
-			}
+			clone[topic] = &BooleanTopicData{Current: d.Current}
 		}
+	}
+	return clone
+}
+
+// clonePercentiles creates a copy of the percentiles map for safe concurrent access
+func clonePercentiles(percentiles map[PercentileKey]float64) map[PercentileKey]float64 {
+	clone := make(map[PercentileKey]float64, len(percentiles))
+	for k, v := range percentiles {
+		clone[k] = v
 	}
 	return clone
 }
@@ -248,6 +285,8 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 	topicData := make(map[string]any)
 	// Map of topic -> readings (for float topics only, internal to stats worker)
 	topicReadings := make(map[string]Readings)
+	// Percentiles for registered topics
+	percentiles := make(map[PercentileKey]float64)
 
 	// Ready state tracking
 	allTopicsReceived := false
@@ -258,21 +297,13 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 	selfPublishedTimer := time.NewTimer(20 * time.Second)
 	defer selfPublishedTimer.Stop()
 
-	// Debouncing state
-	var lastSendTime time.Time
-	var debounceTimer *time.Timer
-	var debounceTimerC <-chan time.Time
-
 	// Cleanup ticker to remove old readings beyond 15 minutes
 	cleanupTicker := time.NewTicker(30 * time.Second)
 	defer cleanupTicker.Stop()
 
-	// Cleanup debounce timer on exit
-	defer func() {
-		if debounceTimer != nil {
-			debounceTimer.Stop()
-		}
-	}()
+	// Percentile refresh ticker for live updates and downstream broadcast
+	percentileTicker := time.NewTicker(1 * time.Second)
+	defer percentileTicker.Stop()
 
 	for {
 		select {
@@ -304,15 +335,12 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 				// Update current value
 				data.Current = value
 
-				// Add new reading to internal storage
+				// Add new reading to internal storage (percentiles calculated on ticker)
 				reading := Reading{
 					Value:     value,
 					Timestamp: time.Now(),
 				}
 				topicReadings[msg.Topic] = append(topicReadings[msg.Topic], reading)
-
-				// Calculate and store statistics
-				calculateStats(data, topicReadings[msg.Topic])
 			} else {
 				// Check if value is a boolean (case-insensitive "on" or "off")
 				lowerValue := strings.ToLower(msg.Value)
@@ -360,41 +388,6 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 				log.Printf("Stats worker ready: received data for all %d topics\n", len(expectedTopics))
 			}
 
-			// Only send updates if we've received all topics
-			if !allTopicsReceived {
-				continue
-			}
-
-			// Debounce: send immediately if enough time has passed, otherwise schedule
-			timeSinceLastSend := time.Since(lastSendTime)
-			if timeSinceLastSend >= time.Second {
-				// Send immediately
-				select {
-				case outputChan <- DisplayData{TopicData: cloneTopicData(topicData)}:
-					lastSendTime = time.Now()
-				case <-ctx.Done():
-					return
-				}
-			} else if debounceTimer == nil {
-				// Schedule a send for later
-				remainingTime := time.Second - timeSinceLastSend
-				debounceTimer = time.NewTimer(remainingTime)
-				debounceTimerC = debounceTimer.C
-			}
-
-		case <-debounceTimerC:
-			// Timer fired, send the pending update (only if ready)
-			if allTopicsReceived {
-				select {
-				case outputChan <- DisplayData{TopicData: cloneTopicData(topicData)}:
-					lastSendTime = time.Now()
-				case <-ctx.Done():
-					return
-				}
-			}
-			debounceTimer = nil
-			debounceTimerC = nil
-
 		case <-startupCheckTicker.C:
 			log.Printf("Startup check: received %d/%d topics\n", len(topicData), len(expectedTopics))
 
@@ -438,6 +431,26 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 					log.Printf("Initializing missing self-published topic to true: %s\n", topic)
 					topicData[topic] = &BooleanTopicData{Current: true}
 				}
+			}
+
+		case <-percentileTicker.C:
+			// Recalculate percentiles for registered topics (live updates as time passes)
+			if !allTopicsReceived {
+				continue
+			}
+
+			for topic := range requiredPercentiles {
+				calculateRequiredStats(topic, topicReadings[topic], percentiles)
+			}
+
+			// Send updated data (non-blocking to avoid stalling if downstream is slow)
+			select {
+			case outputChan <- DisplayData{
+				TopicData:   cloneTopicData(topicData),
+				Percentiles: clonePercentiles(percentiles),
+			}:
+			default:
+				// Channel full, skip this update
 			}
 
 		case <-cleanupTicker.C:

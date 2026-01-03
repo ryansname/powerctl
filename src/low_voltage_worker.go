@@ -23,7 +23,7 @@ func lowVoltageWorker(
 	for {
 		select {
 		case data := <-dataChan:
-			voltage15MinP1 := data.GetFloat(config.BatteryVoltageTopic).P1._15
+			voltage15MinP1 := data.GetPercentile(config.BatteryVoltageTopic, P1, Window15Min)
 
 			if voltage15MinP1 < config.LowVoltageThreshold && !invertersOff {
 				log.Printf("%s: LOW VOLTAGE (%.2fV < %.2fV) - turning off %d inverters\n",

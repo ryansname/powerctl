@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -22,7 +23,8 @@ type SensorMessage struct {
 
 // DisplayData holds all data needed for display
 type DisplayData struct {
-	TopicData map[string]any
+	TopicData   map[string]any
+	Percentiles map[PercentileKey]float64
 }
 
 // GetFloat extracts FloatTopicData from DisplayData
@@ -32,6 +34,29 @@ func (d *DisplayData) GetFloat(topic string) *FloatTopicData {
 		return td
 	}
 	return &FloatTopicData{}
+}
+
+// GetPercentile returns a percentile value for a topic.
+// Panics if the topic/percentile/window combination is not in requiredPercentiles.
+func (d *DisplayData) GetPercentile(topic string, percentile int, window time.Duration) float64 {
+	key := PercentileKey{topic, percentile, window}
+	if value, exists := d.Percentiles[key]; exists {
+		return value
+	}
+
+	// Slow path: diagnose why it's missing
+	specs, topicExists := requiredPercentiles[topic]
+	if !topicExists {
+		panic(fmt.Sprintf("GetPercentile: topic %q is not in requiredPercentiles registry", topic))
+	}
+
+	for _, spec := range specs {
+		if spec.Percentile == percentile && spec.Window == window {
+			panic(fmt.Sprintf("GetPercentile: P%d with %v window is registered for %q but was not calculated", percentile, window, topic))
+		}
+	}
+
+	panic(fmt.Sprintf("GetPercentile: P%d with %v window is not registered for topic %q (add it to requiredPercentiles)", percentile, window, topic))
 }
 
 // GetString extracts a string value from DisplayData

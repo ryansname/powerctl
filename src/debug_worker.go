@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/chzyer/readline"
 )
@@ -71,31 +72,15 @@ func (w WatchSpec) GetValue(data DisplayData) string {
 	if w.Minutes == 0 && w.Percentile == 0 {
 		value = floatData.Current
 	} else {
-		// Get the appropriate percentile and time window
-		var tw TimeWindows
-		switch w.Percentile {
-		case 1:
-			tw = floatData.P1
-		case 50:
-			tw = floatData.P50
-		case 66:
-			tw = floatData.P66
-		case 99:
-			tw = floatData.P99
-		default:
-			tw = floatData.P50 // Default to median
-		}
-
-		switch w.Minutes {
-		case 1:
-			value = tw._1
-		case 5:
-			value = tw._5
-		case 15:
-			value = tw._15
-		default:
-			value = tw._15 // Default to 15 minutes
-		}
+		// Use GetPercentile with recover to handle unregistered percentiles gracefully
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					value = 0 // Return 0 for unregistered percentiles
+				}
+			}()
+			value = data.GetPercentile(w.Topic, w.Percentile, time.Duration(w.Minutes)*time.Minute)
+		}()
 	}
 
 	return formatDebugValue(value)
