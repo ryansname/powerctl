@@ -160,10 +160,10 @@ The application uses a goroutine-based architecture with message passing via cha
    - **Per-battery Overflow mode** (SOC-based hysteresis, calculated independently per battery):
      - If NOT in Float Charging: returns 0 inverters
      - Uses separate turn-on and turn-off thresholds to prevent oscillation
-     - **Turn OFF thresholds** (when SOC falling): 98.5% → 93.5%, evenly spread
-       - Threshold formula: `98.5 - (i-1) * 5.0/(N-1)` for inverter i of N
-     - **Turn ON thresholds** (when SOC rising): 94.5% → 99.5%, evenly spread
-       - Threshold formula: `94.5 + (i-1) * 5.0/(N-1)` for inverter i of N
+     - **Turn OFF thresholds** (when SOC falling): 98.5% → 95.0%, evenly spread
+       - Threshold formula: `98.5 - (i-1) * 3.5/(N-1)` for inverter i of N
+     - **Turn ON thresholds** (when SOC rising): 95.75% → 99.5%, evenly spread
+       - Threshold formula: `95.75 + (i-1) * 3.75/(N-1)` for inverter i of N
      - Uses current SOC value (already smooth enough)
      - No solar subtraction (batteries are full, dumping excess)
    - **Mode selection** (per-battery first, then global):
@@ -278,7 +278,7 @@ The application uses a goroutine-based architecture with message passing via cha
   - Battery2, Battery3 (BatteryInverterGroup): Inverters per battery with entity IDs and state topics
   - SolarForecastTopic, Solar1PowerTopic, LoadPowerTopic: Input topics for mode/target calculation
   - WattsPerInverter (255W), MaxTransferPower (5000W)
-  - OverflowSOCTurnOffStart/End (98.5%/93.5%), OverflowSOCTurnOnStart/End (94.5%/99.5%)
+  - OverflowSOCTurnOffStart/End (98.5%/95.0%), OverflowSOCTurnOnStart/End (95.75%/99.5%)
 - **InverterEnablerState**: Runtime state with per-battery SOC lockout flags
 
 ### Statistics Algorithm

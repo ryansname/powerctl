@@ -137,8 +137,8 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 		PowerwallLowThreshold:        30.0,
 		OverflowFloatChargeState:     "Float Charging",
 		OverflowSOCTurnOffStart:      98.5,
-		OverflowSOCTurnOffEnd:        93.5,
-		OverflowSOCTurnOnStart:       94.5,
+		OverflowSOCTurnOffEnd:        95.0,
+		OverflowSOCTurnOnStart:       95.75,
 		OverflowSOCTurnOnEnd:         99.5,
 	}
 }

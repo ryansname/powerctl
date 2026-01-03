@@ -57,8 +57,8 @@ type UnifiedInverterConfig struct {
 	// Overflow mode configuration (SOC-based hysteresis)
 	OverflowFloatChargeState string  // "Float Charging"
 	OverflowSOCTurnOffStart  float64 // 98.5% - first inverter turns off when SOC drops below
-	OverflowSOCTurnOffEnd    float64 // 93.5% - last inverter turns off when SOC drops below
-	OverflowSOCTurnOnStart   float64 // 94.5% - first inverter turns on when SOC rises above
+	OverflowSOCTurnOffEnd    float64 // 95.0% - last inverter turns off when SOC drops below
+	OverflowSOCTurnOnStart   float64 // 95.75% - first inverter turns on when SOC rises above
 	OverflowSOCTurnOnEnd     float64 // 99.5% - last inverter turns on when SOC rises above
 }
 
@@ -136,7 +136,7 @@ func checkBatteryOverflow(
 }
 
 // calculateOverflowOffCount returns max inverters allowed based on turn-off thresholds.
-// Thresholds are evenly spread from TurnOffStart (98.5%) to TurnOffEnd (93.5%).
+// Thresholds are evenly spread from TurnOffStart (98.5%) to TurnOffEnd (95.0%).
 func calculateOverflowOffCount(soc float64, maxCount int, config UnifiedInverterConfig) int {
 	if maxCount <= 1 {
 		if soc >= config.OverflowSOCTurnOffStart {
@@ -156,7 +156,7 @@ func calculateOverflowOffCount(soc float64, maxCount int, config UnifiedInverter
 }
 
 // calculateOverflowOnCount returns min inverters required based on turn-on thresholds.
-// Thresholds are evenly spread from TurnOnStart (94.5%) to TurnOnEnd (99.5%).
+// Thresholds are evenly spread from TurnOnStart (95.75%) to TurnOnEnd (99.5%).
 func calculateOverflowOnCount(soc float64, maxCount int, config UnifiedInverterConfig) int {
 	if maxCount <= 1 {
 		if soc >= config.OverflowSOCTurnOnEnd {
