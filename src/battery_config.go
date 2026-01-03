@@ -2,7 +2,6 @@ package main
 
 import (
 	"strings"
-	"time"
 )
 
 // BatteryConfig holds shared configuration for a battery
@@ -120,7 +119,6 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 			Inverters:        inverters,
 			ChargeStateTopic: b.ChargeStateTopic,
 			SOCTopic:         "homeassistant/sensor/" + deviceID + "_state_of_charge/state",
-			VoltageTopic:     b.BatteryVoltageTopic,
 		}
 	}
 
@@ -137,12 +135,11 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 		MaxInverterModeSolarForecast: 4000.0, // Wh (converted from kWh)
 		MaxInverterModeSolarPower:    1000.0,
 		PowerwallLowThreshold:        30.0,
-		CooldownDuration:             1 * time.Minute,
-		OverflowFloatChargeState:         "Float Charging",
-		OverflowStepInterval:             4 * time.Minute,
-		OverflowIncreaseVoltageThreshold: 53.55,
-		OverflowDecreaseVoltageThreshold: 53.3,
-		OverflowFastStartMinVoltage:      53.0,
+		OverflowFloatChargeState:     "Float Charging",
+		OverflowSOCTurnOffStart:      98.5,
+		OverflowSOCTurnOffEnd:        93.5,
+		OverflowSOCTurnOnStart:       94.5,
+		OverflowSOCTurnOnEnd:         99.5,
 	}
 }
 
@@ -158,8 +155,6 @@ func (c UnifiedInverterConfig) Topics() []string {
 		c.Battery3.ChargeStateTopic,
 		c.Battery2.SOCTopic,
 		c.Battery3.SOCTopic,
-		c.Battery2.VoltageTopic,
-		c.Battery3.VoltageTopic,
 	}
 
 	for _, inv := range c.Battery2.Inverters {

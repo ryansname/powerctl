@@ -7,7 +7,6 @@ import (
 	"math"
 	"sort"
 	"strings"
-	"time"
 )
 
 // PowerRequest represents a power request from a rule
@@ -34,7 +33,6 @@ type BatteryInverterGroup struct {
 	Inverters        []InverterInfo
 	ChargeStateTopic string
 	SOCTopic         string
-	VoltageTopic     string // From BatteryConfig.BatteryVoltageTopic
 }
 
 // UnifiedInverterConfig holds configuration for the unified inverter enabler
@@ -55,81 +53,20 @@ type UnifiedInverterConfig struct {
 	MaxInverterModeSolarForecast float64
 	MaxInverterModeSolarPower    float64
 	PowerwallLowThreshold        float64
-	CooldownDuration             time.Duration
 
-	// Overflow mode configuration
-	OverflowFloatChargeState         string        // "Float Charging"
-	OverflowStepInterval             time.Duration // 4 min - time between count changes
-	OverflowIncreaseVoltageThreshold float64       // 53.55V - voltage 5min P1 must exceed to increase
-	OverflowDecreaseVoltageThreshold float64       // 53.3V - voltage 1min P50 must drop below to decrease
-	OverflowFastStartMinVoltage      float64       // 53.0V - voltage must exceed for fast-start
-}
-
-// OverflowState tracks per-battery overflow inverter count with step-based changes
-type OverflowState struct {
-	CurrentCount   int
-	LastChangeTime time.Time
-}
-
-// Step adjusts count by ±1 based on voltage conditions, rate-limited to one change per interval.
-// Step up: Float Charging AND voltage 5min P1 > increaseThreshold
-// Step down: voltage 1min P50 < decreaseThreshold
-func (s *OverflowState) Step(
-	isFloatCharging bool,
-	voltage5MinP1 float64,
-	voltage1MinP50 float64,
-	increaseThreshold float64,
-	decreaseThreshold float64,
-	maxCount int,
-	stepInterval time.Duration,
-) int {
-	if time.Since(s.LastChangeTime) < stepInterval {
-		return s.CurrentCount
-	}
-
-	if isFloatCharging && voltage5MinP1 > increaseThreshold && s.CurrentCount < maxCount {
-		s.CurrentCount++
-		s.LastChangeTime = time.Now()
-	} else if voltage1MinP50 < decreaseThreshold && s.CurrentCount > 0 {
-		s.CurrentCount--
-		s.LastChangeTime = time.Now()
-	}
-
-	return s.CurrentCount
-}
-
-// InitFromDisplayData initializes overflow state from current inverter states.
-// Only triggers on first Float Charging evaluation with voltage > minVoltage (fast-start).
-func (s *OverflowState) InitFromDisplayData(
-	data DisplayData,
-	battery BatteryInverterGroup,
-	isFloatCharging bool,
-	currentVoltage float64,
-	minVoltage float64,
-) {
-	if !s.LastChangeTime.IsZero() || !isFloatCharging || currentVoltage < minVoltage {
-		return
-	}
-	count := 0
-	for _, inv := range battery.Inverters {
-		if data.GetBoolean(inv.StateTopic) {
-			count++
-		}
-	}
-	s.CurrentCount = count
-	s.LastChangeTime = time.Now()
+	// Overflow mode configuration (SOC-based hysteresis)
+	OverflowFloatChargeState string  // "Float Charging"
+	OverflowSOCTurnOffStart  float64 // 98.5% - first inverter turns off when SOC drops below
+	OverflowSOCTurnOffEnd    float64 // 93.5% - last inverter turns off when SOC drops below
+	OverflowSOCTurnOnStart   float64 // 94.5% - first inverter turns on when SOC rises above
+	OverflowSOCTurnOnEnd     float64 // 99.5% - last inverter turns on when SOC rises above
 }
 
 // InverterEnablerState holds runtime state for the unified inverter enabler
 type InverterEnablerState struct {
-	// Last modification time for cooldown
-	lastModificationTime time.Time
 	// Per-battery lockout state for hysteresis (set when SOC < 12.5%, cleared when > 15%)
 	battery2LockedOut bool
 	battery3LockedOut bool
-	// Per-battery overflow state for rate limiting
-	battery2Overflow OverflowState
-	battery3Overflow OverflowState
 	// Last published debug output for change detection
 	lastDebugOutput string
 }
@@ -156,39 +93,86 @@ type DebugModeInfo struct {
 	Winner        string
 }
 
-// checkBatteryOverflow returns inverter count for overflow mode using step-based control.
-// Step up (+1): Float Charging AND voltage 5min P1 > OverflowIncreaseVoltageThreshold
-// Step down (-1): voltage 1min P50 < OverflowDecreaseVoltageThreshold
-// Changes are rate-limited to one step per OverflowStepInterval.
+// checkBatteryOverflow returns inverter count for overflow mode using SOC-based hysteresis.
+// If not Float Charging, returns 0.
+// Otherwise, uses separate turn-on and turn-off thresholds to prevent oscillation.
 func checkBatteryOverflow(
 	data DisplayData,
 	battery BatteryInverterGroup,
 	config UnifiedInverterConfig,
-	overflow *OverflowState,
 ) int {
 	chargeState := data.GetString(battery.ChargeStateTopic)
 	isFloatCharging := strings.Contains(chargeState, config.OverflowFloatChargeState)
 
-	voltageData := data.GetFloat(battery.VoltageTopic)
-	voltage5MinP1 := voltageData.P1._5
-	voltage1MinP50 := voltageData.P50._1
+	if !isFloatCharging {
+		return 0
+	}
 
-	overflow.InitFromDisplayData(
-		data,
-		battery,
-		isFloatCharging,
-		voltageData.Current,
-		config.OverflowFastStartMinVoltage,
-	)
-	return overflow.Step(
-		isFloatCharging,
-		voltage5MinP1,
-		voltage1MinP50,
-		config.OverflowIncreaseVoltageThreshold,
-		config.OverflowDecreaseVoltageThreshold,
-		len(battery.Inverters),
-		config.OverflowStepInterval,
-	)
+	soc := data.GetFloat(battery.SOCTopic).Current
+	maxCount := len(battery.Inverters)
+
+	// Count currently enabled inverters
+	currentCount := 0
+	for _, inv := range battery.Inverters {
+		if data.GetBoolean(inv.StateTopic) {
+			currentCount++
+		}
+	}
+
+	// Calculate OFF count (max allowed based on falling thresholds)
+	offCount := calculateOverflowOffCount(soc, maxCount, config)
+
+	// Calculate ON count (min required based on rising thresholds)
+	onCount := calculateOverflowOnCount(soc, maxCount, config)
+
+	// Apply hysteresis
+	if currentCount > offCount {
+		return offCount // SOC dropped, reduce
+	}
+	if currentCount < onCount {
+		return onCount // SOC rose, increase
+	}
+	return currentCount // Stay in hysteresis zone
+}
+
+// calculateOverflowOffCount returns max inverters allowed based on turn-off thresholds.
+// Thresholds are evenly spread from TurnOffStart (98.5%) to TurnOffEnd (93.5%).
+func calculateOverflowOffCount(soc float64, maxCount int, config UnifiedInverterConfig) int {
+	if maxCount <= 1 {
+		if soc >= config.OverflowSOCTurnOffStart {
+			return maxCount
+		}
+		return 0
+	}
+
+	step := (config.OverflowSOCTurnOffStart - config.OverflowSOCTurnOffEnd) / float64(maxCount-1)
+	for i := 1; i <= maxCount; i++ {
+		threshold := config.OverflowSOCTurnOffStart - float64(i-1)*step
+		if soc >= threshold {
+			return maxCount - i + 1
+		}
+	}
+	return 0
+}
+
+// calculateOverflowOnCount returns min inverters required based on turn-on thresholds.
+// Thresholds are evenly spread from TurnOnStart (94.5%) to TurnOnEnd (99.5%).
+func calculateOverflowOnCount(soc float64, maxCount int, config UnifiedInverterConfig) int {
+	if maxCount <= 1 {
+		if soc >= config.OverflowSOCTurnOnEnd {
+			return maxCount
+		}
+		return 0
+	}
+
+	step := (config.OverflowSOCTurnOnEnd - config.OverflowSOCTurnOnStart) / float64(maxCount-1)
+	for i := maxCount; i >= 1; i-- {
+		threshold := config.OverflowSOCTurnOnStart + float64(i-1)*step
+		if soc >= threshold {
+			return i
+		}
+	}
+	return 0
 }
 
 // applyLimitToPerBattery applies a global limit to per-battery counts.
@@ -255,9 +239,9 @@ func selectMode(
 	config UnifiedInverterConfig,
 	state *InverterEnablerState,
 ) (ModeResult, DebugModeInfo) {
-	// 1. Calculate per-battery overflow counts (step-based)
-	overflow2 := checkBatteryOverflow(data, config.Battery2, config, &state.battery2Overflow)
-	overflow3 := checkBatteryOverflow(data, config.Battery3, config, &state.battery3Overflow)
+	// 1. Calculate per-battery overflow counts (SOC-based hysteresis)
+	overflow2 := checkBatteryOverflow(data, config.Battery2, config)
+	overflow3 := checkBatteryOverflow(data, config.Battery3, config)
 
 	// 2. Apply global limit to overflow (PowerhouseTransfer limit)
 	limit := powerhouseTransferLimit(data, config)
@@ -365,7 +349,6 @@ func unifiedInverterEnabler(
 	for {
 		select {
 		case data := <-dataChan:
-			// Calculate mode (even during cooldown for debug output)
 			modeResult, debugInfo := selectMode(data, config, state)
 
 			// Publish debug output only when it changes
@@ -375,16 +358,10 @@ func unifiedInverterEnabler(
 				state.lastDebugOutput = debugOutput
 			}
 
-			// Check cooldown for inverter changes
-			if time.Since(state.lastModificationTime) < config.CooldownDuration {
-				continue
-			}
-
 			// Apply changes
 			changed := applyInverterChanges(data, config, sender, modeResult.Battery2Count, modeResult.Battery3Count)
 
 			if changed {
-				state.lastModificationTime = time.Now()
 				totalWatts := float64(modeResult.TotalCount()) * config.WattsPerInverter
 				log.Printf("Unified inverter enabler: rule=%s, watts=%.0fW, B2=%d, B3=%d\n",
 					modeResult.RuleName, totalWatts, modeResult.Battery2Count, modeResult.Battery3Count)

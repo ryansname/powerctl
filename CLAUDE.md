@@ -157,15 +157,17 @@ The application uses a goroutine-based architecture with message passing via cha
      - Max Inverter Mode: If solar forecast > 3kWh AND solar_1_power 5min P50 > 1kW → 100kW (no solar subtraction)
      - Powerwall Last Mode: Otherwise → (2/3 × load_power 15min P66 - current solar)
    - **Current solar generation**: solar_1 + solar_2 (5min P66), computed once and passed to modes that need it
-   - **Per-battery Overflow mode** (step-based, calculated independently per battery):
-     - No target calculation; count changes by ±1 based on voltage conditions
-     - **Fast start**: If Float Charging AND voltage > 53V on first evaluation, start at current enabled count
-     - **Step up (+1)**: Float Charging AND voltage 5min P1 > 53.55V
-     - **Step down (-1)**: voltage 1min P50 < 53.3V
-     - Rate-limited to one change per 4 minutes
+   - **Per-battery Overflow mode** (SOC-based hysteresis, calculated independently per battery):
+     - If NOT in Float Charging: returns 0 inverters
+     - Uses separate turn-on and turn-off thresholds to prevent oscillation
+     - **Turn OFF thresholds** (when SOC falling): 98.5% → 93.5%, evenly spread
+       - Threshold formula: `98.5 - (i-1) * 5.0/(N-1)` for inverter i of N
+     - **Turn ON thresholds** (when SOC rising): 94.5% → 99.5%, evenly spread
+       - Threshold formula: `94.5 + (i-1) * 5.0/(N-1)` for inverter i of N
+     - Uses current SOC value (already smooth enough)
      - No solar subtraction (batteries are full, dumping excess)
    - **Mode selection** (per-battery first, then global):
-     1. Calculate per-battery overflow counts (step-based, independent per battery)
+     1. Calculate per-battery overflow counts (SOC-based hysteresis, independent per battery)
      2. Apply global limit (5000W - solar_1_power 15min P99) to per-battery counts
         - When reducing, reduce from higher count first (B3 wins ties)
      3. Calculate global mode targets with limits (max of all requests, capped by limit)
@@ -183,8 +185,7 @@ The application uses a goroutine-based architecture with message passing via cha
      - SOC < 17.5%: max 1 inverter
      - SOC < 25%: max 2 inverters
      - SOC >= 25%: all inverters allowed
-   - **Hysteresis**: Once a battery enters lockout (0 inverters), it remains locked until SOC > 15%
-   - **Cooldown**: 1 minute after any modification
+   - **Low SOC Lockout Hysteresis**: Once a battery enters lockout (0 inverters due to SOC < 12.5%), it remains locked until SOC > 15%
    - Each inverter: 255W (9 inverters = 2,295W max)
    - **Debug output**: Publishes all mode values to `input_text.powerhouse_control_debug`
      - GFM table showing Max Inverter, Powerwall Last, Powerwall Low, Overflow (B2), Overflow (B3)
@@ -276,8 +277,9 @@ The application uses a goroutine-based architecture with message passing via cha
 - **UnifiedInverterConfig** (src/unified_inverter_enabler.go): Configuration for unified inverter management
   - Battery2, Battery3 (BatteryInverterGroup): Inverters per battery with entity IDs and state topics
   - SolarForecastTopic, Solar1PowerTopic, LoadPowerTopic: Input topics for mode/target calculation
-  - WattsPerInverter (255W), MaxTransferPower (5000W), CooldownDuration (5 min)
-- **InverterEnablerState**: Runtime state with cooldown tracking and per-battery SOC lockout flags
+  - WattsPerInverter (255W), MaxTransferPower (5000W)
+  - OverflowSOCTurnOffStart/End (98.5%/93.5%), OverflowSOCTurnOnStart/End (94.5%/99.5%)
+- **InverterEnablerState**: Runtime state with per-battery SOC lockout flags
 
 ### Statistics Algorithm
 
