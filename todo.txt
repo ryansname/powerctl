@@ -3,3 +3,6 @@
   - Avoids repeating calculations in multiple downstream workers
   - Needs mechanism to define derived value configs (source topics, aggregation method, percentile/window)
   - Derived data should be added dynamically by files that need it, enabling locality and debugging without decoupling definition from usage
+  - Requires: "plugin"-ish system for workers to register their own topics
+
+- Use the proposed derived sensor system to implement the median calculations
