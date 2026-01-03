@@ -9,8 +9,10 @@ type BatteryConfig struct {
 	Name                 string
 	CapacityKWh          float64
 	Manufacturer         string
-	InflowTopics         []string
-	OutflowTopics        []string
+	InflowEnergyTopics   []string // Cumulative energy (kWh)
+	OutflowEnergyTopics  []string // Cumulative energy (kWh)
+	InflowPowerTopics    []string // Instantaneous power (W)
+	OutflowPowerTopics   []string // Instantaneous power (W)
 	ChargeStateTopic     string
 	BatteryVoltageTopic  string
 	CalibrationTopics    CalibrationTopics
@@ -31,8 +33,10 @@ type BatteryCalibConfig struct {
 	Name                 string
 	ChargeStateTopic     string
 	BatteryVoltageTopic  string
-	InflowTopics         []string
-	OutflowTopics        []string
+	InflowEnergyTopics   []string // Cumulative energy (kWh)
+	OutflowEnergyTopics  []string // Cumulative energy (kWh)
+	InflowPowerTopics    []string // Instantaneous power (W)
+	OutflowPowerTopics   []string // Instantaneous power (W)
 	HighVoltageThreshold float64
 	FloatChargeState     string
 	CalibrationTopics    CalibrationTopics // To read/write calibration values
@@ -43,8 +47,8 @@ type BatteryCalibConfig struct {
 type BatterySOCConfig struct {
 	Name               string
 	CapacityKWh        float64
-	InflowTopics       []string
-	OutflowTopics      []string
+	InflowEnergyTopics []string
+	OutflowEnergyTopics []string
 	CalibrationTopics  CalibrationTopics
 	ConversionLossRate float64
 }
@@ -64,8 +68,10 @@ func (c *BatteryConfig) CalibConfig() BatteryCalibConfig {
 		Name:                 c.Name,
 		ChargeStateTopic:     c.ChargeStateTopic,
 		BatteryVoltageTopic:  c.BatteryVoltageTopic,
-		InflowTopics:         c.InflowTopics,
-		OutflowTopics:        c.OutflowTopics,
+		InflowEnergyTopics:   c.InflowEnergyTopics,
+		OutflowEnergyTopics:  c.OutflowEnergyTopics,
+		InflowPowerTopics:    c.InflowPowerTopics,
+		OutflowPowerTopics:   c.OutflowPowerTopics,
 		HighVoltageThreshold: c.HighVoltageThreshold,
 		FloatChargeState:     c.FloatChargeState,
 		CalibrationTopics:    c.CalibrationTopics,
@@ -76,12 +82,12 @@ func (c *BatteryConfig) CalibConfig() BatteryCalibConfig {
 // SOCConfig creates a BatterySOCConfig from the shared BatteryConfig
 func (c *BatteryConfig) SOCConfig() BatterySOCConfig {
 	return BatterySOCConfig{
-		Name:               c.Name,
-		CapacityKWh:        c.CapacityKWh,
-		InflowTopics:       c.InflowTopics,
-		OutflowTopics:      c.OutflowTopics,
-		CalibrationTopics:  c.CalibrationTopics,
-		ConversionLossRate: c.ConversionLossRate,
+		Name:                c.Name,
+		CapacityKWh:         c.CapacityKWh,
+		InflowEnergyTopics:  c.InflowEnergyTopics,
+		OutflowEnergyTopics: c.OutflowEnergyTopics,
+		CalibrationTopics:   c.CalibrationTopics,
+		ConversionLossRate:  c.ConversionLossRate,
 	}
 }
 

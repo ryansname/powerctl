@@ -27,11 +27,20 @@ func batteryCalibWorker(
 			isFloatCharging := strings.Contains(chargeState, config.FloatChargeState)
 
 			if isFloatCharging {
-				// In Float Charging mode - only do 100% calibration if voltage is high enough
+				// In Float Charging mode - only do 100% calibration if:
+				// 1. Voltage is high enough
+				// 2. Power flow is balanced (within 50W) - prevents false triggers during solar spikes
 				if voltage >= config.HighVoltageThreshold {
-					inflows := data.SumTopics(config.InflowTopics)
-					outflows := data.SumTopics(config.OutflowTopics)
-					publishCalibration(sender, config.Name, inflows, outflows)
+					inflowPower := data.SumTopics(config.InflowPowerTopics)
+					outflowPower := data.SumTopics(config.OutflowPowerTopics)
+					netPower := inflowPower - outflowPower
+
+					const powerBalanceThreshold = 50.0
+					if netPower >= -powerBalanceThreshold && netPower <= powerBalanceThreshold {
+						inflows := data.SumTopics(config.InflowEnergyTopics)
+						outflows := data.SumTopics(config.OutflowEnergyTopics)
+						publishCalibration(sender, config.Name, inflows, outflows)
+					}
 				}
 				// Otherwise do nothing - don't soft cap during Float Charging
 			} else {

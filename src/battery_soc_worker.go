@@ -46,8 +46,8 @@ func batterySOCWorker(
 			calibOutflows := data.GetFloat(config.CalibrationTopics.Outflows).Current
 
 			// Calculate current inflow and outflow totals
-			inflowTotal := data.SumTopics(config.InflowTopics)
-			outflowTotal := data.SumTopics(config.OutflowTopics)
+			inflowTotal := data.SumTopics(config.InflowEnergyTopics)
+			outflowTotal := data.SumTopics(config.OutflowEnergyTopics)
 
 			// Calculate available energy from calibration point
 			availableWh := calculateAvailableWh(

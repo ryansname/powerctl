@@ -64,8 +64,10 @@ func (d *DisplayData) SumTopics(topics []string) float64 {
 func buildTopicsList(batteries []BatteryConfig) []string {
 	var topics []string //nolint:prealloc // small slice, not worth preallocating
 	for _, b := range batteries {
-		topics = append(topics, b.InflowTopics...)
-		topics = append(topics, b.OutflowTopics...)
+		topics = append(topics, b.InflowEnergyTopics...)
+		topics = append(topics, b.OutflowEnergyTopics...)
+		topics = append(topics, b.InflowPowerTopics...)
+		topics = append(topics, b.OutflowPowerTopics...)
 		topics = append(topics, b.ChargeStateTopic)
 		topics = append(topics, b.BatteryVoltageTopic)
 		topics = append(topics, b.CalibrationTopics.Inflows, b.CalibrationTopics.Outflows)
@@ -177,14 +179,23 @@ func main() {
 		Name:         "Battery 2",
 		CapacityKWh:  10.0,
 		Manufacturer: "SunnyTech Solar",
-		InflowTopics: []string{
+		InflowEnergyTopics: []string{
 			"homeassistant/sensor/solar_5_total_energy/state",
 		},
-		OutflowTopics: []string{
+		OutflowEnergyTopics: []string{
 			"homeassistant/sensor/powerhouse_inverter_1_switch_0_energy/state",
 			"homeassistant/sensor/powerhouse_inverter_2_switch_0_energy/state",
 			"homeassistant/sensor/powerhouse_inverter_3_switch_0_energy/state",
 			"homeassistant/sensor/powerhouse_inverter_4_switch_0_energy/state",
+		},
+		InflowPowerTopics: []string{
+			"homeassistant/sensor/solar_5_solar_power/state",
+		},
+		OutflowPowerTopics: []string{
+			"homeassistant/sensor/powerhouse_inverter_1_switch_0_power/state",
+			"homeassistant/sensor/powerhouse_inverter_2_switch_0_power/state",
+			"homeassistant/sensor/powerhouse_inverter_3_switch_0_power/state",
+			"homeassistant/sensor/powerhouse_inverter_4_switch_0_power/state",
 		},
 		ChargeStateTopic:    "homeassistant/sensor/solar_5_charge_state/state",
 		BatteryVoltageTopic: "homeassistant/sensor/solar_5_battery_voltage/state",
@@ -207,16 +218,27 @@ func main() {
 		Name:         "Battery 3",
 		CapacityKWh:  15.0,
 		Manufacturer: "Micromall",
-		InflowTopics: []string{
+		InflowEnergyTopics: []string{
 			"homeassistant/sensor/solar_3_total_energy/state",
 			"homeassistant/sensor/solar_4_total_energy/state",
 		},
-		OutflowTopics: []string{
+		OutflowEnergyTopics: []string{
 			"homeassistant/sensor/powerhouse_inverter_5_switch_0_energy/state",
 			"homeassistant/sensor/powerhouse_inverter_6_switch_0_energy/state",
 			"homeassistant/sensor/powerhouse_inverter_7_switch_0_energy/state",
 			"homeassistant/sensor/powerhouse_inverter_8_switch_0_energy/state",
 			"homeassistant/sensor/powerhouse_inverter_9_switch_0_energy/state",
+		},
+		InflowPowerTopics: []string{
+			"homeassistant/sensor/solar_3_solar_power/state",
+			"homeassistant/sensor/solar_4_solar_power/state",
+		},
+		OutflowPowerTopics: []string{
+			"homeassistant/sensor/powerhouse_inverter_5_switch_0_power/state",
+			"homeassistant/sensor/powerhouse_inverter_6_switch_0_power/state",
+			"homeassistant/sensor/powerhouse_inverter_7_switch_0_power/state",
+			"homeassistant/sensor/powerhouse_inverter_8_switch_0_power/state",
+			"homeassistant/sensor/powerhouse_inverter_9_switch_0_power/state",
 		},
 		ChargeStateTopic:    "homeassistant/sensor/solar_3_charge_state/state",
 		BatteryVoltageTopic: "homeassistant/sensor/solar_3_battery_voltage/state",

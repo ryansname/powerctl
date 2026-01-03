@@ -99,7 +99,8 @@ The application uses a goroutine-based architecture with message passing via cha
 
 4. **batteryCalibWorker** (src/battery_calib_worker.go)
    - Monitors voltage and charge state to detect calibration events
-   - **100% calibration**: When in Float Charging AND voltage ≥ 53.6V, publishes current inflows/outflows as 100% reference
+   - **100% calibration**: When in Float Charging AND voltage ≥ 53.6V AND |inflow_power - outflow_power| ≤ 50W, publishes current inflows/outflows as 100% reference
+     - Power balance check prevents false calibration during solar spikes when battery is partially discharged
    - **99.5% soft cap**: When NOT in Float Charging AND SOC ≥ 99.5%, fudges calibration to cap SOC at 99.5%
      - Prevents calculated SOC from exceeding 99.5% before battery actually reaches Float Charging
      - Reduces calibration outflows by 0.005 kWh to bring SOC back down
@@ -263,7 +264,9 @@ The application uses a goroutine-based architecture with message passing via cha
 
 **Battery Monitoring:**
 - **BatteryConfig** (src/battery_config.go): Shared configuration for each battery
-  - Name, capacity, manufacturer, inflow/outflow topics
+  - Name, capacity, manufacturer
+  - `InflowEnergyTopics`, `OutflowEnergyTopics`: Cumulative energy topics (kWh) for SOC calculation
+  - `InflowPowerTopics`, `OutflowPowerTopics`: Instantaneous power topics (W) for calibration power balance check
   - Charge state topic, voltage topic, calibration thresholds
   - Inverter switch entity IDs for protection control
   - Helper methods: `CalibConfig()`, `SOCConfig()`, `LowVoltageProtectionConfig(threshold)`
@@ -480,7 +483,7 @@ Battery 3 (15 kWh) outflows:
 - `homeassistant/sensor/powerhouse_inverter_8_switch_0_energy/state`
 - `homeassistant/sensor/powerhouse_inverter_9_switch_0_energy/state`
 
-Battery monitoring:
+Battery monitoring (energy):
 - `homeassistant/sensor/solar_5_total_energy/state` (Battery 2 inflow)
 - `homeassistant/sensor/solar_5_charge_state/state`
 - `homeassistant/sensor/solar_5_battery_voltage/state`
@@ -488,6 +491,13 @@ Battery monitoring:
 - `homeassistant/sensor/solar_4_total_energy/state` (Battery 3 inflow)
 - `homeassistant/sensor/solar_3_charge_state/state`
 - `homeassistant/sensor/solar_3_battery_voltage/state`
+
+Battery monitoring (power - for calibration balance check):
+- `homeassistant/sensor/solar_5_solar_power/state` (Battery 2 inflow power)
+- `homeassistant/sensor/solar_3_solar_power/state` (Battery 3 inflow power)
+- `homeassistant/sensor/solar_4_solar_power/state` (Battery 3 inflow power)
+- `homeassistant/sensor/powerhouse_inverter_[1-4]_switch_0_power/state` (Battery 2 outflow power)
+- `homeassistant/sensor/powerhouse_inverter_[5-9]_switch_0_power/state` (Battery 3 outflow power)
 
 Battery calibration (statestream topics from Home Assistant):
 - `homeassistant/sensor/battery_2_state_of_charge/calibration_inflows`
