@@ -98,10 +98,13 @@ The application uses a goroutine-based architecture with message passing via cha
 
 4. **batteryCalibWorker** (src/battery_calib_worker.go)
    - Monitors voltage and charge state to detect calibration events
-   - **100% calibration**: When in Float Charging AND voltage ≥ 53.6V AND |inflow_power - outflow_power| ≤ 50W, publishes current inflows/outflows as 100% reference
+   - **100% calibration**: When in Float Charging AND voltage ≥ 53.6V AND |inflow_power + outflow_power| ≤ 250W, publishes current inflows/outflows as 100% reference
+     - Outflow power is negative (power leaving battery), so we add to get net power
      - Power balance check prevents false calibration during solar spikes when battery is partially discharged
-   - **99.5% soft cap**: When NOT in Float Charging AND SOC ≥ 99.5%, fudges calibration to cap SOC at 99.5%
-     - Prevents calculated SOC from exceeding 99.5% before battery actually reaches Float Charging
+   - **Soft cap**: When NOT in Float Charging, caps SOC based on charge state:
+     - Bulk Charging: caps at 99.7% (default)
+     - Absorption Charging: caps at 99.8%
+     - Prevents calculated SOC from exceeding cap before battery actually reaches Float Charging
      - Reduces calibration outflows by 0.005 kWh to bring SOC back down
      - 2-second cooldown between adjustments to prevent rapid-fire recalibration
    - Publishes calibration reference points (inflow/outflow totals) to MQTT attributes topic

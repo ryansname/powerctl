@@ -29,13 +29,14 @@ func batteryCalibWorker(
 			if isFloatCharging {
 				// In Float Charging mode - only do 100% calibration if:
 				// 1. Voltage is high enough
-				// 2. Power flow is balanced (within 50W) - prevents false triggers during solar spikes
+				// 2. Power flow is balanced (within 250W) - prevents false triggers during solar spikes
 				if voltage >= config.HighVoltageThreshold {
 					inflowPower := data.SumTopics(config.InflowPowerTopics)
 					outflowPower := data.SumTopics(config.OutflowPowerTopics)
-					netPower := inflowPower - outflowPower
+					// Outflow is negative (power leaving battery), so add to get net
+					netPower := inflowPower + outflowPower
 
-					const powerBalanceThreshold = 50.0
+					const powerBalanceThreshold = 250.0
 					if netPower >= -powerBalanceThreshold && netPower <= powerBalanceThreshold {
 						inflows := data.SumTopics(config.InflowEnergyTopics)
 						outflows := data.SumTopics(config.OutflowEnergyTopics)
@@ -44,20 +45,26 @@ func batteryCalibWorker(
 				}
 				// Otherwise do nothing - don't soft cap during Float Charging
 			} else {
-				// NOT in Float Charging - check for 99.5% soft cap (with cooldown)
+				// NOT in Float Charging - apply soft cap based on charge state
 				currentSOC := data.GetFloat(config.SOCTopic).Current
 				calibInflows := data.GetFloat(config.CalibrationTopics.Inflows).Current
 				calibOutflows := data.GetFloat(config.CalibrationTopics.Outflows).Current
 
-				if time.Since(lastSoftCapTime) >= softCapCooldown && currentSOC >= 99.5 {
+				// Determine soft cap threshold based on charge state
+				softCapThreshold := 99.7 // Bulk Charging (default)
+				if strings.Contains(chargeState, "Absorption Charging") {
+					softCapThreshold = 99.8
+				}
+
+				if time.Since(lastSoftCapTime) >= softCapCooldown && currentSOC >= softCapThreshold {
 					// Fudge: reduce calibOutflows slightly to bring SOC down
 					// Preserve original calibInflows, only adjust outflows
 					fudgedOutflows := calibOutflows - 0.005 // subtract 0.005 kWh
 
 					publishCalibration(sender, config.Name, calibInflows, fudgedOutflows)
 					lastSoftCapTime = time.Now()
-					log.Printf("%s: Adjusting calibration to reduce displayed SOC (%.1f%% -> 99.5%%)",
-						config.Name, currentSOC)
+					log.Printf("%s: Adjusting calibration to reduce displayed SOC (%.1f%% -> %.1f%%)",
+						config.Name, currentSOC, softCapThreshold)
 				}
 			}
 
