@@ -13,9 +13,9 @@ func DefaultConfig() Config {
 			{Name: "powerhouse_inverter_7_switch_0_power_inverted", Type: TemplateFormula, Formula: "states('sensor.powerhouse_inverter_7_switch_0_power') | multiply(-1)"},
 			{Name: "powerhouse_inverter_8_switch_0_power_inverted", Type: TemplateFormula, Formula: "states('sensor.powerhouse_inverter_8_switch_0_power') | multiply(-1)"},
 			{Name: "powerhouse_inverter_9_switch_0_power_inverted", Type: TemplateFormula, Formula: "states('sensor.powerhouse_inverter_9_switch_0_power') | multiply(-1)"},
-			{Name: "powerwall_site_now_inverted", Type: TemplateFormula, Formula: "states('sensor.powerwall_site_now') | multiply(-1000)"},
-			{Name: "powerwall_battery_now_inverted", Type: TemplateFormula, Formula: "states('sensor.powerwall_battery_now') | multiply(-1000)"},
-			{Name: "solar_2_power", Type: TemplateFormula, Formula: "states('sensor.powerwall_solar_now') | multiply(1000) - states('sensor.powerhouse_net_power') | float"},
+			{Name: "home_sweet_home_site_power_inverted", Type: TemplateFormula, Formula: "states('sensor.home_sweet_home_site_power') | multiply(-1000)"},
+			{Name: "home_sweet_home_battery_power_2_inverted", Type: TemplateFormula, Formula: "states('sensor.home_sweet_home_battery_power_2') | multiply(-1000)"},
+			{Name: "solar_2_power", Type: TemplateFormula, Formula: "states('sensor.home_sweet_home_solar_power_2') | multiply(1000) - states('sensor.powerhouse_net_power') | float"},
 			{Name: "all_lights", Type: TemplateSum, Entities: []string{"sensor.dining_room_power", "sensor.downlight_power", "sensor.outside_power", "sensor.triple_power"}},
 		},
 		Groups: []Group{
@@ -96,7 +96,7 @@ func DefaultConfig() Config {
 			{
 				Name:     "powerwall_discharge",
 				Section:  SectionHouseMainsIn,
-				Sensors:  []Sensor{{Name: "sensor.powerwall_battery_now", Label: "Powerwall"}},
+				Sensors:  []Sensor{{Name: "sensor.home_sweet_home_battery_power_2", Label: "Powerwall"}},
 				Children: []string{"house_mains"},
 			},
 			{
@@ -108,18 +108,18 @@ func DefaultConfig() Config {
 			{
 				Name:     "grid_import",
 				Section:  SectionHouseMainsIn,
-				Sensors:  []Sensor{{Name: "sensor.powerwall_site_now", Label: "Buying In"}},
+				Sensors:  []Sensor{{Name: "sensor.home_sweet_home_site_power", Label: "Buying In"}},
 				Children: []string{"house_mains", "grid_export"},
 			},
 			{
 				Name:    "grid_export",
 				Section: SectionHouseMains,
-				Sensors: []Sensor{{Name: "sensor.powerwall_site_now_inverted", Label: "Selling Back"}},
+				Sensors: []Sensor{{Name: "sensor.home_sweet_home_site_power_inverted", Label: "Selling Back"}},
 			},
 			{
 				Name:    "powerwall_charge",
 				Section: SectionHouseMains,
-				Sensors: []Sensor{{Name: "sensor.powerwall_battery_now_inverted", Label: "Powerwall"}},
+				Sensors: []Sensor{{Name: "sensor.home_sweet_home_battery_power_2_inverted", Label: "Powerwall"}},
 			},
 			{
 				Name:     "house_mains",
