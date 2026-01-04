@@ -36,9 +36,11 @@ func (s *MQTTSender) Send(msg MQTTMessage) {
 // CallService sends a Home Assistant service call via the Node-RED proxy
 func (s *MQTTSender) CallService(domain, service, entityID string, data map[string]string) {
 	payload := map[string]any{
-		"domain":    domain,
-		"service":   service,
-		"entity_id": entityID,
+		"domain":  domain,
+		"service": service,
+	}
+	if entityID != "" {
+		payload["entity_id"] = entityID
 	}
 	if data != nil {
 		payload["data"] = data
