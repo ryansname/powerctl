@@ -13,6 +13,8 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/joho/godotenv"
+
+	"github.com/ryansname/powerctl/src/sankey"
 )
 
 // SensorMessage represents an MQTT message with topic and value
@@ -350,6 +352,20 @@ func main() {
 	}
 
 	log.Println("Home Assistant entities created")
+
+	// Launch sankey config worker (generates and publishes sankey configurations)
+	SafeGo(ctx, cancel, "sankey-worker", func(ctx context.Context) {
+		log.Println("Generating sankey configurations...")
+		configs := sankey.Generate()
+		mqttSender.CallService("notify", "send_message", "notify.sankey_config", map[string]string{
+			"message": configs.SankeyConfig,
+		})
+		mqttSender.CallService("notify", "send_message", "notify.sankey_templates", map[string]string{
+			"message": configs.Templates,
+		})
+		mqttSender.CallService("homeassistant", "reload_all", "", nil)
+		log.Println("Sankey configurations published")
+	})
 
 	// Launch stats worker (produces statistics)
 	SafeGo(ctx, cancel, "stats-worker", func(ctx context.Context) {

@@ -236,6 +236,15 @@ The application uses a goroutine-based architecture with message passing via cha
    - **Change highlighting**: Changed values shown in yellow
    - Reprints header when watches are added/removed
 
+13. **sankeyWorker** (src/main.go, inline)
+    - Generates and publishes Sankey chart configurations at startup
+    - Uses `src/sankey` package for YAML generation
+    - **Two outputs** (published via `MQTTSender.CallService`):
+      - `notify.sankey_config`: Lovelace sankey chart card configuration
+      - `notify.sankey_templates`: Home Assistant template sensor definitions
+    - Runs once at startup in its own goroutine (non-blocking)
+    - Uses `notify.send_message` service to write file contents
+
 ### Data Structures
 
 **MQTT Communication:**
@@ -284,6 +293,19 @@ The application uses a goroutine-based architecture with message passing via cha
   - WattsPerInverter (255W), MaxTransferPower (5000W)
   - OverflowSOCTurnOffStart/End (98.5%/95.0%), OverflowSOCTurnOnStart/End (95.75%/99.5%)
 - **InverterEnablerState**: Runtime state with per-battery SOC lockout flags
+
+**Sankey Package** (src/sankey/):
+- **Config** (config.go): Complete sankey configuration with Sensors and Groups
+- **SensorTemplate**: Template sensor definition with Name, Type (Formula/Sum), and template expression
+- **Group**: Group of sensors in a section with Name, Section, Sensors, Children, and optional RemainderStrategy
+- **Sensor**: Sensor entity with Name and optional Label
+- **Section**: Enum for 6 sankey sections (PowerhouseIn, Powerhouse, PowerhouseOut, HouseMainsIn, HouseMains, HouseMainsOut)
+- **RemainderStrategy**: Calculated remainder entity with Key, Label, Type, and optional Reconcile rules
+- **Reconcile**: Validation rules with ShouldBe and ReconcileTo enums
+- **GeneratedConfigs**: Container for both output YAML strings (SankeyConfig, Templates)
+- `Generate()`: Main function that produces GeneratedConfigs from DefaultConfig()
+- `GenerateSankeyYAML(cfg)`: Generates Lovelace sankey chart card YAML
+- `GenerateTemplatesYAML(cfg)`: Generates Home Assistant template sensor definitions
 
 ### Statistics Algorithm
 
