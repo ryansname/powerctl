@@ -196,12 +196,11 @@ The application uses a goroutine-based architecture with message passing via cha
      - Start from limited per-battery counts
      - Add inverters in strict alternation: B3 first, then B2, then B3...
      - SOC limits still apply (via maxInvertersForSOC)
-   - **SOC-based limits** (applied to all modes, per-battery):
-     - SOC < 12.5%: 0 inverters (lockout triggered)
-     - SOC < 17.5%: max 1 inverter
-     - SOC < 25%: max 2 inverters
+   - **SOC-based limits** (applied to all modes, per-battery, with 2.5% hysteresis):
+     - 0 inverters: enters at 12.5%, exits at 15%
+     - max 1 inverter: enters at 17.5%, exits at 20%
+     - max 2 inverters: enters at 22.5%, exits at 25%
      - SOC >= 25%: all inverters allowed
-   - **Low SOC Lockout Hysteresis**: Once a battery enters lockout (0 inverters due to SOC < 12.5%), it remains locked until SOC > 15%
    - Each inverter: 255W (9 inverters = 2,295W max)
    - **Debug output**: Publishes all mode values to `input_text.powerhouse_control_debug`
      - GFM table showing Forecast Excess (B2), Forecast Excess (B3), Powerwall Last, Powerwall Low, Overflow (B2), Overflow (B3)

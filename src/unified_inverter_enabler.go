@@ -110,9 +110,10 @@ type ForecastExcessState struct {
 
 // InverterEnablerState holds runtime state for the unified inverter enabler
 type InverterEnablerState struct {
-	// Per-battery lockout state for hysteresis (set when SOC < 12.5%, cleared when > 15%)
-	battery2LockedOut bool
-	battery3LockedOut bool
+	// Per-battery SOC limit with 2.5% hysteresis at each level
+	// Stores current max inverters allowed (0, 1, 2, or hardwareMax for unlimited)
+	battery2SOCLimit int
+	battery3SOCLimit int
 	// Last published debug output for change detection
 	lastDebugOutput string
 	// Per-battery forecast excess state
@@ -300,8 +301,8 @@ func selectMode(
 	// 3.5. Apply SOC-based limits to per-battery counts
 	soc2 := data.GetFloat(config.Battery2.SOCTopic).Current
 	soc3 := data.GetFloat(config.Battery3.SOCTopic).Current
-	maxB2 := maxInvertersForSOC(soc2, len(config.Battery2.Inverters), &state.battery2LockedOut)
-	maxB3 := maxInvertersForSOC(soc3, len(config.Battery3.Inverters), &state.battery3LockedOut)
+	maxB2 := maxInvertersForSOC(soc2, len(config.Battery2.Inverters), &state.battery2SOCLimit)
+	maxB3 := maxInvertersForSOC(soc3, len(config.Battery3.Inverters), &state.battery3SOCLimit)
 	perBattery2Count = min(perBattery2Count, maxB2)
 	perBattery3Count = min(perBattery3Count, maxB3)
 
@@ -407,7 +408,10 @@ func unifiedInverterEnabler(
 ) {
 	log.Println("Unified inverter enabler started")
 
-	state := &InverterEnablerState{}
+	state := &InverterEnablerState{
+		battery2SOCLimit: len(config.Battery2.Inverters), // Start unlimited
+		battery3SOCLimit: len(config.Battery3.Inverters), // Start unlimited
+	}
 
 	for {
 		select {
@@ -595,30 +599,51 @@ func calculateInverterCount(targetWatts, wattsPerInverter float64) int {
 	return min(count, 9)
 }
 
-// maxInvertersForSOC returns the max inverters allowed based on SOC percentage
-// Uses hysteresis: once SOC drops below 12.5% (lockout), no inverters until SOC > 15%
-func maxInvertersForSOC(socPercent float64, hardwareMax int, lockedOut *bool) int {
-	// Check for unlock condition first
-	if *lockedOut && socPercent > 15.0 {
-		*lockedOut = false
-	}
-
-	// If locked out, no inverters allowed
-	if *lockedOut {
-		return 0
-	}
-
+// maxInvertersForSOC returns the max inverters allowed based on SOC percentage.
+// Uses 2.5% hysteresis at each threshold level:
+//   - 0 inverters: enters at 12.5%, exits at 15%
+//   - max 1 inverter: enters at 17.5%, exits at 20%
+//   - max 2 inverters: enters at 22.5%, exits at 25%
+//
+// currentLimit should be initialized to hardwareMax (unlimited) on startup.
+func maxInvertersForSOC(socPercent float64, hardwareMax int, currentLimit *int) int {
+	// Determine the limit based on "enter" thresholds (SOC falling)
+	var enterLimit int
 	switch {
 	case socPercent < 12.5:
-		*lockedOut = true
-		return 0
+		enterLimit = 0
 	case socPercent < 17.5:
-		return min(1, hardwareMax)
-	case socPercent < 25:
-		return min(2, hardwareMax)
+		enterLimit = 1
+	case socPercent < 22.5:
+		enterLimit = 2
 	default:
-		return hardwareMax
+		enterLimit = hardwareMax
 	}
+
+	// Determine the limit based on "exit" thresholds (SOC rising)
+	var exitLimit int
+	switch {
+	case socPercent >= 25:
+		exitLimit = hardwareMax
+	case socPercent >= 20:
+		exitLimit = 2
+	case socPercent >= 15:
+		exitLimit = 1
+	default:
+		exitLimit = 0
+	}
+
+	// Apply hysteresis: only change if we cross the appropriate threshold
+	if *currentLimit > enterLimit {
+		// SOC dropped below an enter threshold, reduce limit
+		*currentLimit = enterLimit
+	} else if *currentLimit < exitLimit {
+		// SOC rose above an exit threshold, increase limit
+		*currentLimit = exitLimit
+	}
+	// Otherwise, stay at current limit (in hysteresis band)
+
+	return min(*currentLimit, hardwareMax)
 }
 
 // applyInverterChanges enables/disables inverters to match desired counts
