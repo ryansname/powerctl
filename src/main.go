@@ -215,7 +215,7 @@ func main() {
 	// Define battery configurations
 	battery2 := BatteryConfig{
 		Name:         "Battery 2",
-		CapacityKWh:  10.0,
+		CapacityKWh:  9.5,
 		Manufacturer: "SunnyTech Solar",
 		InflowEnergyTopics: []string{
 			"homeassistant/sensor/solar_5_total_energy/state",

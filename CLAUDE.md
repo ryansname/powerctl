@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Battery voltages for calibration
 
 **Battery Monitoring:**
-- Battery 2: 10 kWh (SunnyTech Solar) - Solar 5 inflow, Inverters 1-4 outflow
+- Battery 2: 9.5 kWh (SunnyTech Solar) - Solar 5 inflow, Inverters 1-4 outflow
 - Battery 3: 15 kWh (Micromall) - Solar 3 & 4 inflow, Inverters 5-9 outflow
 
 ## Development Environment
@@ -196,7 +196,7 @@ The application uses a goroutine-based architecture with message passing via cha
      - Start from limited per-battery counts
      - Add inverters in strict alternation: B3 first, then B2, then B3...
      - SOC limits still apply (via maxInvertersForSOC)
-   - **SOC-based limits** (per-battery, for overall mode):
+   - **SOC-based limits** (applied to all modes, per-battery):
      - SOC < 12.5%: 0 inverters (lockout triggered)
      - SOC < 17.5%: max 1 inverter
      - SOC < 25%: max 2 inverters
@@ -539,7 +539,7 @@ MQTT connection settings in main():
 
 **Topics monitored** (defined in src/main.go):
 
-Battery 2 (10 kWh) outflows:
+Battery 2 (9.5 kWh) outflows:
 - `homeassistant/sensor/powerhouse_inverter_1_switch_0_energy/state`
 - `homeassistant/sensor/powerhouse_inverter_2_switch_0_energy/state`
 - `homeassistant/sensor/powerhouse_inverter_3_switch_0_energy/state`

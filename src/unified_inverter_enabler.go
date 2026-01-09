@@ -297,6 +297,14 @@ func selectMode(
 	perBattery2Count := calculateInverterCount(perBattery2.Watts, config.WattsPerInverter)
 	perBattery3Count := calculateInverterCount(perBattery3.Watts, config.WattsPerInverter)
 
+	// 3.5. Apply SOC-based limits to per-battery counts
+	soc2 := data.GetFloat(config.Battery2.SOCTopic).Current
+	soc3 := data.GetFloat(config.Battery3.SOCTopic).Current
+	maxB2 := maxInvertersForSOC(soc2, len(config.Battery2.Inverters), &state.battery2LockedOut)
+	maxB3 := maxInvertersForSOC(soc3, len(config.Battery3.Inverters), &state.battery3LockedOut)
+	perBattery2Count = min(perBattery2Count, maxB2)
+	perBattery3Count = min(perBattery3Count, maxB3)
+
 	// 4. Apply global limit to per-battery counts (PowerhouseTransfer limit)
 	limit := powerhouseTransferLimit(data, config)
 	limitedB2, limitedB3 := applyLimitToPerBattery(perBattery2Count, perBattery3Count, limit.Watts, config.WattsPerInverter)
@@ -327,10 +335,6 @@ func selectMode(
 	// 6. Compare and select
 	if globalCount > limitedPerBatteryTotal {
 		// Global target is higher: round-robin from limited per-battery base
-		soc2 := data.GetFloat(config.Battery2.SOCTopic).Current
-		soc3 := data.GetFloat(config.Battery3.SOCTopic).Current
-		maxB2 := maxInvertersForSOC(soc2, len(config.Battery2.Inverters), &state.battery2LockedOut)
-		maxB3 := maxInvertersForSOC(soc3, len(config.Battery3.Inverters), &state.battery3LockedOut)
 		b2, b3 := roundRobinFromBase(limitedB2, limitedB3, globalCount, maxB2, maxB3)
 
 		// Winner is the global rule (only if non-zero)
