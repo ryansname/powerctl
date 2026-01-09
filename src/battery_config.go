@@ -103,7 +103,7 @@ func (c *BatteryConfig) LowVoltageProtectionConfig(threshold float64) LowVoltage
 
 // BuildUnifiedInverterConfig creates configuration for the unified inverter enabler
 func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverterConfig {
-	buildInverterGroup := func(b BatteryConfig) BatteryInverterGroup {
+	buildInverterGroup := func(b BatteryConfig, availableEnergyTopic string) BatteryInverterGroup {
 		inverters := make([]InverterInfo, len(b.InverterSwitchIDs))
 		for i, entityID := range b.InverterSwitchIDs {
 			// Convert entity ID to state topic
@@ -120,27 +120,32 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 		}
 
 		deviceID := strings.ReplaceAll(strings.ToLower(b.Name), " ", "_")
+		shortName := strings.ReplaceAll(b.Name, "Battery ", "B")
 		return BatteryInverterGroup{
-			Name:             b.Name,
-			Inverters:        inverters,
-			ChargeStateTopic: b.ChargeStateTopic,
-			SOCTopic:         "homeassistant/sensor/" + deviceID + "_state_of_charge/state",
+			Name:                 b.Name,
+			ShortName:            shortName,
+			Inverters:            inverters,
+			ChargeStateTopic:     b.ChargeStateTopic,
+			SOCTopic:             "homeassistant/sensor/" + deviceID + "_state_of_charge/state",
+			CapacityWh:           b.CapacityKWh * 1000,
+			SolarMultiplier:      4.5, // Solar array size relative to Solcast 1kW reference
+			AvailableEnergyTopic: availableEnergyTopic,
 		}
 	}
 
 	return UnifiedInverterConfig{
-		Battery2:                     buildInverterGroup(battery2),
-		Battery3:                     buildInverterGroup(battery3),
+		Battery2:                     buildInverterGroup(battery2, TopicBattery2Energy),
+		Battery3:                     buildInverterGroup(battery3, TopicBattery3Energy),
 		SolarForecastTopic:           "homeassistant/sensor/solcast_pv_forecast_forecast_today/state",
+		SolarForecastRemainingTopic:  "homeassistant/sensor/solcast_pv_forecast_forecast_remaining_today/state",
+		DetailedForecastTopic:        "homeassistant/sensor/solcast_pv_forecast_forecast_today/detailedForecast",
 		Solar1PowerTopic:             TopicSolar1Power,
 		Solar2PowerTopic:             "homeassistant/sensor/primo_5_0_ac_power/state",
 		LoadPowerTopic:               "homeassistant/sensor/home_sweet_home_load_power_2/state",
 		PowerwallSOCTopic:            "homeassistant/sensor/home_sweet_home_charge/state",
-		WattsPerInverter:             255.0,
-		MaxTransferPower:             5000.0,
-		MaxInverterModeSolarForecast: 4000.0, // Wh (converted from kWh)
-		MaxInverterModeSolarPower:    1000.0,
-		PowerwallLowThreshold:        30.0,
+		WattsPerInverter:      255.0,
+		MaxTransferPower:      5000.0,
+		PowerwallLowThreshold: 30.0,
 		OverflowFloatChargeState:     "Float Charging",
 		OverflowSOCTurnOffStart:      98.5,
 		OverflowSOCTurnOffEnd:        95.0,
@@ -153,6 +158,8 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 func (c UnifiedInverterConfig) Topics() []string {
 	topics := []string{
 		c.SolarForecastTopic,
+		c.SolarForecastRemainingTopic,
+		c.DetailedForecastTopic,
 		c.Solar1PowerTopic,
 		c.Solar2PowerTopic,
 		c.LoadPowerTopic,
@@ -161,6 +168,8 @@ func (c UnifiedInverterConfig) Topics() []string {
 		c.Battery3.ChargeStateTopic,
 		c.Battery2.SOCTopic,
 		c.Battery3.SOCTopic,
+		c.Battery2.AvailableEnergyTopic,
+		c.Battery3.AvailableEnergyTopic,
 	}
 
 	for _, inv := range c.Battery2.Inverters {

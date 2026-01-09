@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -85,6 +86,16 @@ func (d *DisplayData) SumTopics(topics []string) float64 {
 		total += d.GetFloat(topic).Current
 	}
 	return total
+}
+
+// GetJSON parses a JSON string topic into the provided pointer.
+// Go doesn't support generic methods, so caller passes pointer to result.
+// Panics if JSON unmarshaling fails.
+func (d *DisplayData) GetJSON(topic string, result any) {
+	jsonStr := d.GetString(topic)
+	if err := json.Unmarshal([]byte(jsonStr), result); err != nil {
+		panic(fmt.Sprintf("GetJSON: failed to unmarshal topic %q: %v", topic, err))
+	}
 }
 
 // buildTopicsList creates the MQTT subscription list from battery configs

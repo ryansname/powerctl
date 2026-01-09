@@ -39,6 +39,8 @@ make check  # Run golangci-lint, tests, and verify vendorHash
 make clean  # Remove built binary
 ```
 
+**Always run `make check` to verify changes before committing.** This runs the linter, tests, and verifies the Nix vendorHash.
+
 ### Direct Go Commands
 ```bash
 go build -o powerctl ./src  # Build the binary
@@ -155,9 +157,18 @@ The application uses a goroutine-based architecture with message passing via cha
 
 9. **unifiedInverterEnabler** (src/unified_inverter_enabler.go)
    - Single worker managing all 9 inverters across both batteries
-   - **Overall modes** (each mode handles its own solar subtraction if needed):
+   - **Per-battery Forecast Excess mode** (replaces Max Inverter mode):
+     - Targets 100% battery by solar end time by gradually using excess energy
+     - **Formula**: `target_watts = excess_wh / hours_until_solar_end`
+       - `excess_wh = (available_wh + expected_solar_wh) - battery_capacity_wh`
+       - `expected_solar_wh = solar_multiplier × solcast_forecast_remaining_today_wh`
+       - Solar multiplier: 4.5 (relative to Solcast 1kW reference)
+     - **Solar end time**: Parsed from detailed forecast JSON, last period with pv_estimate > 0
+     - **Ratchet-down**: Target can only decrease during the day (never increase mid-day)
+     - **Daily reset**: Resets when date changes (fresh start each morning)
+     - **Night cycle disable**: Returns 0 when current forecast generation is 0
+   - **Global modes** (each mode handles its own solar subtraction if needed):
      - Powerwall Low Mode: If Powerwall SOC 15min P1 < 30% → (load_power 15min P99 - current solar)
-     - Max Inverter Mode: If solar forecast > 3kWh AND solar_1_power 5min P50 > 1kW → 100kW (no solar subtraction)
      - Powerwall Last Mode: Otherwise → (2/3 × load_power 15min P66 - current solar)
    - **Current solar generation**: solar_1 + solar_2 (5min P66), computed once and passed to modes that need it
    - **Per-battery Overflow mode** (SOC-based hysteresis, calculated independently per battery):
@@ -171,16 +182,18 @@ The application uses a goroutine-based architecture with message passing via cha
      - No solar subtraction (batteries are full, dumping excess)
    - **Mode selection** (per-battery first, then global):
      1. Calculate per-battery overflow counts (SOC-based hysteresis, independent per battery)
-     2. Apply global limit (5000W - solar_1_power 15min P99) to per-battery counts
+     2. Calculate per-battery forecast excess counts (excess energy / hours until solar end)
+     3. For each battery, take max(overflow, forecast_excess) inverter count
+     4. Apply global limit (5000W - solar_1_power 15min P99) to per-battery counts
         - When reducing, reduce from higher count first (B3 wins ties)
-     3. Calculate global mode targets with limits (max of all requests, capped by limit)
-     4. Compare global inverter count vs limited overflow total:
-        - If global > overflow: start from limited overflow counts, round-robin additional inverters (B3→B2→B3→B2...)
-        - Otherwise: use limited overflow counts
-     5. Zero targets are not considered "selected" (no winner marked)
+     5. Calculate global mode targets with limits (max of all requests, capped by limit)
+     6. Compare global inverter count vs limited per-battery total:
+        - If global > per-battery: start from limited per-battery counts, round-robin additional inverters (B3→B2→B3→B2...)
+        - Otherwise: use limited per-battery counts
+     7. Zero targets are not considered "selected" (no winner marked)
    - **Limit**: 5000W - solar_1_power 15min P99 (accounts for solar already flowing)
-   - **Round-robin allocation** (when global target exceeds overflow):
-     - Start from limited per-battery overflow counts
+   - **Round-robin allocation** (when global target exceeds per-battery):
+     - Start from limited per-battery counts
      - Add inverters in strict alternation: B3 first, then B2, then B3...
      - SOC limits still apply (via maxInvertersForSOC)
    - **SOC-based limits** (per-battery, for overall mode):
@@ -191,7 +204,7 @@ The application uses a goroutine-based architecture with message passing via cha
    - **Low SOC Lockout Hysteresis**: Once a battery enters lockout (0 inverters due to SOC < 12.5%), it remains locked until SOC > 15%
    - Each inverter: 255W (9 inverters = 2,295W max)
    - **Debug output**: Publishes all mode values to `input_text.powerhouse_control_debug`
-     - GFM table showing Max Inverter, Powerwall Last, Powerwall Low, Overflow (B2), Overflow (B3)
+     - GFM table showing Forecast Excess (B2), Forecast Excess (B3), Powerwall Last, Powerwall Low, Overflow (B2), Overflow (B3)
      - Sorted by watts descending, winning mode marked with ✓
      - Only publishes when values change via `MQTTSender.CallService()`
 
@@ -270,7 +283,9 @@ The application uses a goroutine-based architecture with message passing via cha
     - `GetPercentile(topic string, percentile int, window time.Duration) float64` - Returns registered percentile value (panics if not registered). Use constants: `P1`, `P50`, `P66`, `P99` for percentiles; `Window5Min`, `Window15Min` for windows.
     - `GetString(topic string) string` - Extracts string value with type safety
     - `GetBoolean(topic string) bool` - Extracts boolean value from BooleanTopicData (for switch states)
+    - `GetJSON(topic string, result any)` - Parses JSON string topic into provided pointer. Panics if unmarshaling fails.
     - `SumTopics(topics []string) float64` - Sums multiple float topics (uses `.Current` values)
+  - **Topic guarantee**: statsWorker waits for all expected topics before broadcasting any DisplayData. Helper methods that panic on missing/invalid topics (GetPercentile, GetJSON) are safe because topics are guaranteed to be populated.
 
 **Battery Monitoring:**
 - **BatteryConfig** (src/battery_config.go): Shared configuration for each battery
