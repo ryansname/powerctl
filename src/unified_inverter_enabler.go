@@ -21,15 +21,16 @@ type ForecastPeriod struct {
 // ForecastPeriods is a slice of ForecastPeriod with helper methods
 type ForecastPeriods []ForecastPeriod
 
-// FindSolarEndTime returns the end of the last period with non-zero generation
-func (periods ForecastPeriods) FindSolarEndTime() time.Time {
-	var lastNonZero time.Time
+// FindSolarEndTime returns the end of the last period with generation exceeding the threshold.
+// If no periods exceed the threshold, returns zero time.
+func (periods ForecastPeriods) FindSolarEndTime(minPvEstimateKw float64) time.Time {
+	var lastExceeding time.Time
 	for _, period := range periods {
-		if period.PvEstimate > 0 {
-			lastNonZero = period.PeriodStart.Add(30 * time.Minute)
+		if period.PvEstimate > minPvEstimateKw {
+			lastExceeding = period.PeriodStart.Add(30 * time.Minute)
 		}
 	}
-	return lastNonZero
+	return lastExceeding
 }
 
 // GetCurrentGeneration returns pv_estimate for the current 30-min period
@@ -478,8 +479,10 @@ func forecastExcessRequest(
 		return result
 	}
 
-	// Find solar end time from forecast
-	solarEndTime := forecast.FindSolarEndTime()
+	// Find solar end time: last period where expected generation exceeds inverter capacity
+	maxInverterWatts := float64(len(battery.Inverters)) * config.WattsPerInverter
+	minForecastKw := maxInverterWatts / (battery.SolarMultiplier * 1000)
+	solarEndTime := forecast.FindSolarEndTime(minForecastKw)
 
 	// Calculate hours remaining until solar end
 	hoursRemaining := solarEndTime.Sub(now).Hours()

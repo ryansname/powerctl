@@ -162,8 +162,8 @@ The application uses a goroutine-based architecture with message passing via cha
      - **Formula**: `target_watts = excess_wh / hours_until_solar_end`
        - `excess_wh = (available_wh + expected_solar_wh) - battery_capacity_wh`
        - `expected_solar_wh = solar_multiplier × solcast_forecast_remaining_today_wh`
-       - Solar multiplier: 4.5 (relative to Solcast 1kW reference)
-     - **Solar end time**: Parsed from detailed forecast JSON, last period with pv_estimate > 0
+       - Solar multiplier: 4.0 (relative to Solcast 1kW reference)
+     - **Solar end time**: Last period where expected generation exceeds battery's inverting capacity (e.g., B2 with 4×255W=1020W needs forecast > 0.255 kW)
      - **Ratchet-down**: Target can only decrease during the day (never increase mid-day)
      - **Daily reset**: Resets when date changes (fresh start each morning)
      - **Night cycle disable**: Returns 0 when current forecast generation is 0

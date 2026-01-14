@@ -128,7 +128,7 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 			ChargeStateTopic:     b.ChargeStateTopic,
 			SOCTopic:             "homeassistant/sensor/" + deviceID + "_state_of_charge/state",
 			CapacityWh:           b.CapacityKWh * 1000,
-			SolarMultiplier:      4.5, // Solar array size relative to Solcast 1kW reference
+			SolarMultiplier:      4.0, // Solar array size relative to Solcast 1kW reference
 			AvailableEnergyTopic: availableEnergyTopic,
 		}
 	}
