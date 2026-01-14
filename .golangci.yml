@@ -5,7 +5,6 @@ linters:
     - errorlint
     - gocritic
     - gosec
-    - prealloc
     - unconvert
     - goconst
     - bodyclose

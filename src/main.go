@@ -100,7 +100,7 @@ func (d *DisplayData) GetJSON(topic string, result any) {
 
 // buildTopicsList creates the MQTT subscription list from battery configs
 func buildTopicsList(batteries []BatteryConfig) []string {
-	var topics []string //nolint:prealloc // small slice, not worth preallocating
+	var topics []string
 	for _, b := range batteries {
 		topics = append(topics, b.InflowEnergyTopics...)
 		topics = append(topics, b.OutflowEnergyTopics...)
@@ -388,7 +388,7 @@ func main() {
 	lowVoltageThreshold := 50.75
 
 	// Launch battery workers and collect downstream channels
-	var downstreamChans []chan<- DisplayData //nolint:prealloc // small slice
+	var downstreamChans []chan<- DisplayData
 	for _, b := range batteries {
 		calibChan := make(chan DisplayData, 10)
 		socChan := make(chan DisplayData, 10)
