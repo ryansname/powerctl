@@ -124,7 +124,6 @@ type InverterEnablerState struct {
 
 // ModeResult represents the outcome of mode selection (in inverter counts)
 type ModeResult struct {
-	RuleName      string
 	Battery2Count int
 	Battery3Count int
 }
@@ -134,17 +133,16 @@ func (m ModeResult) TotalCount() int {
 	return m.Battery2Count + m.Battery3Count
 }
 
-// DebugModeInfo contains all individual mode values for debug output
+// ModeState represents a mode's value and whether it's contributing to the final inverter count
+type ModeState struct {
+	Name         string
+	Watts        float64
+	Contributing bool
+}
+
+// DebugModeInfo contains all mode states for debug output
 type DebugModeInfo struct {
-	ForecastExcess2 float64
-	ForecastExcess3 float64
-	PowerwallLast   float64
-	PowerwallLow    float64
-	Overflow2       float64
-	Overflow3       float64
-	Winner          string
-	SelectedB2      string // Name of winning mode for B2 (matches PowerRequest.Name)
-	SelectedB3      string // Name of winning mode for B3 (matches PowerRequest.Name)
+	Modes []ModeState
 }
 
 // checkBatteryOverflow returns inverter count for overflow mode using SOC-based hysteresis.
@@ -319,82 +317,58 @@ func selectMode(
 		powerwallLowRequest(data, config, currentSolar),
 	}
 	limits := []PowerLimit{limit}
-	targetWatts, winningRule := calculateTargetPower(requests, limits)
+	targetWatts, globalModes := calculateTargetPower(requests, limits)
 	globalCount := calculateInverterCount(targetWatts, config.WattsPerInverter)
 
-	// Build debug info (before limiting for display)
-	debug := DebugModeInfo{
-		ForecastExcess2: forecastExcess2.Watts,
-		ForecastExcess3: forecastExcess3.Watts,
-		PowerwallLast:   requests[0].Watts,
-		PowerwallLow:    requests[1].Watts,
-		Overflow2:       overflow2.Watts,
-		Overflow3:       overflow3.Watts,
-		SelectedB2:      perBattery2.Name,
-		SelectedB3:      perBattery3.Name,
+	// 6. Compare and select
+	globalWins := globalCount > limitedPerBatteryTotal && targetWatts > 0
+
+	// Clear global mode contributions if global doesn't win
+	if !globalWins {
+		for i := range globalModes {
+			globalModes[i].Contributing = false
+		}
 	}
 
-	// 6. Compare and select
-	if globalCount > limitedPerBatteryTotal {
+	// Build debug info with contributing flags
+	debug := DebugModeInfo{
+		Modes: []ModeState{
+			{Name: "Forecast Excess (B2)", Watts: forecastExcess2.Watts, Contributing: limitedB2 > 0 && perBattery2.Name == forecastExcess2.Name},
+			{Name: "Forecast Excess (B3)", Watts: forecastExcess3.Watts, Contributing: limitedB3 > 0 && perBattery3.Name == forecastExcess3.Name},
+			globalModes[0],
+			globalModes[1],
+			{Name: "Overflow (B2)", Watts: overflow2.Watts, Contributing: limitedB2 > 0 && perBattery2.Name == overflow2.Name},
+			{Name: "Overflow (B3)", Watts: overflow3.Watts, Contributing: limitedB3 > 0 && perBattery3.Name == overflow3.Name},
+		},
+	}
+
+	if globalWins {
 		// Global target is higher: round-robin from limited per-battery base
 		b2, b3 := roundRobinFromBase(limitedB2, limitedB3, globalCount, maxB2, maxB3)
-
-		// Winner is the global rule (only if non-zero)
-		if targetWatts > 0 {
-			debug.Winner = winningRule
-		}
-		return ModeResult{RuleName: winningRule, Battery2Count: b2, Battery3Count: b3}, debug
+		return ModeResult{Battery2Count: b2, Battery3Count: b3}, debug
 	}
 
-	// Per-battery mode wins (overflow or forecast excess)
-	if limitedPerBatteryTotal > 0 {
-		switch {
-		case limitedB2 > 0 && limitedB3 > 0:
-			debug.Winner = "Per-Battery (B2+B3)"
-		case limitedB2 > 0:
-			debug.Winner = "Per-Battery (B2)"
-		case limitedB3 > 0:
-			debug.Winner = "Per-Battery (B3)"
-		}
-	}
-	return ModeResult{
-		RuleName:      debug.Winner,
-		Battery2Count: limitedB2,
-		Battery3Count: limitedB3,
-	}, debug
+	return ModeResult{Battery2Count: limitedB2, Battery3Count: limitedB3}, debug
 }
 
 // formatDebugOutput formats debug mode values as a GFM table for Home Assistant
 func formatDebugOutput(debug DebugModeInfo) string {
-	type modeValue struct {
-		name  string
-		watts float64
-	}
-
-	values := []modeValue{
-		{"Forecast Excess (B2)", debug.ForecastExcess2},
-		{"Forecast Excess (B3)", debug.ForecastExcess3},
-		{"Powerwall Last", debug.PowerwallLast},
-		{"Powerwall Low", debug.PowerwallLow},
-		{"Overflow (B2)", debug.Overflow2},
-		{"Overflow (B3)", debug.Overflow3},
-	}
-
 	// Sort by watts descending
-	sort.Slice(values, func(i, j int) bool {
-		return values[i].watts > values[j].watts
+	modes := make([]ModeState, len(debug.Modes))
+	copy(modes, debug.Modes)
+	sort.Slice(modes, func(i, j int) bool {
+		return modes[i].Watts > modes[j].Watts
 	})
 
 	var sb strings.Builder
 	sb.WriteString("| Mode | Watts |  |\n")
 	sb.WriteString("|------|------:|--|\n")
-	for _, v := range values {
+	for _, m := range modes {
 		marker := ""
-		isSelected := v.name == debug.Winner || v.name == debug.SelectedB2 || v.name == debug.SelectedB3
-		if isSelected && v.watts > 0 {
+		if m.Contributing && m.Watts > 0 {
 			marker = "✓"
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %.0f | %s |\n", v.name, v.watts, marker))
+		fmt.Fprintf(&sb, "| %s | %.0f | %s |\n", m.Name, m.Watts, marker)
 	}
 
 	return sb.String()
@@ -431,8 +405,8 @@ func unifiedInverterEnabler(
 
 			if changed {
 				totalWatts := float64(modeResult.TotalCount()) * config.WattsPerInverter
-				log.Printf("Unified inverter enabler: rule=%s, watts=%.0fW, B2=%d, B3=%d\n",
-					modeResult.RuleName, totalWatts, modeResult.Battery2Count, modeResult.Battery3Count)
+				log.Printf("Unified inverter enabler: watts=%.0fW, B2=%d, B3=%d\n",
+					totalWatts, modeResult.Battery2Count, modeResult.Battery3Count)
 			}
 
 		case <-ctx.Done():
@@ -568,21 +542,29 @@ func maxPowerRequest(a, b PowerRequest) PowerRequest {
 	return b
 }
 
-func calculateTargetPower(requests []PowerRequest, limits []PowerLimit) (float64, string) {
+func calculateTargetPower(requests []PowerRequest, limits []PowerLimit) (float64, []ModeState) {
+	modes := make([]ModeState, len(requests))
 	target := 0.0
-	winningRule := ""
-	for _, r := range requests {
+	winningIdx := -1
+
+	for i, r := range requests {
+		modes[i] = ModeState{Name: r.Name, Watts: r.Watts}
 		if r.Watts > target {
 			target = r.Watts
-			winningRule = r.Name
+			winningIdx = i
 		}
+	}
+
+	// Mark the winner as contributing
+	if winningIdx >= 0 {
+		modes[winningIdx].Contributing = true
 	}
 
 	for _, l := range limits {
 		target = min(target, l.Watts)
 	}
 
-	return max(target, 0), winningRule
+	return max(target, 0), modes
 }
 
 // currentSolarGeneration returns the current solar generation (5min P66) from solar 1 and 2
