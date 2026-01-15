@@ -44,6 +44,19 @@ func (periods ForecastPeriods) GetCurrentGeneration(now time.Time) float64 {
 	return 0
 }
 
+// SumGenerationAfter returns total expected kWh from the cutoff time until end of forecast.
+// Each period contributes (pv_estimate * 0.5) kWh since periods are 30 minutes.
+func (periods ForecastPeriods) SumGenerationAfter(cutoff time.Time) float64 {
+	var totalKwh float64
+	for _, period := range periods {
+		// Only count periods that start at or after cutoff
+		if !period.PeriodStart.Before(cutoff) {
+			totalKwh += period.PvEstimate * 0.5
+		}
+	}
+	return totalKwh
+}
+
 // PowerRequest represents a power request from a rule
 type PowerRequest struct {
 	Name  string
@@ -473,8 +486,11 @@ func forecastExcessRequest(
 	}
 
 	// Calculate excess energy
+	// Exclude solar after cutoff - it can be fully inverted without using the battery
 	availableWh := data.GetFloat(battery.AvailableEnergyTopic).Current
-	expectedSolarWh := battery.SolarMultiplier * forecastRemainingWh
+	forecastAfterCutoffKwh := forecast.SumGenerationAfter(solarEndTime)
+	solarBeforeCutoffWh := forecastRemainingWh - (forecastAfterCutoffKwh * 1000)
+	expectedSolarWh := battery.SolarMultiplier * solarBeforeCutoffWh
 	excessWh := (availableWh + expectedSolarWh) - battery.CapacityWh
 
 	if excessWh <= 0 {

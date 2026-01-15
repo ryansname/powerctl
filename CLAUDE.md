@@ -161,8 +161,9 @@ The application uses a goroutine-based architecture with message passing via cha
      - Targets 100% battery by solar end time by gradually using excess energy
      - **Formula**: `target_watts = excess_wh / hours_until_solar_end`
        - `excess_wh = (available_wh + expected_solar_wh) - battery_capacity_wh`
-       - `expected_solar_wh = solar_multiplier × solcast_forecast_remaining_today_wh`
+       - `expected_solar_wh = solar_multiplier × (forecast_remaining_wh - forecast_after_cutoff_wh)`
        - Solar multiplier: 4.0 (relative to Solcast 1kW reference)
+     - **Solar forecast cutoff**: Subtracts solar generation after solar end time from remaining forecast (solar after cutoff can be fully inverted without using the battery)
      - **Solar end time**: Last period where expected generation exceeds battery's inverting capacity (e.g., B2 with 4×255W=1020W needs forecast > 0.255 kW)
      - **Ratchet-down**: Target can only decrease during the day (never increase mid-day)
      - **Daily reset**: Resets when date changes (fresh start each morning)
