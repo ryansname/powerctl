@@ -122,6 +122,19 @@ type ForecastExcessState struct {
 	cachedResult          PowerRequest
 }
 
+// ForecastExcessInput holds typed input data for forecastExcessRequestCore
+type ForecastExcessInput struct {
+	Now                 time.Time
+	ForecastRemainingWh float64
+	Forecast            ForecastPeriods
+	AvailableWh         float64
+	InverterCount       int
+	WattsPerInverter    float64
+	SolarMultiplier     float64
+	CapacityWh          float64
+	ShortName           string
+}
+
 // InverterEnablerState holds runtime state for the unified inverter enabler
 type InverterEnablerState struct {
 	// Per-battery SOC limit with 2.5% hysteresis at each level
@@ -430,56 +443,66 @@ func unifiedInverterEnabler(
 }
 
 // forecastExcessRequest calculates forecast excess inverter power for a single battery.
-// Returns target watts based on excess energy divided by hours until solar ends.
-// Target can only decrease during the day unless a daily reset occurs.
+// This is a wrapper that extracts data from DisplayData and calls forecastExcessRequestCore.
 func forecastExcessRequest(
 	data DisplayData,
 	config UnifiedInverterConfig,
 	battery BatteryInverterGroup,
 	state *ForecastExcessState,
 ) PowerRequest {
-	name := "Forecast Excess (" + battery.ShortName + ")"
+	input := ForecastExcessInput{
+		Now:                 time.Now(),
+		ForecastRemainingWh: data.GetFloat(config.SolarForecastRemainingTopic).Current,
+		AvailableWh:         data.GetFloat(battery.AvailableEnergyTopic).Current,
+		InverterCount:       len(battery.Inverters),
+		WattsPerInverter:    config.WattsPerInverter,
+		SolarMultiplier:     battery.SolarMultiplier,
+		CapacityWh:          battery.CapacityWh,
+		ShortName:           battery.ShortName,
+	}
+	data.GetJSON(config.DetailedForecastTopic, &input.Forecast)
+	return forecastExcessRequestCore(input, state)
+}
+
+// forecastExcessRequestCore calculates forecast excess inverter power for a single battery.
+// Returns target watts based on excess energy divided by hours until solar ends.
+// Target can only decrease during the day unless a daily reset occurs.
+func forecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessState) PowerRequest {
+	name := "Forecast Excess (" + input.ShortName + ")"
 
 	// Check if forecast has changed - if not, return cached result
-	forecastRemainingWh := data.GetFloat(config.SolarForecastRemainingTopic).Current
-	if forecastRemainingWh == state.lastForecastRemaining {
+	if input.ForecastRemainingWh == state.lastForecastRemaining {
 		return state.cachedResult
 	}
 
 	// Cache the result on any exit path
 	var result PowerRequest
 	defer func() {
-		state.lastForecastRemaining = forecastRemainingWh
+		state.lastForecastRemaining = input.ForecastRemainingWh
 		state.cachedResult = result
 	}()
 
-	now := time.Now()
-
-	// Parse forecast once, use for all operations
-	var forecast ForecastPeriods
-	data.GetJSON(config.DetailedForecastTopic, &forecast)
-
 	// Night cycle check: if current forecast generation is 0, disable forecast excess
-	currentGeneration := forecast.GetCurrentGeneration(now)
+	currentGeneration := input.Forecast.GetCurrentGeneration(input.Now)
 	if currentGeneration == 0 {
 		result = PowerRequest{Name: name, Watts: 0}
 		return result
 	}
 
 	// Find solar end time: last period where expected generation exceeds inverter capacity
-	maxInverterWatts := float64(len(battery.Inverters)) * config.WattsPerInverter
-	minForecastKw := maxInverterWatts / (battery.SolarMultiplier * 1000)
-	solarEndTime := forecast.FindSolarEndTime(minForecastKw)
+	maxInverterWatts := float64(input.InverterCount) * input.WattsPerInverter
+	minForecastKw := maxInverterWatts / (input.SolarMultiplier * 1000)
+	solarEndTime := input.Forecast.FindSolarEndTime(minForecastKw)
 
 	// Calculate hours remaining until solar end
-	hoursRemaining := solarEndTime.Sub(now).Hours()
+	hoursRemaining := solarEndTime.Sub(input.Now).Hours()
 	if hoursRemaining <= 0 {
 		result = PowerRequest{Name: name, Watts: 0}
 		return result
 	}
 
 	// Check for daily reset (date changed, or zero value on startup)
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	today := time.Date(input.Now.Year(), input.Now.Month(), input.Now.Day(), 0, 0, 0, 0, input.Now.Location())
 	dailyReset := !state.lastActiveDate.Equal(today)
 	if dailyReset {
 		state.lastActiveDate = today
@@ -487,11 +510,10 @@ func forecastExcessRequest(
 
 	// Calculate excess energy
 	// Exclude solar after cutoff - it can be fully inverted without using the battery
-	availableWh := data.GetFloat(battery.AvailableEnergyTopic).Current
-	forecastAfterCutoffKwh := forecast.SumGenerationAfter(solarEndTime)
-	solarBeforeCutoffWh := forecastRemainingWh - (forecastAfterCutoffKwh * 1000)
-	expectedSolarWh := battery.SolarMultiplier * solarBeforeCutoffWh
-	excessWh := (availableWh + expectedSolarWh) - battery.CapacityWh
+	forecastAfterCutoffKwh := input.Forecast.SumGenerationAfter(solarEndTime)
+	solarBeforeCutoffWh := input.ForecastRemainingWh - (forecastAfterCutoffKwh * 1000)
+	expectedSolarWh := input.SolarMultiplier * solarBeforeCutoffWh
+	excessWh := (input.AvailableWh + expectedSolarWh) - input.CapacityWh
 
 	if excessWh <= 0 {
 		state.currentTargetWatts = 0
@@ -502,6 +524,13 @@ func forecastExcessRequest(
 	// Calculate optimal power
 	optimalWatts := excessWh / hoursRemaining
 
+	// Lerp down to 0 in the last hour before solar end for smooth handoff to other modes
+	const handoffWindowHours = 1.0
+	if hoursRemaining < handoffWindowHours {
+		handoffFactor := hoursRemaining / handoffWindowHours
+		optimalWatts *= handoffFactor
+	}
+
 	// Apply ratchet-down logic (can only decrease unless daily reset)
 	if dailyReset {
 		state.currentTargetWatts = optimalWatts
@@ -510,8 +539,7 @@ func forecastExcessRequest(
 	}
 
 	// Cap at maximum inverter power for this battery
-	maxWatts := float64(len(battery.Inverters)) * config.WattsPerInverter
-	result = PowerRequest{Name: name, Watts: min(state.currentTargetWatts, maxWatts)}
+	result = PowerRequest{Name: name, Watts: min(state.currentTargetWatts, maxInverterWatts)}
 	return result
 }
 
