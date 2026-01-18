@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -120,6 +121,65 @@ func (s *MQTTSender) CreateBatteryEntity(
 	})
 
 	return nil
+}
+
+// CreateDebugSensor creates a simple debug sensor via MQTT discovery
+func (s *MQTTSender) CreateDebugSensor(sensorID, name, unit string, precision int) error {
+	type haDeviceConfig struct {
+		Identifiers  []string `json:"identifiers"`
+		Name         string   `json:"name"`
+		Manufacturer string   `json:"manufacturer,omitempty"`
+	}
+
+	type haEntityConfig struct {
+		Name             string         `json:"name"`
+		StateTopic       string         `json:"state_topic"`
+		UnitOfMeasure    string         `json:"unit_of_measurement,omitempty"`
+		UniqueId         string         `json:"unique_id"`
+		StateClass       string         `json:"state_class,omitempty"`
+		DisplayPrecision int            `json:"suggested_display_precision,omitempty"`
+		Device           haDeviceConfig `json:"device"`
+	}
+
+	config := haEntityConfig{
+		Name:             name,
+		StateTopic:       "homeassistant/sensor/" + sensorID + "/state",
+		UnitOfMeasure:    unit,
+		UniqueId:         sensorID,
+		StateClass:       "measurement",
+		DisplayPrecision: precision,
+		Device: haDeviceConfig{
+			Identifiers:  []string{"powerctl"},
+			Name:         "Powerctl",
+			Manufacturer: "DIY",
+		},
+	}
+
+	configTopic := "homeassistant/sensor/" + sensorID + "/config"
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   configTopic,
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
+// PublishDebugSensor publishes a value to a debug sensor
+func (s *MQTTSender) PublishDebugSensor(sensorID string, value float64) {
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/sensor/" + sensorID + "/state",
+		Payload: []byte(strconv.FormatFloat(value, 'f', -1, 64)),
+		QoS:     0,
+		Retain:  false,
+	})
 }
 
 // CreatePowerctlSwitch creates the powerctl_enabled switch via MQTT discovery

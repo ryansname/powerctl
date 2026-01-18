@@ -120,6 +120,10 @@ type ForecastExcessState struct {
 	lastActiveDate        time.Time // For daily reset (zero value triggers reset on startup)
 	lastForecastRemaining float64   // For caching (only recalculate when forecast changes)
 	cachedResult          PowerRequest
+
+	// Debug values from last calculation (published to HA sensors)
+	DebugExpectedSolarWh float64
+	DebugExcessWh        float64
 }
 
 // ForecastExcessInput holds typed input data for forecastExcessRequestCore
@@ -426,6 +430,12 @@ func unifiedInverterEnabler(
 				state.lastDebugOutput = debugOutput
 			}
 
+			// Publish forecast excess debug sensors
+			sender.PublishDebugSensor("powerctl_b2_expected_solar", state.forecastExcess2.DebugExpectedSolarWh)
+			sender.PublishDebugSensor("powerctl_b2_excess", state.forecastExcess2.DebugExcessWh)
+			sender.PublishDebugSensor("powerctl_b3_expected_solar", state.forecastExcess3.DebugExpectedSolarWh)
+			sender.PublishDebugSensor("powerctl_b3_excess", state.forecastExcess3.DebugExcessWh)
+
 			// Apply changes
 			changed := applyInverterChanges(data, config, sender, modeResult.Battery2Count, modeResult.Battery3Count)
 
@@ -514,6 +524,10 @@ func forecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessS
 	solarBeforeCutoffWh := input.ForecastRemainingWh - (forecastAfterCutoffKwh * 1000)
 	expectedSolarWh := input.SolarMultiplier * solarBeforeCutoffWh
 	excessWh := (input.AvailableWh + expectedSolarWh) - input.CapacityWh
+
+	// Store debug values for HA sensors
+	state.DebugExpectedSolarWh = expectedSolarWh
+	state.DebugExcessWh = excessWh
 
 	if excessWh <= 0 {
 		state.currentTargetWatts = 0

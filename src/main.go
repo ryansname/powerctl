@@ -362,6 +362,23 @@ func main() {
 		log.Fatalf("Failed to create powerctl switch: %v", err)
 	}
 
+	// Create debug sensors for forecast excess algorithm
+	debugSensors := []struct {
+		id, name, unit string
+		precision      int
+	}{
+		{"powerctl_b2_expected_solar", "B2 Expected Solar", "Wh", 0},
+		{"powerctl_b2_excess", "B2 Excess", "Wh", 0},
+		{"powerctl_b3_expected_solar", "B3 Expected Solar", "Wh", 0},
+		{"powerctl_b3_excess", "B3 Excess", "Wh", 0},
+	}
+	for _, s := range debugSensors {
+		if err := mqttSender.CreateDebugSensor(s.id, s.name, s.unit, s.precision); err != nil {
+			cancel()
+			log.Fatalf("Failed to create debug sensor %s: %v", s.id, err)
+		}
+	}
+
 	log.Println("Home Assistant entities created")
 
 	// Launch sankey config worker (generates and publishes sankey configurations)
