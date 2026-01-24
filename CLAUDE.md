@@ -171,6 +171,7 @@ The application uses a goroutine-based architecture with message passing via cha
    - **Global modes** (each mode handles its own solar subtraction if needed):
      - Powerwall Low Mode: If Powerwall SOC 15min P1 < 30% → (load_power 15min P99 - current solar)
      - Powerwall Last Mode: Otherwise → (2/3 × load_power 15min P66 - current solar)
+     - Both modes apply **EMA smoothing** with 60-second time constant (63% of the way to new value in 60s, 95% in ~3min)
    - **Current solar generation**: solar_1 + solar_2 (5min P66), computed once and passed to modes that need it
    - **Per-battery Overflow mode** (SOC-based hysteresis, calculated independently per battery):
      - If NOT in Float Charging: returns 0 inverters

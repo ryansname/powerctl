@@ -156,6 +156,11 @@ type InverterEnablerState struct {
 	// Per-battery forecast excess state
 	forecastExcess2 ForecastExcessState
 	forecastExcess3 ForecastExcessState
+
+	// EMA smoothing for Powerwall modes (60-second time constant)
+	powerwallLastEMA        float64
+	powerwallLowEMA         float64
+	powerwallEMAInitialized bool // Both initialize together on first data
 }
 
 // ModeResult represents the outcome of mode selection (in inverter counts)
@@ -371,11 +376,16 @@ func selectMode(
 	limitedB2, limitedB3 := applyLimitToPerBattery(perBattery2Count, perBattery3Count, limit.Watts, config.WattsPerInverter)
 	limitedPerBatteryTotal := limitedB2 + limitedB3
 
-	// 5. Calculate global targets (Powerwall modes only)
+	// 5. Calculate global targets (Powerwall modes only, with EMA smoothing)
 	currentSolar := currentSolarGeneration(data, config)
 	requests := []PowerRequest{
-		powerwallLastRequest(data, config, currentSolar),
-		powerwallLowRequest(data, config, currentSolar),
+		powerwallLastRequest(data, config, currentSolar, state),
+		powerwallLowRequest(data, config, currentSolar, state),
+	}
+
+	// Mark EMA as initialized after first calculation
+	if !state.powerwallEMAInitialized {
+		state.powerwallEMAInitialized = true
 	}
 	limits := []PowerLimit{limit}
 	targetWatts, globalModes := calculateTargetPower(requests, limits)
@@ -588,31 +598,54 @@ func forecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessS
 	return result
 }
 
-// powerwallLastRequest returns 2/3 of the 15min P66 load power, minus current solar generation
+// powerwallEMAAlpha is the smoothing factor for Powerwall mode EMA.
+// With 1-second updates and alpha=1/60, the time constant is ~60 seconds
+// (63% of the way to new value in 60 seconds, 95% in ~3 minutes).
+const powerwallEMAAlpha = 1.0 / 60.0
+
+// calcEMA calculates the next EMA value given the current smoothed value and new raw value.
+// If not initialized, returns the raw value unchanged.
+func calcEMA(smoothed, raw float64, initialized bool) float64 {
+	if !initialized {
+		return raw
+	}
+	return powerwallEMAAlpha*raw + (1-powerwallEMAAlpha)*smoothed
+}
+
+// powerwallLastRequest returns 2/3 of the 15min P66 load power, minus current solar generation,
+// with EMA smoothing applied (60-second time constant).
 func powerwallLastRequest(
 	data DisplayData,
 	config UnifiedInverterConfig,
 	currentSolar float64,
+	state *InverterEnablerState,
 ) PowerRequest {
 	loadPower15MinP66 := data.GetPercentile(config.LoadPowerTopic, P66, Window15Min)
-	targetLoad := loadPower15MinP66 * (2.0 / 3.0)
-	return PowerRequest{Name: "PowerwallLast", Watts: max(targetLoad-currentSolar, 0)}
+	rawTarget := max(loadPower15MinP66*(2.0/3.0)-currentSolar, 0)
+	state.powerwallLastEMA = calcEMA(state.powerwallLastEMA, rawTarget, state.powerwallEMAInitialized)
+	return PowerRequest{Name: "PowerwallLast", Watts: state.powerwallLastEMA}
 }
 
-// powerwallLowRequest returns 15min P99 load minus current solar if powerwall SOC is low, else 0
+// powerwallLowRequest returns 15min P99 load minus current solar if powerwall SOC is low, else 0,
+// with EMA smoothing applied (60-second time constant).
 func powerwallLowRequest(
 	data DisplayData,
 	config UnifiedInverterConfig,
 	currentSolar float64,
+	state *InverterEnablerState,
 ) PowerRequest {
 	powerwallSOC15MinP1 := data.GetPercentile(config.PowerwallSOCTopic, P1, Window15Min)
 
 	if powerwallSOC15MinP1 >= config.PowerwallLowThreshold {
-		return PowerRequest{Name: "PowerwallLow", Watts: 0}
+		// Still apply EMA when transitioning to 0 for smooth ramp-down
+		state.powerwallLowEMA = calcEMA(state.powerwallLowEMA, 0, state.powerwallEMAInitialized)
+		return PowerRequest{Name: "PowerwallLow", Watts: state.powerwallLowEMA}
 	}
 
 	loadPower := data.GetPercentile(config.LoadPowerTopic, P99, Window15Min)
-	return PowerRequest{Name: "PowerwallLow", Watts: max(loadPower-currentSolar, 0)}
+	rawTarget := max(loadPower-currentSolar, 0)
+	state.powerwallLowEMA = calcEMA(state.powerwallLowEMA, rawTarget, state.powerwallEMAInitialized)
+	return PowerRequest{Name: "PowerwallLow", Watts: state.powerwallLowEMA}
 }
 
 // powerhouseTransferLimit returns the available capacity after accounting for solar generation
