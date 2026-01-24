@@ -181,6 +181,7 @@ The application uses a goroutine-based architecture with message passing via cha
        - Threshold formula: `95.75 + (i-1) * 3.75/(N-1)` for inverter i of N
      - Uses current SOC value (already smooth enough)
      - No solar subtraction (batteries are full, dumping excess)
+   - **Grid outage behavior**: When grid is unavailable (`binary_sensor.home_sweet_home_grid_status_2` == off), per-battery modes (overflow and forecast excess) are disabled (set to 0W). Global modes (Powerwall Last/Low) still operate to help supply the house during outages.
    - **Mode selection** (per-battery first, then global):
      1. Calculate per-battery overflow counts (SOC-based hysteresis, independent per battery)
      2. Calculate per-battery forecast excess counts (excess energy / hours until solar end)
@@ -585,6 +586,7 @@ Unified inverter enabler (defined in src/battery_config.go):
 - `homeassistant/sensor/solar_1_power/state` (Current solar power)
 - `homeassistant/sensor/home_sweet_home_load_power_2/state` (Load power)
 - `homeassistant/sensor/home_sweet_home_charge/state` (Powerwall SOC %)
+- `homeassistant/binary_sensor/home_sweet_home_grid_status_2/state` (Grid availability)
 - `homeassistant/switch/powerhouse_inverter_[1-9]_switch_0/state` (Inverter switch states)
 
 Powerctl control (defined in src/mqtt_sender.go):

@@ -101,6 +101,9 @@ type UnifiedInverterConfig struct {
 	LoadPowerTopic              string
 	PowerwallSOCTopic           string
 
+	// Grid status topic (binary sensor, "on" = grid available)
+	GridStatusTopic string
+
 	// Constants
 	WattsPerInverter      float64
 	MaxTransferPower      float64
@@ -313,6 +316,10 @@ func selectMode(
 	config UnifiedInverterConfig,
 	state *InverterEnablerState,
 ) (ModeResult, DebugModeInfo) {
+	// Check grid status - if off, disable per-battery modes (overflow and forecast excess)
+	// Global modes (Powerwall Last/Low) still work to help supply house during outages
+	gridAvailable := data.GetBoolean(config.GridStatusTopic)
+
 	// 1. Calculate per-battery overflow (SOC-based hysteresis)
 	overflow2 := checkBatteryOverflow(data, config.Battery2, config)
 	overflow3 := checkBatteryOverflow(data, config.Battery3, config)
@@ -320,6 +327,14 @@ func selectMode(
 	// 2. Calculate per-battery forecast excess (already capped at max inverter power)
 	forecastExcess2 := forecastExcessRequest(data, config, config.Battery2, &state.forecastExcess2)
 	forecastExcess3 := forecastExcessRequest(data, config, config.Battery3, &state.forecastExcess3)
+
+	// Zero out per-battery modes when grid is unavailable
+	if !gridAvailable {
+		overflow2.Watts = 0
+		overflow3.Watts = 0
+		forecastExcess2.Watts = 0
+		forecastExcess3.Watts = 0
+	}
 
 	// 3. For each battery, take max of overflow and forecast excess
 	perBattery2 := maxPowerRequest(overflow2, forecastExcess2)
