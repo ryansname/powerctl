@@ -612,8 +612,9 @@ func calcEMA(smoothed, raw float64, initialized bool) float64 {
 	return powerwallEMAAlpha*raw + (1-powerwallEMAAlpha)*smoothed
 }
 
-// powerwallLastRequest returns 2/3 of the 15min P66 load power, minus current solar generation,
-// with EMA smoothing applied (60-second time constant).
+// powerwallLastRequest returns 2/3 of the remaining load after solar subtraction,
+// leaving the Powerwall to supply only 1/3 of the net load.
+// EMA smoothing is applied with a 60-second time constant.
 func powerwallLastRequest(
 	data DisplayData,
 	config UnifiedInverterConfig,
@@ -621,7 +622,8 @@ func powerwallLastRequest(
 	state *InverterEnablerState,
 ) PowerRequest {
 	loadPower15MinP66 := data.GetPercentile(config.LoadPowerTopic, P66, Window15Min)
-	rawTarget := max(loadPower15MinP66*(2.0/3.0)-currentSolar, 0)
+	// Supply 2/3 of the remaining load after solar, leaving Powerwall to cover only 1/3
+	rawTarget := max((loadPower15MinP66-currentSolar)*(2.0/3.0), 0)
 	state.powerwallLastEMA = calcEMA(state.powerwallLastEMA, rawTarget, state.powerwallEMAInitialized)
 	return PowerRequest{Name: "PowerwallLast", Watts: state.powerwallLastEMA}
 }
