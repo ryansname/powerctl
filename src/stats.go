@@ -17,10 +17,11 @@ const (
 
 // Percentile constants for GetPercentile
 const (
-	P1  = 1
-	P50 = 50
-	P66 = 66
-	P99 = 99
+	P1   = 1
+	P50  = 50
+	P66  = 66
+	P99  = 99
+	P100 = 100
 )
 
 // Topics that report in kW or kWh and need conversion to W or Wh (multiply by 1000)
@@ -75,6 +76,9 @@ var requiredPercentiles = map[string][]PercentileSpec{
 	// Battery available energy - used by powerExcessCalculator for P50._5
 	TopicBattery2Energy: {{50, 5 * time.Minute}},
 	TopicBattery3Energy: {{50, 5 * time.Minute}},
+
+	// AC frequency - used by unifiedInverterEnabler for high frequency protection (P100._15)
+	"homeassistant/sensor/lounge_ac_frequency/state": {{100, 15 * time.Minute}},
 }
 
 // Reading represents a timestamped sensor reading

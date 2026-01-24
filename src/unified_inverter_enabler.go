@@ -104,6 +104,9 @@ type UnifiedInverterConfig struct {
 	// Grid status topic (binary sensor, "on" = grid available)
 	GridStatusTopic string
 
+	// AC frequency topic for high frequency protection
+	ACFrequencyTopic string
+
 	// Constants
 	WattsPerInverter      float64
 	MaxTransferPower      float64
@@ -316,9 +319,22 @@ func selectMode(
 	config UnifiedInverterConfig,
 	state *InverterEnablerState,
 ) (ModeResult, DebugModeInfo) {
-	// Check grid status - if off, disable per-battery modes (overflow and forecast excess)
-	// Global modes (Powerwall Last/Low) still work to help supply house during outages
 	gridAvailable := data.GetBoolean(config.GridStatusTopic)
+	powerwallSOC := data.GetFloat(config.PowerwallSOCTopic).Current
+	acFrequency := data.GetPercentile(config.ACFrequencyTopic, P100, Window15Min)
+
+	// Safety check: High grid frequency (>53Hz) - disable all inverters
+	if acFrequency > 53.0 {
+		return ModeResult{}, DebugModeInfo{}
+	}
+
+	// Safety check: Grid off + high Powerwall SOC (>90%) - disable all inverters
+	if !gridAvailable && powerwallSOC > 90.0 {
+		return ModeResult{}, DebugModeInfo{}
+	}
+
+	// Grid off: disable per-battery modes (overflow and forecast excess)
+	// Global modes (Powerwall Last/Low) still work to help supply house during outages
 
 	// 1. Calculate per-battery overflow (SOC-based hysteresis)
 	overflow2 := checkBatteryOverflow(data, config.Battery2, config)
