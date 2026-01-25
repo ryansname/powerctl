@@ -209,8 +209,9 @@ The application uses a goroutine-based architecture with message passing via cha
      - SOC >= 25%: all inverters allowed
    - Each inverter: 255W (9 inverters = 2,295W max)
    - **Debug output**: Publishes all mode values to `input_text.powerhouse_control_debug`
-     - GFM table showing Forecast Excess (B2), Forecast Excess (B3), Powerwall Last, Powerwall Low, Overflow (B2), Overflow (B3)
+     - Normal mode: GFM table showing Forecast Excess (B2), Forecast Excess (B3), Powerwall Last, Powerwall Low, Overflow (B2), Overflow (B3)
      - Sorted by watts descending, winning mode marked with ✓
+     - Safety mode: When safety protections are active, shows reason, grid frequency, and Powerwall SOC instead of mode table
      - Only publishes when values change via `MQTTSender.CallService()`
 
 10. **mqttSenderWorker** (src/mqtt_sender.go)

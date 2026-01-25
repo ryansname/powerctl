@@ -188,7 +188,10 @@ type ModeState struct {
 
 // DebugModeInfo contains all mode states for debug output
 type DebugModeInfo struct {
-	Modes []ModeState
+	Modes        []ModeState
+	SafetyReason string  // Non-empty when safety protection is active
+	GridFreq     float64 // AC frequency (for safety display)
+	PowerwallSOC float64 // Powerwall SOC % (for safety display)
 }
 
 // checkBatteryOverflow returns inverter count for overflow mode using SOC-based hysteresis.
@@ -335,12 +338,20 @@ func selectMode(
 
 	// Safety check: High grid frequency (>53Hz) - disable all inverters
 	if acFrequency > 53.0 {
-		return ModeResult{}, DebugModeInfo{}
+		return ModeResult{}, DebugModeInfo{
+			SafetyReason: "High frequency",
+			GridFreq:     acFrequency,
+			PowerwallSOC: powerwallSOC,
+		}
 	}
 
 	// Safety check: Grid off + high Powerwall SOC (>90%) - disable all inverters
 	if !gridAvailable && powerwallSOC > 90.0 {
-		return ModeResult{}, DebugModeInfo{}
+		return ModeResult{}, DebugModeInfo{
+			SafetyReason: "Grid off + high Powerwall",
+			GridFreq:     acFrequency,
+			PowerwallSOC: powerwallSOC,
+		}
 	}
 
 	// Grid off: disable per-battery modes (overflow and forecast excess)
@@ -424,14 +435,25 @@ func selectMode(
 
 // formatDebugOutput formats debug mode values as a GFM table for Home Assistant
 func formatDebugOutput(debug DebugModeInfo) string {
-	// Sort by watts descending
+	var sb strings.Builder
+
+	// Safety mode: show reason and key values
+	if debug.SafetyReason != "" {
+		sb.WriteString("| Safety | Value |\n")
+		sb.WriteString("|--------|------:|\n")
+		fmt.Fprintf(&sb, "| Reason | %s |\n", debug.SafetyReason)
+		fmt.Fprintf(&sb, "| Grid Freq | %.2f Hz |\n", debug.GridFreq)
+		fmt.Fprintf(&sb, "| Powerwall SOC | %.1f%% |\n", debug.PowerwallSOC)
+		return sb.String()
+	}
+
+	// Normal mode: sort by watts descending
 	modes := make([]ModeState, len(debug.Modes))
 	copy(modes, debug.Modes)
 	sort.Slice(modes, func(i, j int) bool {
 		return modes[i].Watts > modes[j].Watts
 	})
 
-	var sb strings.Builder
 	sb.WriteString("| Mode | Watts |  |\n")
 	sb.WriteString("|------|------:|--|\n")
 	for _, m := range modes {
