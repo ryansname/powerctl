@@ -64,7 +64,7 @@ func batterySOCWorker(
 
 			// Publish state to MQTT
 			deviceId := strings.ReplaceAll(strings.ToLower(config.Name), " ", "_")
-			stateTopic := fmt.Sprintf("homeassistant/sensor/%s/state", deviceId)
+			stateTopic := fmt.Sprintf("powerctl/sensor/%s/state", deviceId)
 
 			statePayload := map[string]interface{}{
 				"percentage":   percentage,

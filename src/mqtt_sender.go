@@ -90,8 +90,8 @@ func (s *MQTTSender) CreateBatteryEntity(
 	config := haEntityConfig{
 		Name:                entityName,
 		DeviceClass:         entityClass,
-		StateTopic:          "homeassistant/sensor/" + deviceId + "/state",
-		JsonAttributesTopic: "homeassistant/sensor/" + deviceId + "/attributes",
+		StateTopic:          "powerctl/sensor/" + deviceId + "/state",
+		JsonAttributesTopic: "powerctl/sensor/" + deviceId + "/attributes",
 		UnitOfMeasure:       entityMeasure,
 		ValueTemplate:       "{{ value_json." + jsonKey + "}}",
 		UniqueId:            deviceId + "_" + jsonKey,
@@ -143,7 +143,7 @@ func (s *MQTTSender) CreateDebugSensor(sensorID, name, unit string, precision in
 
 	config := haEntityConfig{
 		Name:             name,
-		StateTopic:       "homeassistant/sensor/" + sensorID + "/state",
+		StateTopic:       "powerctl/sensor/" + sensorID + "/state",
 		UnitOfMeasure:    unit,
 		UniqueId:         sensorID,
 		StateClass:       "measurement",
@@ -172,10 +172,11 @@ func (s *MQTTSender) CreateDebugSensor(sensorID, name, unit string, precision in
 	return nil
 }
 
-// PublishDebugSensor publishes a value to a debug sensor
+// PublishDebugSensor publishes a value to a debug sensor.
+// Uses powerctl/ prefix to avoid conflicts with HA statestream.
 func (s *MQTTSender) PublishDebugSensor(sensorID string, value float64) {
 	s.Send(MQTTMessage{
-		Topic:   "homeassistant/sensor/" + sensorID + "/state",
+		Topic:   "powerctl/sensor/" + sensorID + "/state",
 		Payload: []byte(strconv.FormatFloat(value, 'f', -1, 64)),
 		QoS:     0,
 		Retain:  false,
@@ -203,7 +204,7 @@ func (s *MQTTSender) CreatePowerctlSwitch() error {
 	config := haSwitchConfig{
 		Name:         "Enabled",
 		StateTopic:   TopicPowerctlEnabledState,
-		CommandTopic: "homeassistant/switch/powerctl_enabled/set",
+		CommandTopic: "powerctl/switch/powerctl_enabled/set",
 		UniqueId:     "powerctl_enabled",
 		Icon:         "mdi:power",
 		Optimistic:   true,
@@ -234,7 +235,8 @@ func isDiscoveryTopic(topic string) bool {
 	return strings.HasSuffix(topic, "/config")
 }
 
-// TopicPowerctlEnabledState is the state topic where HA publishes the switch state
+// TopicPowerctlEnabledState is the state topic for the powerctl_enabled switch.
+// Statestream publishes here, powerctl reads to check enabled state.
 const TopicPowerctlEnabledState = "homeassistant/switch/powerctl_enabled/state"
 
 // mqttSenderWorker handles outgoing MQTT messages with queuing and filtering

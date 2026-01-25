@@ -83,7 +83,7 @@ func publishCalibration(sender *MQTTSender, name string, inflows, outflows float
 	})
 
 	sender.Send(MQTTMessage{
-		Topic:   "homeassistant/sensor/" + deviceId + "/attributes",
+		Topic:   "powerctl/sensor/" + deviceId + "/attributes",
 		Payload: payload,
 		QoS:     1,
 		Retain:  true,
