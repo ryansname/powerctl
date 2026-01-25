@@ -290,7 +290,7 @@ func TestSlowRamp_DeadbandIgnoresSmallDiffs(t *testing.T) {
 		RateAccel:          1.0,
 		DecayMultiplier:    2.0,
 		DoublePressureDiff: 1e9,
-		Deadband:           100, // 100W deadband
+		Deadband:           100, // 100W deadband: inner 0-50, outer 50-100
 	}
 
 	// Initialize at 500W
@@ -298,13 +298,13 @@ func TestSlowRamp_DeadbandIgnoresSmallDiffs(t *testing.T) {
 	assert.Equal(t, 500.0, state.Current)
 	assert.Equal(t, 0.0, state.Pressure)
 
-	// Target within deadband (500 + 50 = 550, diff = 50 < 100)
-	// Should not build pressure
+	// Target in outer half of deadband (diff = 75, which is > 50 and <= 100)
+	// Should not change pressure at all (neutral zone)
 	for range 60 {
-		state.Update(550, config)
+		state.Update(575, config)
 	}
-	assert.Equal(t, 500.0, state.Current, "Should not move when diff within deadband")
-	assert.Equal(t, 0.0, state.Pressure, "Should not build pressure when diff within deadband")
+	assert.Equal(t, 500.0, state.Current, "Should not move when diff in outer deadband")
+	assert.Equal(t, 0.0, state.Pressure, "Should not change pressure in outer deadband")
 
 	// Target outside deadband (500 + 150 = 650, diff = 150 > 100)
 	// Should build pressure
@@ -323,7 +323,7 @@ func TestSlowRamp_DeadbandDrainsPressure(t *testing.T) {
 		RateAccel:          1.0,
 		DecayMultiplier:    2.0,
 		DoublePressureDiff: 1e9,
-		Deadband:           100,
+		Deadband:           100, // inner half: 0-50, outer half: 50-100
 	}
 
 	// Initialize at 0
@@ -335,13 +335,41 @@ func TestSlowRamp_DeadbandDrainsPressure(t *testing.T) {
 	}
 	assert.Equal(t, 20.0, state.Pressure, "Should have built 20s of pressure")
 
-	// Now target within deadband of current (0 + 50 = 50, diff = 50 < 100)
+	// Now target in inner half of deadband (diff = 25, which is <= 50)
 	// Diff is treated as 0, so pressure should drain at decay rate
 	for range 5 {
-		state.Update(50, config)
+		state.Update(25, config)
 	}
 	// 5 seconds at 2x decay = 10s drained: 20 - 10 = 10
-	assert.Equal(t, 10.0, state.Pressure, "Pressure should drain when diff within deadband")
+	assert.Equal(t, 10.0, state.Pressure, "Pressure should drain when diff in inner deadband")
+}
+
+func TestSlowRamp_OuterDeadbandPreservesPressure(t *testing.T) {
+	state := SlowRampState{}
+	config := SlowRampConfig{
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 60,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9,
+		Deadband:           100, // inner half: 0-50, outer half: 50-100
+	}
+
+	// Initialize at 0
+	state.Update(0, config)
+
+	// Build pressure with large diff (outside deadband)
+	for range 20 {
+		state.Update(500, config)
+	}
+	assert.Equal(t, 20.0, state.Pressure, "Should have built 20s of pressure")
+
+	// Now target in outer half of deadband (diff = 75, which is > 50 and <= 100)
+	// Pressure should NOT change (neutral zone)
+	for range 10 {
+		state.Update(75, config)
+	}
+	assert.Equal(t, 20.0, state.Pressure, "Pressure should be preserved in outer deadband")
 }
 
 func TestSlowRamp_CoastsWhenEnteringDeadband(t *testing.T) {

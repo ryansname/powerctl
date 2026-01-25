@@ -78,11 +78,20 @@ func (s *SlowRampState) Update(target float64, config SlowRampConfig) float64 {
 // updatePressure updates the pressure accumulator with hysteresis.
 // Pressure builds when diff pushes away from zero, and drains faster when
 // moving back toward zero (controlled by decayMultiplier).
-// Diffs within the deadband are treated as zero (no pressure change).
+// Deadband has two zones:
+//   - Outer half (deadband/2 to deadband): no pressure change (neutral zone)
+//   - Inner half (0 to deadband/2): diff treated as zero, pressure drains
 // Large diffs (> DoublePressureDiff) build pressure 2x faster.
 func (s *SlowRampState) updatePressure(diff, dt float64, config SlowRampConfig) {
-	// Treat small diffs as zero (deadband)
-	if math.Abs(diff) <= config.Deadband {
+	absDiff := math.Abs(diff)
+
+	// Outer half of deadband: no pressure change at all (neutral zone)
+	if absDiff > config.Deadband/2 && absDiff <= config.Deadband {
+		return
+	}
+
+	// Inner half of deadband: treat as zero (pressure drains)
+	if absDiff <= config.Deadband/2 {
 		diff = 0
 	}
 
