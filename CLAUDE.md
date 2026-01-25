@@ -169,9 +169,9 @@ The application uses a goroutine-based architecture with message passing via cha
      - **Daily reset**: Resets when date changes (fresh start each morning)
      - **Night cycle disable**: Returns 0 when current forecast generation is 0
    - **Global modes** (each mode handles its own solar subtraction if needed):
-     - Powerwall Low Mode: If Powerwall SOC 15min P1 < 30% → (load_power 15min P99 - current solar)
-     - Powerwall Last Mode: Otherwise → 2/3 × (load_power 15min P66 - current solar)
-     - Both modes apply **EMA smoothing** with 60-second time constant (63% of the way to new value in 60s, 95% in ~3min)
+     - Powerwall Low Mode: If Powerwall SOC 15min P1 < 30% → (load_power 1min P99 - current solar)
+     - Powerwall Last Mode: Otherwise → 2/3 × (load_power 1min P66 - current solar)
+     - Both modes apply **Pressure-Gated Accelerating Ramp** smoothing via `governor.SlowRampState` (see Governor Package below)
    - **Current solar generation**: solar_1 + solar_2 (5min P66), computed once and passed to modes that need it
    - **Per-battery Overflow mode** (SOC-based hysteresis, calculated independently per battery):
      - If NOT in Float Charging: returns 0 inverters
@@ -326,6 +326,26 @@ The application uses a goroutine-based architecture with message passing via cha
 - `Generate()`: Main function that produces GeneratedConfigs from DefaultConfig()
 - `GenerateSankeyYAML(cfg)`: Generates Lovelace sankey chart card YAML
 - `GenerateTemplatesYAML(cfg)`: Generates Home Assistant template sensor definitions
+
+**Governor Package** (src/governor/):
+- Provides power governing algorithms for smoothing and rate limiting
+- **SlowRampState**: Pressure-Gated Accelerating Ramp smoother
+  - `Current`: Current smoothed output value
+  - `Pressure`: Signed accumulator tracking sustained change direction
+  - `Update(target, config)`: Main entry point - returns smoothed value
+- **SlowRampConfig**: Tunable parameters for slow ramp
+  - `ThresholdSeconds`: Pressure magnitude required before responding (default: 30)
+  - `RateAccel`: Acceleration of ramp rate in units/s² (default: 1.0)
+  - `DecayMultiplier`: How much faster pressure drains vs builds (default: 2.0)
+- **Algorithm behavior**:
+  - Ignores brief fluctuations - only responds after sustained change
+  - Slow initial response that accelerates over time (opposite of EMA)
+  - Never overshoots - step is capped at remaining difference
+  - Hysteresis: pressure drains 2x faster than it builds
+  - Pressure capped at 2× threshold (limits max ramp rate to 900 W/s with defaults)
+- **Debug sensors**: Pressure values published to HA for tuning:
+  - `sensor.powerctl_powerwall_last_pressure`
+  - `sensor.powerctl_powerwall_low_pressure`
 
 ### Statistics Algorithm
 

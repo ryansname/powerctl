@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ryansname/powerctl/src/governor"
 )
 
 // ForecastPeriod represents a single period from Solcast detailed forecast
@@ -157,10 +159,9 @@ type InverterEnablerState struct {
 	forecastExcess2 ForecastExcessState
 	forecastExcess3 ForecastExcessState
 
-	// EMA smoothing for Powerwall modes (60-second time constant)
-	powerwallLastEMA        float64
-	powerwallLowEMA         float64
-	powerwallEMAInitialized bool // Both initialize together on first data
+	// Slow ramp smoothing for Powerwall modes (pressure-gated accelerating ramp)
+	powerwallLastRamp governor.SlowRampState
+	powerwallLowRamp  governor.SlowRampState
 }
 
 // ModeResult represents the outcome of mode selection (in inverter counts)
@@ -376,16 +377,11 @@ func selectMode(
 	limitedB2, limitedB3 := applyLimitToPerBattery(perBattery2Count, perBattery3Count, limit.Watts, config.WattsPerInverter)
 	limitedPerBatteryTotal := limitedB2 + limitedB3
 
-	// 5. Calculate global targets (Powerwall modes only, with EMA smoothing)
+	// 5. Calculate global targets (Powerwall modes only, with slow ramp smoothing)
 	currentSolar := currentSolarGeneration(data, config)
 	requests := []PowerRequest{
 		powerwallLastRequest(data, config, currentSolar, state),
 		powerwallLowRequest(data, config, currentSolar, state),
-	}
-
-	// Mark EMA as initialized after first calculation
-	if !state.powerwallEMAInitialized {
-		state.powerwallEMAInitialized = true
 	}
 	limits := []PowerLimit{limit}
 	targetWatts, globalModes := calculateTargetPower(requests, limits)
@@ -476,6 +472,12 @@ func unifiedInverterEnabler(
 			sender.PublishDebugSensor("powerctl_b2_excess", state.forecastExcess2.DebugExcessWh)
 			sender.PublishDebugSensor("powerctl_b3_expected_solar", state.forecastExcess3.DebugExpectedSolarWh)
 			sender.PublishDebugSensor("powerctl_b3_excess", state.forecastExcess3.DebugExcessWh)
+
+			// Publish slow ramp debug sensors
+			sender.PublishDebugSensor("powerctl_powerwall_last_smoothed", state.powerwallLastRamp.Current)
+			sender.PublishDebugSensor("powerctl_powerwall_low_smoothed", state.powerwallLowRamp.Current)
+			sender.PublishDebugSensor("powerctl_powerwall_last_pressure", state.powerwallLastRamp.Pressure)
+			sender.PublishDebugSensor("powerctl_powerwall_low_pressure", state.powerwallLowRamp.Pressure)
 
 			// Apply changes
 			changed := applyInverterChanges(data, config, sender, modeResult.Battery2Count, modeResult.Battery3Count)
@@ -598,38 +600,28 @@ func forecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessS
 	return result
 }
 
-// powerwallEMAAlpha is the smoothing factor for Powerwall mode EMA.
-// With 1-second updates and alpha=1/60, the time constant is ~60 seconds
-// (63% of the way to new value in 60 seconds, 95% in ~3 minutes).
-const powerwallEMAAlpha = 1.0 / 60.0
-
-// calcEMA calculates the next EMA value given the current smoothed value and new raw value.
-// If not initialized, returns the raw value unchanged.
-func calcEMA(smoothed, raw float64, initialized bool) float64 {
-	if !initialized {
-		return raw
-	}
-	return powerwallEMAAlpha*raw + (1-powerwallEMAAlpha)*smoothed
-}
+// slowRampConfig is the configuration for Powerwall mode slow ramp smoothing.
+// Uses 1min percentiles as input, with 30-second threshold and quadratic acceleration.
+var slowRampConfig = governor.DefaultSlowRampConfig()
 
 // powerwallLastRequest returns 2/3 of the remaining load after solar subtraction,
 // leaving the Powerwall to supply only 1/3 of the net load.
-// EMA smoothing is applied with a 60-second time constant.
+// Slow ramp smoothing is applied with pressure-gated accelerating ramp.
 func powerwallLastRequest(
 	data DisplayData,
 	config UnifiedInverterConfig,
 	currentSolar float64,
 	state *InverterEnablerState,
 ) PowerRequest {
-	loadPower15MinP66 := data.GetPercentile(config.LoadPowerTopic, P66, Window15Min)
+	loadPower1MinP66 := data.GetPercentile(config.LoadPowerTopic, P66, Window1Min)
 	// Supply 2/3 of the remaining load after solar, leaving Powerwall to cover only 1/3
-	rawTarget := max((loadPower15MinP66-currentSolar)*(2.0/3.0), 0)
-	state.powerwallLastEMA = calcEMA(state.powerwallLastEMA, rawTarget, state.powerwallEMAInitialized)
-	return PowerRequest{Name: "PowerwallLast", Watts: state.powerwallLastEMA}
+	rawTarget := max((loadPower1MinP66-currentSolar)*(2.0/3.0), 0)
+	smoothed := state.powerwallLastRamp.Update(rawTarget, slowRampConfig)
+	return PowerRequest{Name: "PowerwallLast", Watts: smoothed}
 }
 
-// powerwallLowRequest returns 15min P99 load minus current solar if powerwall SOC is low, else 0,
-// with EMA smoothing applied (60-second time constant).
+// powerwallLowRequest returns 1min P99 load minus current solar if powerwall SOC is low, else 0,
+// with slow ramp smoothing applied (pressure-gated accelerating ramp).
 func powerwallLowRequest(
 	data DisplayData,
 	config UnifiedInverterConfig,
@@ -638,16 +630,16 @@ func powerwallLowRequest(
 ) PowerRequest {
 	powerwallSOC15MinP1 := data.GetPercentile(config.PowerwallSOCTopic, P1, Window15Min)
 
+	var rawTarget float64
 	if powerwallSOC15MinP1 >= config.PowerwallLowThreshold {
-		// Still apply EMA when transitioning to 0 for smooth ramp-down
-		state.powerwallLowEMA = calcEMA(state.powerwallLowEMA, 0, state.powerwallEMAInitialized)
-		return PowerRequest{Name: "PowerwallLow", Watts: state.powerwallLowEMA}
+		rawTarget = 0
+	} else {
+		loadPower := data.GetPercentile(config.LoadPowerTopic, P99, Window1Min)
+		rawTarget = max(loadPower-currentSolar, 0)
 	}
 
-	loadPower := data.GetPercentile(config.LoadPowerTopic, P99, Window15Min)
-	rawTarget := max(loadPower-currentSolar, 0)
-	state.powerwallLowEMA = calcEMA(state.powerwallLowEMA, rawTarget, state.powerwallEMAInitialized)
-	return PowerRequest{Name: "PowerwallLow", Watts: state.powerwallLowEMA}
+	smoothed := state.powerwallLowRamp.Update(rawTarget, slowRampConfig)
+	return PowerRequest{Name: "PowerwallLow", Watts: smoothed}
 }
 
 // powerhouseTransferLimit returns the available capacity after accounting for solar generation

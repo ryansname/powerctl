@@ -11,6 +11,7 @@ import (
 
 // Window constants for GetPercentile
 const (
+	Window1Min  = 1 * time.Minute
 	Window5Min  = 5 * time.Minute
 	Window15Min = 15 * time.Minute
 )
@@ -54,8 +55,10 @@ var requiredPercentiles = map[string][]PercentileSpec{
 	// Powerwall SOC - used by unifiedInverterEnabler for P1._15
 	"homeassistant/sensor/home_sweet_home_charge/state": {{1, 15 * time.Minute}},
 
-	// Load power - used by unifiedInverterEnabler for P66._15 and P99._15
+	// Load power - used by unifiedInverterEnabler for P66._1, P99._1 (slow ramp input), P66._15, P99._15
 	"homeassistant/sensor/home_sweet_home_load_power_2/state": {
+		{66, 1 * time.Minute},
+		{99, 1 * time.Minute},
 		{66, 15 * time.Minute},
 		{99, 15 * time.Minute},
 	},
