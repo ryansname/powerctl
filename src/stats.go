@@ -73,8 +73,8 @@ var requiredPercentiles = map[string][]PercentileSpec{
 	TopicBattery2Energy: {{50, 5 * time.Minute}},
 	TopicBattery3Energy: {{50, 5 * time.Minute}},
 
-	// AC frequency - used by unifiedInverterEnabler for high frequency protection (P100._15)
-	"homeassistant/sensor/lounge_ac_frequency/state": {{100, 15 * time.Minute}},
+	// AC frequency - used by unifiedInverterEnabler for high frequency protection (P100._5)
+	"homeassistant/sensor/lounge_ac_frequency/state": {{100, 5 * time.Minute}},
 }
 
 // Reading represents a timestamped sensor reading

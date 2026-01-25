@@ -188,10 +188,11 @@ type ModeState struct {
 
 // DebugModeInfo contains all mode states for debug output
 type DebugModeInfo struct {
-	Modes        []ModeState
-	SafetyReason string  // Non-empty when safety protection is active
-	GridFreq     float64 // AC frequency (for safety display)
-	PowerwallSOC float64 // Powerwall SOC % (for safety display)
+	Modes           []ModeState
+	SafetyReason    string  // Non-empty when safety protection is active
+	GridFreqCurrent float64 // Current AC frequency (for safety display)
+	GridFreqP100    float64 // AC frequency 5min P100 (for safety display)
+	PowerwallSOC    float64 // Powerwall SOC % (for safety display)
 }
 
 // checkBatteryOverflow returns inverter count for overflow mode using SOC-based hysteresis.
@@ -334,23 +335,27 @@ func selectMode(
 ) (ModeResult, DebugModeInfo) {
 	gridAvailable := data.GetBoolean(config.GridStatusTopic)
 	powerwallSOC := data.GetFloat(config.PowerwallSOCTopic).Current
-	acFrequency := data.GetPercentile(config.ACFrequencyTopic, P100, Window15Min)
+	acFreqCurrent := data.GetFloat(config.ACFrequencyTopic).Current
+	acFreqP100 := data.GetPercentile(config.ACFrequencyTopic, P100, Window5Min)
 
 	// Safety check: High grid frequency (>53Hz) - disable all inverters
-	if acFrequency > 53.0 {
+	// Uses 5min P100 (max) to stay in safety mode until frequency has been stable
+	if acFreqP100 > 53.0 {
 		return ModeResult{}, DebugModeInfo{
-			SafetyReason: "High frequency",
-			GridFreq:     acFrequency,
-			PowerwallSOC: powerwallSOC,
+			SafetyReason:    "High frequency",
+			GridFreqCurrent: acFreqCurrent,
+			GridFreqP100:    acFreqP100,
+			PowerwallSOC:    powerwallSOC,
 		}
 	}
 
 	// Safety check: Grid off + high Powerwall SOC (>90%) - disable all inverters
 	if !gridAvailable && powerwallSOC > 90.0 {
 		return ModeResult{}, DebugModeInfo{
-			SafetyReason: "Grid off + high Powerwall",
-			GridFreq:     acFrequency,
-			PowerwallSOC: powerwallSOC,
+			SafetyReason:    "Grid off + high Powerwall",
+			GridFreqCurrent: acFreqCurrent,
+			GridFreqP100:    acFreqP100,
+			PowerwallSOC:    powerwallSOC,
 		}
 	}
 
@@ -442,7 +447,8 @@ func formatDebugOutput(debug DebugModeInfo) string {
 		sb.WriteString("| Safety | Value |\n")
 		sb.WriteString("|--------|------:|\n")
 		fmt.Fprintf(&sb, "| Reason | %s |\n", debug.SafetyReason)
-		fmt.Fprintf(&sb, "| Grid Freq | %.2f Hz |\n", debug.GridFreq)
+		fmt.Fprintf(&sb, "| Freq (now) | %.2f Hz |\n", debug.GridFreqCurrent)
+		fmt.Fprintf(&sb, "| Freq (5m max) | %.2f Hz |\n", debug.GridFreqP100)
 		fmt.Fprintf(&sb, "| Powerwall SOC | %.1f%% |\n", debug.PowerwallSOC)
 		return sb.String()
 	}

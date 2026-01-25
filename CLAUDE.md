@@ -184,7 +184,7 @@ The application uses a goroutine-based architecture with message passing via cha
      - No solar subtraction (batteries are full, dumping excess)
    - **Grid outage behavior**: When grid is unavailable (`binary_sensor.home_sweet_home_grid_status_2` == off), per-battery modes (overflow and forecast excess) are disabled (set to 0W). Global modes (Powerwall Last/Low) still operate to help supply the house during outages.
    - **Safety protections** (checked first, disable ALL inverters including global modes):
-     - **High frequency protection**: If AC frequency 15min P100 (max) > 53Hz, disable all inverters
+     - **High frequency protection**: If AC frequency 5min P100 (max) > 53Hz, disable all inverters
      - **Grid off + high Powerwall**: If grid is off AND Powerwall SOC > 90%, disable all inverters
    - **Mode selection** (per-battery first, then global):
      1. Calculate per-battery overflow counts (SOC-based hysteresis, independent per battery)
@@ -211,7 +211,7 @@ The application uses a goroutine-based architecture with message passing via cha
    - **Debug output**: Publishes all mode values to `input_text.powerhouse_control_debug`
      - Normal mode: GFM table showing Forecast Excess (B2), Forecast Excess (B3), Powerwall Last, Powerwall Low, Overflow (B2), Overflow (B3)
      - Sorted by watts descending, winning mode marked with ✓
-     - Safety mode: When safety protections are active, shows reason, grid frequency, and Powerwall SOC instead of mode table
+     - Safety mode: When safety protections are active, shows reason, current grid frequency, 5-minute P100 grid frequency, and Powerwall SOC instead of mode table
      - Only publishes when values change via `MQTTSender.CallService()`
 
 10. **mqttSenderWorker** (src/mqtt_sender.go)
