@@ -414,12 +414,8 @@ func TestSlowRamp_CoastsWhenEnteringDeadband(t *testing.T) {
 	// Continue coasting until reaching target
 	coastTicks := 1
 	for state.Current < targetInDeadband && coastTicks < 10 {
-		prevCurrent := state.Current
 		state.Update(targetInDeadband, config)
 		coastTicks++
-		if state.Current > prevCurrent {
-			// Still coasting
-		}
 	}
 
 	// Should have taken multiple ticks to coast (not instant snap)
