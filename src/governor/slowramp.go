@@ -76,48 +76,50 @@ func (s *SlowRampState) Update(target float64, config SlowRampConfig) float64 {
 }
 
 // updatePressure updates the pressure accumulator with hysteresis.
-// Pressure builds when diff pushes away from zero, and drains faster when
-// moving back toward zero (controlled by decayMultiplier).
+// Uses normalization to reason about only one direction (positive diff).
 // Deadband has two zones:
-//   - Outer half (deadband/2 to deadband): no pressure change (neutral zone)
-//   - Inner half (0 to deadband/2): diff treated as zero, pressure drains
+//   - Outer half (deadband/2 to deadband): neutral zone (only when building, not draining)
+//   - Inner half (0 to deadband/2): pressure drains toward zero
+//
 // Large diffs (> DoublePressureDiff) build pressure 2x faster.
 func (s *SlowRampState) updatePressure(diff, dt float64, config SlowRampConfig) {
-	absDiff := math.Abs(diff)
-
-	// Outer half of deadband: no pressure change at all (neutral zone)
-	if absDiff > config.Deadband/2 && absDiff <= config.Deadband {
-		return
+	// Normalize: flip signs so diff is always positive
+	// This lets us reason about only one direction
+	sign := 1.0
+	mDiff, mPressure := diff, s.Pressure
+	if diff < 0 {
+		sign = -1.0
+		mDiff = -diff
+		mPressure = -s.Pressure
 	}
 
-	// Inner half of deadband: treat as zero (pressure drains)
-	if absDiff <= config.Deadband/2 {
-		diff = 0
-	}
+	// After normalization:
+	// - mDiff >= 0 (always positive)
+	// - mPressure > 0 means pressure in correct direction (building)
+	// - mPressure < 0 means pressure in wrong direction (needs draining)
 
-	// Base rate, doubled for large diffs
-	rate := dt
-	if math.Abs(diff) > config.DoublePressureDiff {
-		rate *= 2
-	}
-
-	// Faster drain when diff and pressure are on opposite sides (moving toward zero)
-	if diff*s.Pressure < 0 || diff == 0 {
-		rate *= config.DecayMultiplier
-	}
-
-	// Update pressure
 	switch {
-	case diff > 0:
-		s.Pressure += rate
-	case diff < 0:
-		s.Pressure -= rate
+	case mPressure < 0:
+		// Wrong direction - drain toward zero (add because negative)
+		mPressure = min(0, mPressure+dt*config.DecayMultiplier)
+
+	case mDiff <= config.Deadband/2:
+		// Inner deadband - drain toward zero (subtract because positive)
+		mPressure = max(0, mPressure-dt*config.DecayMultiplier)
+
+	case mDiff <= config.Deadband:
+		// Outer deadband - neutral (only reached when mPressure >= 0)
+
+	case mDiff > config.DoublePressureDiff:
+		// Large diff - build at 2x rate
+		mPressure += dt * 2
+
 	default:
-		// Drain toward zero (clamped)
-		drainAmount := min(rate, math.Abs(s.Pressure))
-		s.Pressure -= math.Copysign(drainAmount, s.Pressure)
+		// Normal - build at 1x rate
+		mPressure += dt
 	}
 
-	// Cap pressure
+	// Denormalize and cap
+	s.Pressure = sign * mPressure
 	s.Pressure = max(-config.PressureCapSeconds, min(config.PressureCapSeconds, s.Pressure))
 }
