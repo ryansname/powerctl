@@ -14,19 +14,23 @@ type SlowRampState struct {
 
 // SlowRampConfig holds tunable parameters for the slow ramp smoother.
 type SlowRampConfig struct {
-	ThresholdSeconds float64 // Pressure magnitude required before responding (e.g., 30)
-	RateAccel        float64 // Acceleration of ramp rate in units/s² (e.g., 1.0)
-	DecayMultiplier  float64 // How much faster pressure drains vs builds (e.g., 2.0)
+	ThresholdSeconds   float64 // Pressure magnitude required before responding (e.g., 600)
+	PressureCapSeconds float64 // Maximum pressure magnitude (e.g., 900)
+	RateAccel          float64 // Acceleration of ramp rate in units/s² (e.g., 0.00111)
+	DecayMultiplier    float64 // How much faster pressure drains vs builds (e.g., 4.0)
+	DoublePressureDiff float64 // Diff magnitude above which pressure builds 2x faster (e.g., 1000)
 }
 
 // DefaultSlowRampConfig returns the default configuration for power smoothing.
-// With threshold=120s, pressure cap=240s, progressSeconds at cap=120s.
-// RateAccel chosen so maxRate = 100 W/s at cap: 100 / 120² = 0.00694
+// With threshold=600s (10min), pressure cap=900s (15min), progressSeconds at cap=300s.
+// RateAccel chosen so maxRate = 100 W/s at cap: 100 / 300² = 0.00111
 func DefaultSlowRampConfig() SlowRampConfig {
 	return SlowRampConfig{
-		ThresholdSeconds: 120.0,
-		RateAccel:        100.0 / (120.0 * 120.0), // 100 W/s max at pressure cap
-		DecayMultiplier:  2.0,
+		ThresholdSeconds:   600.0,
+		PressureCapSeconds: 900.0,
+		RateAccel:          100.0 / (300.0 * 300.0), // 100 W/s max at pressure cap
+		DecayMultiplier:    4.0,
+		DoublePressureDiff: 1000.0, // 1kW
 	}
 }
 
@@ -49,11 +53,12 @@ func (s *SlowRampState) Update(target float64, config SlowRampConfig) float64 {
 	diff := target - s.Current
 
 	// Update pressure with hysteresis
-	s.updatePressure(diff, dt, config.DecayMultiplier, config.ThresholdSeconds)
+	s.updatePressure(diff, dt, config)
 
-	// Only ramp when pressure magnitude exceeds threshold
+	// Only ramp when pressure magnitude exceeds threshold AND pressure/diff agree on direction
+	// This prevents ramping away from target when target reverses
 	absPressure := math.Abs(s.Pressure)
-	if absPressure > config.ThresholdSeconds {
+	if absPressure > config.ThresholdSeconds && diff*s.Pressure > 0 {
 		// Quadratic acceleration: slow start, speeds up over time
 		progressSeconds := absPressure - config.ThresholdSeconds
 		maxRate := config.RateAccel * progressSeconds * progressSeconds
@@ -72,11 +77,17 @@ func (s *SlowRampState) Update(target float64, config SlowRampConfig) float64 {
 // updatePressure updates the pressure accumulator with hysteresis.
 // Pressure builds when diff pushes away from zero, and drains faster when
 // moving back toward zero (controlled by decayMultiplier).
-func (s *SlowRampState) updatePressure(diff, dt, decayMultiplier, thresholdSeconds float64) {
-	// Faster rate when diff and pressure are on opposite sides (moving toward zero)
+// Large diffs (> DoublePressureDiff) build pressure 2x faster.
+func (s *SlowRampState) updatePressure(diff, dt float64, config SlowRampConfig) {
+	// Base rate, doubled for large diffs
 	rate := dt
+	if math.Abs(diff) > config.DoublePressureDiff {
+		rate *= 2
+	}
+
+	// Faster drain when diff and pressure are on opposite sides (moving toward zero)
 	if diff*s.Pressure < 0 || diff == 0 {
-		rate *= decayMultiplier
+		rate *= config.DecayMultiplier
 	}
 
 	// Update pressure
@@ -91,7 +102,6 @@ func (s *SlowRampState) updatePressure(diff, dt, decayMultiplier, thresholdSecon
 		s.Pressure -= math.Copysign(drainAmount, s.Pressure)
 	}
 
-	// Cap pressure at 2x threshold (limits max ramp rate)
-	maxPressure := thresholdSeconds * 2
-	s.Pressure = max(-maxPressure, min(maxPressure, s.Pressure))
+	// Cap pressure
+	s.Pressure = max(-config.PressureCapSeconds, min(config.PressureCapSeconds, s.Pressure))
 }

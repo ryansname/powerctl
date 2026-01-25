@@ -20,9 +20,11 @@ func TestSlowRamp_InitializesToTarget(t *testing.T) {
 func TestSlowRamp_IgnoresOscillation(t *testing.T) {
 	state := SlowRampState{}
 	config := SlowRampConfig{
-		ThresholdSeconds: 30,
-		RateAccel:        1.0,
-		DecayMultiplier:  2.0,
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 60,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9, // effectively disabled for tests
 	}
 
 	// Initialize at 1000W
@@ -46,9 +48,11 @@ func TestSlowRamp_IgnoresOscillation(t *testing.T) {
 func TestSlowRamp_RespondsToSustained(t *testing.T) {
 	state := SlowRampState{}
 	config := SlowRampConfig{
-		ThresholdSeconds: 30,
-		RateAccel:        1.0,
-		DecayMultiplier:  2.0,
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 60,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9, // effectively disabled for tests
 	}
 
 	// Initialize at 0
@@ -68,9 +72,11 @@ func TestSlowRamp_RespondsToSustained(t *testing.T) {
 func TestSlowRamp_AcceleratesOverTime(t *testing.T) {
 	state := SlowRampState{}
 	config := SlowRampConfig{
-		ThresholdSeconds: 30,
-		RateAccel:        1.0,
-		DecayMultiplier:  2.0,
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 60,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9, // effectively disabled for tests
 	}
 
 	// Initialize at 0
@@ -100,9 +106,11 @@ func TestSlowRamp_AcceleratesOverTime(t *testing.T) {
 func TestSlowRamp_NeverOvershoots(t *testing.T) {
 	state := SlowRampState{}
 	config := SlowRampConfig{
-		ThresholdSeconds: 30,
-		RateAccel:        1.0,
-		DecayMultiplier:  2.0,
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 60,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9, // effectively disabled for tests
 	}
 
 	// Initialize at 0
@@ -123,9 +131,11 @@ func TestSlowRamp_NeverOvershoots(t *testing.T) {
 func TestSlowRamp_DrainsThenBuilds(t *testing.T) {
 	state := SlowRampState{}
 	config := SlowRampConfig{
-		ThresholdSeconds: 30,
-		RateAccel:        1.0,
-		DecayMultiplier:  2.0,
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 60,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9, // effectively disabled for tests
 	}
 
 	// Initialize at 0
@@ -162,9 +172,11 @@ func TestSlowRamp_DrainsThenBuilds(t *testing.T) {
 func TestSlowRamp_HysteresisDecaysFaster(t *testing.T) {
 	state := SlowRampState{}
 	config := SlowRampConfig{
-		ThresholdSeconds: 30,
-		RateAccel:        1.0,
-		DecayMultiplier:  2.0,
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 60,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9, // effectively disabled for tests
 	}
 
 	// Initialize at 0
@@ -188,9 +200,11 @@ func TestSlowRamp_HysteresisDecaysFaster(t *testing.T) {
 func TestSlowRamp_PressureCappedAt2xThreshold(t *testing.T) {
 	state := SlowRampState{}
 	config := SlowRampConfig{
-		ThresholdSeconds: 30,
-		RateAccel:        1.0,
-		DecayMultiplier:  2.0,
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 60,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9, // effectively disabled for tests
 	}
 
 	// Initialize
@@ -209,9 +223,11 @@ func TestSlowRamp_PressureCappedAt2xThreshold(t *testing.T) {
 func TestSlowRamp_MaxRateAt2xThreshold(t *testing.T) {
 	state := SlowRampState{}
 	config := SlowRampConfig{
-		ThresholdSeconds: 30,
-		RateAccel:        1.0,
-		DecayMultiplier:  2.0,
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 60,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9, // effectively disabled for tests
 	}
 
 	// Initialize at 0
@@ -230,4 +246,38 @@ func TestSlowRamp_MaxRateAt2xThreshold(t *testing.T) {
 	delta := state.Current - before
 
 	assert.InDelta(t, 900.0, delta, 1.0, "Max rate should be 900 W/s at pressure cap")
+}
+
+func TestSlowRamp_DoesNotRampAwayFromTarget(t *testing.T) {
+	state := SlowRampState{}
+	config := SlowRampConfig{
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 60,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9, // effectively disabled for tests
+	}
+
+	// Initialize at 500
+	state.Update(500, config)
+	assert.Equal(t, 500.0, state.Current)
+
+	// Build positive pressure past threshold with target above current
+	for range 35 {
+		state.Update(1000, config)
+	}
+	assert.Greater(t, state.Pressure, 30.0, "Pressure should exceed threshold")
+	assert.Greater(t, state.Current, 500.0, "Should have started ramping up")
+	currentBeforeDrop := state.Current
+
+	// Now drop target BELOW current - pressure is still positive
+	// Current should NOT decrease (would be ramping away from target)
+	for range 10 {
+		result := state.Update(0, config)
+		assert.GreaterOrEqual(t, result, currentBeforeDrop,
+			"Current should not decrease when target drops below it (positive pressure)")
+	}
+
+	// Pressure should be draining (diff and pressure have opposite signs)
+	assert.Less(t, state.Pressure, 35.0, "Pressure should be draining")
 }

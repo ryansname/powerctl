@@ -11,7 +11,6 @@ import (
 
 // Window constants for GetPercentile
 const (
-	Window1Min  = 1 * time.Minute
 	Window5Min  = 5 * time.Minute
 	Window15Min = 15 * time.Minute
 )
@@ -55,23 +54,17 @@ var requiredPercentiles = map[string][]PercentileSpec{
 	// Powerwall SOC - used by unifiedInverterEnabler for P1._15
 	"homeassistant/sensor/home_sweet_home_charge/state": {{1, 15 * time.Minute}},
 
-	// Load power - used by unifiedInverterEnabler for P66._1, P99._1 (slow ramp input), P66._15, P99._15
+	// Load power - used by unifiedInverterEnabler for P66._15, P99._15
 	"homeassistant/sensor/home_sweet_home_load_power_2/state": {
-		{66, 1 * time.Minute},
-		{99, 1 * time.Minute},
 		{66, 15 * time.Minute},
 		{99, 15 * time.Minute},
 	},
 
-	// Solar 1 power - used by multiple workers for P50._5, P66._5, P99._15
+	// Solar 1 power - used by power_excess_calculator for P50._5, unifiedInverterEnabler for P99._15
 	TopicSolar1Power: {
 		{50, 5 * time.Minute},
-		{66, 5 * time.Minute},
 		{99, 15 * time.Minute},
 	},
-
-	// Solar 2 power (primo) - used by unifiedInverterEnabler for P66._5
-	"homeassistant/sensor/primo_5_0_ac_power/state": {{66, 5 * time.Minute}},
 
 	// Tesla battery remaining - used by powerExcessCalculator for P50._5
 	"homeassistant/sensor/home_sweet_home_tg118095000r1a_battery_remaining/state": {{50, 5 * time.Minute}},

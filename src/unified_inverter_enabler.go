@@ -601,7 +601,7 @@ func forecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessS
 }
 
 // slowRampConfig is the configuration for Powerwall mode slow ramp smoothing.
-// Uses 1min percentiles as input, with 30-second threshold and quadratic acceleration.
+// Uses raw current values as input, with 5-minute threshold and quadratic acceleration.
 var slowRampConfig = governor.DefaultSlowRampConfig()
 
 // powerwallLastRequest returns 2/3 of the remaining load after solar subtraction,
@@ -613,14 +613,14 @@ func powerwallLastRequest(
 	currentSolar float64,
 	state *InverterEnablerState,
 ) PowerRequest {
-	loadPower1MinP66 := data.GetPercentile(config.LoadPowerTopic, P66, Window1Min)
+	loadPower := data.GetFloat(config.LoadPowerTopic).Current
 	// Supply 2/3 of the remaining load after solar, leaving Powerwall to cover only 1/3
-	rawTarget := max((loadPower1MinP66-currentSolar)*(2.0/3.0), 0)
+	rawTarget := max((loadPower-currentSolar)*(2.0/3.0), 0)
 	smoothed := state.powerwallLastRamp.Update(rawTarget, slowRampConfig)
 	return PowerRequest{Name: "PowerwallLast", Watts: smoothed}
 }
 
-// powerwallLowRequest returns 1min P99 load minus current solar if powerwall SOC is low, else 0,
+// powerwallLowRequest returns current load minus current solar if powerwall SOC is low, else 0,
 // with slow ramp smoothing applied (pressure-gated accelerating ramp).
 func powerwallLowRequest(
 	data DisplayData,
@@ -634,7 +634,7 @@ func powerwallLowRequest(
 	if powerwallSOC15MinP1 >= config.PowerwallLowThreshold {
 		rawTarget = 0
 	} else {
-		loadPower := data.GetPercentile(config.LoadPowerTopic, P99, Window1Min)
+		loadPower := data.GetFloat(config.LoadPowerTopic).Current
 		rawTarget = max(loadPower-currentSolar, 0)
 	}
 
@@ -683,10 +683,10 @@ func calculateTargetPower(requests []PowerRequest, limits []PowerLimit) (float64
 	return max(target, 0), modes
 }
 
-// currentSolarGeneration returns the current solar generation (5min P66) from solar 1 and 2
+// currentSolarGeneration returns the current solar generation from solar 1 and 2
 func currentSolarGeneration(data DisplayData, config UnifiedInverterConfig) float64 {
-	solar1 := data.GetPercentile(config.Solar1PowerTopic, P66, Window5Min)
-	solar2 := data.GetPercentile(config.Solar2PowerTopic, P66, Window5Min)
+	solar1 := data.GetFloat(config.Solar1PowerTopic).Current
+	solar2 := data.GetFloat(config.Solar2PowerTopic).Current
 	return solar1 + solar2
 }
 
