@@ -343,3 +343,68 @@ func TestSlowRamp_DeadbandDrainsPressure(t *testing.T) {
 	// 5 seconds at 2x decay = 10s drained: 20 - 10 = 10
 	assert.Equal(t, 10.0, state.Pressure, "Pressure should drain when diff within deadband")
 }
+
+func TestSlowRamp_CoastsWhenEnteringDeadband(t *testing.T) {
+	// Test behavior when ramping value enters deadband with pressure above threshold:
+	// Should continue "coasting" toward target while pressure drains.
+	// Use small RateAccel so maxRate << diff, ensuring multiple coasting ticks.
+	state := SlowRampState{}
+	config := SlowRampConfig{
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 120,
+		RateAccel:          0.1, // Small accel: at 30s past threshold, maxRate = 0.1 * 30² = 90 W/s
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9,
+		Deadband:           500, // Large deadband
+	}
+
+	// Initialize at 0
+	state.Update(0, config)
+
+	// Build pressure to 60s (30s past threshold) targeting 10000W
+	for range 60 {
+		state.Update(10000, config)
+	}
+	assert.Equal(t, 60.0, state.Pressure)
+	currentAfterBuildup := state.Current
+	assert.Greater(t, currentAfterBuildup, 0.0, "Should have started ramping")
+
+	// Now set target within deadband of current
+	// diff = 200 < 500 deadband, but maxRate at 30s progress = 90 W/s
+	// So it takes multiple ticks to coast to target
+	targetInDeadband := currentAfterBuildup + 200
+
+	currentBefore := state.Current
+	pressureBefore := state.Pressure
+
+	// First tick: should coast (ramp toward target) while pressure drains
+	state.Update(targetInDeadband, config)
+	assert.Greater(t, state.Current, currentBefore, "Should coast toward target")
+	assert.Less(t, state.Current, targetInDeadband, "Should not reach target in one tick (maxRate < diff)")
+	assert.Less(t, state.Pressure, pressureBefore, "Pressure should drain")
+
+	// Continue coasting until reaching target
+	coastTicks := 1
+	for state.Current < targetInDeadband && coastTicks < 10 {
+		prevCurrent := state.Current
+		state.Update(targetInDeadband, config)
+		coastTicks++
+		if state.Current > prevCurrent {
+			// Still coasting
+		}
+	}
+
+	// Should have taken multiple ticks to coast (not instant snap)
+	assert.Greater(t, coastTicks, 1, "Should coast over multiple ticks")
+	assert.Equal(t, targetInDeadband, state.Current, "Should eventually reach target")
+
+	// Pressure should still be above threshold (drains at 2s/tick, started at 60, 3 ticks = 54)
+	assert.Greater(t, state.Pressure, config.ThresholdSeconds, "Pressure should still be above threshold after coasting")
+
+	// After reaching target, diff=0, so no more movement even with pressure above threshold
+	finalCurrent := state.Current
+	for range 10 {
+		state.Update(targetInDeadband, config)
+	}
+	assert.Equal(t, finalCurrent, state.Current, "Should stop at target (diff=0)")
+}
