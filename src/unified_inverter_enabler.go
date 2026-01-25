@@ -162,6 +162,10 @@ type InverterEnablerState struct {
 	// Slow ramp smoothing for Powerwall modes (pressure-gated accelerating ramp)
 	powerwallLastRamp governor.SlowRampState
 	powerwallLowRamp  governor.SlowRampState
+
+	// Last published pressure values (only publish when changed by > threshold)
+	lastPublishedPressureLast float64
+	lastPublishedPressureLow  float64
 }
 
 // ModeResult represents the outcome of mode selection (in inverter counts)
@@ -476,8 +480,17 @@ func unifiedInverterEnabler(
 			// Publish slow ramp debug sensors
 			sender.PublishDebugSensor("powerctl_powerwall_last_smoothed", state.powerwallLastRamp.Current)
 			sender.PublishDebugSensor("powerctl_powerwall_low_smoothed", state.powerwallLowRamp.Current)
-			sender.PublishDebugSensor("powerctl_powerwall_last_pressure", state.powerwallLastRamp.Pressure)
-			sender.PublishDebugSensor("powerctl_powerwall_low_pressure", state.powerwallLowRamp.Pressure)
+
+			// Only publish pressure when changed by > 25 to reduce MQTT traffic
+			const pressurePublishThreshold = 25.0
+			if math.Abs(state.powerwallLastRamp.Pressure-state.lastPublishedPressureLast) > pressurePublishThreshold {
+				sender.PublishDebugSensor("powerctl_powerwall_last_pressure", state.powerwallLastRamp.Pressure)
+				state.lastPublishedPressureLast = state.powerwallLastRamp.Pressure
+			}
+			if math.Abs(state.powerwallLowRamp.Pressure-state.lastPublishedPressureLow) > pressurePublishThreshold {
+				sender.PublishDebugSensor("powerctl_powerwall_low_pressure", state.powerwallLowRamp.Pressure)
+				state.lastPublishedPressureLow = state.powerwallLowRamp.Pressure
+			}
 
 			// Apply changes
 			changed := applyInverterChanges(data, config, sender, modeResult.Battery2Count, modeResult.Battery3Count)
