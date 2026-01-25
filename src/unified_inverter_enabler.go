@@ -613,9 +613,13 @@ func forecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessS
 	return result
 }
 
-// slowRampConfig is the configuration for Powerwall mode slow ramp smoothing.
-// Uses raw current values as input, with 5-minute threshold and quadratic acceleration.
-var slowRampConfig = governor.DefaultSlowRampConfig()
+// slowRampConfig returns the configuration for Powerwall mode slow ramp smoothing.
+// Deadband is set to half an inverter's power to prevent toggling from small changes.
+func slowRampConfig(wattsPerInverter float64) governor.SlowRampConfig {
+	config := governor.DefaultSlowRampConfig()
+	config.Deadband = wattsPerInverter / 2
+	return config
+}
 
 // powerwallLastRequest returns 2/3 of the remaining load after solar subtraction,
 // leaving the Powerwall to supply only 1/3 of the net load.
@@ -629,7 +633,7 @@ func powerwallLastRequest(
 	loadPower := data.GetFloat(config.LoadPowerTopic).Current
 	// Supply 2/3 of the remaining load after solar, leaving Powerwall to cover only 1/3
 	rawTarget := max((loadPower-currentSolar)*(2.0/3.0), 0)
-	smoothed := state.powerwallLastRamp.Update(rawTarget, slowRampConfig)
+	smoothed := state.powerwallLastRamp.Update(rawTarget, slowRampConfig(config.WattsPerInverter))
 	return PowerRequest{Name: "PowerwallLast", Watts: smoothed}
 }
 
@@ -651,7 +655,7 @@ func powerwallLowRequest(
 		rawTarget = max(loadPower-currentSolar, 0)
 	}
 
-	smoothed := state.powerwallLowRamp.Update(rawTarget, slowRampConfig)
+	smoothed := state.powerwallLowRamp.Update(rawTarget, slowRampConfig(config.WattsPerInverter))
 	return PowerRequest{Name: "PowerwallLow", Watts: smoothed}
 }
 

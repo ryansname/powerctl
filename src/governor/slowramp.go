@@ -19,6 +19,7 @@ type SlowRampConfig struct {
 	RateAccel          float64 // Acceleration of ramp rate in units/s² (e.g., 0.00111)
 	DecayMultiplier    float64 // How much faster pressure drains vs builds (e.g., 4.0)
 	DoublePressureDiff float64 // Diff magnitude above which pressure builds 2x faster (e.g., 1000)
+	Deadband           float64 // Diff magnitude below which diff is treated as 0 (e.g., 127.5)
 }
 
 // DefaultSlowRampConfig returns the default configuration for power smoothing.
@@ -77,8 +78,14 @@ func (s *SlowRampState) Update(target float64, config SlowRampConfig) float64 {
 // updatePressure updates the pressure accumulator with hysteresis.
 // Pressure builds when diff pushes away from zero, and drains faster when
 // moving back toward zero (controlled by decayMultiplier).
+// Diffs within the deadband are treated as zero (no pressure change).
 // Large diffs (> DoublePressureDiff) build pressure 2x faster.
 func (s *SlowRampState) updatePressure(diff, dt float64, config SlowRampConfig) {
+	// Treat small diffs as zero (deadband)
+	if math.Abs(diff) <= config.Deadband {
+		diff = 0
+	}
+
 	// Base rate, doubled for large diffs
 	rate := dt
 	if math.Abs(diff) > config.DoublePressureDiff {

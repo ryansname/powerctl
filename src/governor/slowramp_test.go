@@ -281,3 +281,65 @@ func TestSlowRamp_DoesNotRampAwayFromTarget(t *testing.T) {
 	// Pressure should be draining (diff and pressure have opposite signs)
 	assert.Less(t, state.Pressure, 35.0, "Pressure should be draining")
 }
+
+func TestSlowRamp_DeadbandIgnoresSmallDiffs(t *testing.T) {
+	state := SlowRampState{}
+	config := SlowRampConfig{
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 60,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9,
+		Deadband:           100, // 100W deadband
+	}
+
+	// Initialize at 500W
+	state.Update(500, config)
+	assert.Equal(t, 500.0, state.Current)
+	assert.Equal(t, 0.0, state.Pressure)
+
+	// Target within deadband (500 + 50 = 550, diff = 50 < 100)
+	// Should not build pressure
+	for range 60 {
+		state.Update(550, config)
+	}
+	assert.Equal(t, 500.0, state.Current, "Should not move when diff within deadband")
+	assert.Equal(t, 0.0, state.Pressure, "Should not build pressure when diff within deadband")
+
+	// Target outside deadband (500 + 150 = 650, diff = 150 > 100)
+	// Should build pressure
+	for range 35 {
+		state.Update(650, config)
+	}
+	assert.Greater(t, state.Pressure, 30.0, "Should build pressure when diff exceeds deadband")
+	assert.Greater(t, state.Current, 500.0, "Should start ramping when pressure exceeds threshold")
+}
+
+func TestSlowRamp_DeadbandDrainsPressure(t *testing.T) {
+	state := SlowRampState{}
+	config := SlowRampConfig{
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 60,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		DoublePressureDiff: 1e9,
+		Deadband:           100,
+	}
+
+	// Initialize at 0
+	state.Update(0, config)
+
+	// Build pressure with large diff (outside deadband)
+	for range 20 {
+		state.Update(500, config)
+	}
+	assert.Equal(t, 20.0, state.Pressure, "Should have built 20s of pressure")
+
+	// Now target within deadband of current (0 + 50 = 50, diff = 50 < 100)
+	// Diff is treated as 0, so pressure should drain at decay rate
+	for range 5 {
+		state.Update(50, config)
+	}
+	// 5 seconds at 2x decay = 10s drained: 20 - 10 = 10
+	assert.Equal(t, 10.0, state.Pressure, "Pressure should drain when diff within deadband")
+}
