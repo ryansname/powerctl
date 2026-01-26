@@ -648,7 +648,8 @@ func powerwallLastRequest(
 ) PowerRequest {
 	loadPower := data.GetFloat(config.LoadPowerTopic).Current
 	// Supply 2/3 of the remaining load after solar, leaving Powerwall to cover only 1/3
-	rawTarget := max((loadPower-currentSolar)*(2.0/3.0), 0)
+	// Allow negative targets so slow ramp can respond to excess solar generation
+	rawTarget := (loadPower - currentSolar) * (2.0 / 3.0)
 	smoothed := state.powerwallLastRamp.Update(rawTarget, slowRampConfig(config.WattsPerInverter))
 	return PowerRequest{Name: "PowerwallLast", Watts: smoothed}
 }
@@ -663,12 +664,13 @@ func powerwallLowRequest(
 ) PowerRequest {
 	powerwallSOC15MinP1 := data.GetPercentile(config.PowerwallSOCTopic, P1, Window15Min)
 
+	// Allow negative targets so slow ramp can respond to excess solar generation
 	var rawTarget float64
 	if powerwallSOC15MinP1 >= config.PowerwallLowThreshold {
 		rawTarget = 0
 	} else {
 		loadPower := data.GetFloat(config.LoadPowerTopic).Current
-		rawTarget = max(loadPower-currentSolar, 0)
+		rawTarget = loadPower - currentSolar
 	}
 
 	smoothed := state.powerwallLowRamp.Update(rawTarget, slowRampConfig(config.WattsPerInverter))
