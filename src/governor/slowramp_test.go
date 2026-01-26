@@ -7,15 +7,15 @@ import (
 )
 
 // testConfig returns a simple config for testing updatePressure behavior.
-// Deadband=100, DoublePressureDiff=1000, DecayMultiplier=4, PressureCapSeconds=100
+// FullPressureDiff=100, DoublePressureDiff=1000, DecayMultiplier=4, PressureCapSeconds=100
 func testConfig() SlowRampConfig {
 	return SlowRampConfig{
 		ThresholdSeconds:   30,
 		PressureCapSeconds: 100,
 		RateAccel:          1.0,
 		DecayMultiplier:    4.0,
+		FullPressureDiff:   100,
 		DoublePressureDiff: 1000,
-		Deadband:           100,
 	}
 }
 
@@ -40,17 +40,20 @@ func TestUpdatePressure(t *testing.T) {
 		{"drain_pos_pressure", 20, -200, 16},  // 20 - 4 = 16
 		{"drain_neg_pressure", -20, 200, -16}, // -20 + 4 = -16
 
-		// Inner deadband (diff <= Deadband/2 = 50) - drains
-		{"inner_deadband_pos", 20, 25, 16},   // drains at 4x
-		{"inner_deadband_neg", -20, -25, -16},
-		{"inner_deadband_zero", 20, 0, 16},   // diff=0 is inner deadband
-		{"inner_deadband_exact", 20, 50, 16}, // exactly at boundary
+		// Within FullPressureDiff (0 < diff < 100) - lerped rate
+		{"lerped_quarter", 20, 25, 20.25},  // rate = 25/100 = 0.25
+		{"lerped_quarter_neg", -20, -25, -20.25},
+		{"lerped_zero", 20, 0, 20},         // rate = 0/100 = 0 (no change)
+		{"lerped_half", 20, 50, 20.5},      // rate = 50/100 = 0.5
+		{"lerped_three_quarter", 20, 75, 20.75}, // rate = 75/100 = 0.75
+		{"lerped_three_quarter_neg", -20, -75, -20.75},
 
-		// Outer deadband (Deadband/2 < diff <= Deadband)
-		{"outer_deadband_building_pos", 20, 75, 20}, // Neutral when building
-		{"outer_deadband_building_neg", -20, -75, -20},
-		{"outer_deadband_draining", 20, -75, 16}, // Drains when wrong dir (bug fix!)
-		{"outer_deadband_exact", 20, 100, 20},    // exactly at boundary
+		// At or above FullPressureDiff - full rate
+		{"full_rate_exact", 20, 100, 21},   // rate = 1.0
+		{"full_rate_above", 20, 150, 21},   // rate = 1.0
+
+		// Wrong direction still drains
+		{"wrong_dir_drains", 20, -75, 16}, // mPressure > 0 but diff < 0
 
 		// Pressure cap
 		{"cap_positive", 99, 200, 100},

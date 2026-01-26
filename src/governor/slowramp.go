@@ -18,8 +18,8 @@ type SlowRampConfig struct {
 	PressureCapSeconds float64 // Maximum pressure magnitude (e.g., 900)
 	RateAccel          float64 // Acceleration of ramp rate in units/s² (e.g., 0.00111)
 	DecayMultiplier    float64 // How much faster pressure drains vs builds (e.g., 4.0)
+	FullPressureDiff   float64 // Diff magnitude at which pressure builds at full (1x) rate; below this, rate is lerped from 0
 	DoublePressureDiff float64 // Diff magnitude above which pressure builds 2x faster (e.g., 1000)
-	Deadband           float64 // Diff magnitude below which diff is treated as 0 (e.g., 127.5)
 }
 
 // DefaultSlowRampConfig returns the default configuration for power smoothing.
@@ -77,11 +77,10 @@ func (s *SlowRampState) Update(target float64, config SlowRampConfig) float64 {
 
 // updatePressure updates the pressure accumulator with hysteresis.
 // Uses normalization to reason about only one direction (positive diff).
-// Deadband has two zones:
-//   - Outer half (deadband/2 to deadband): neutral zone (only when building, not draining)
-//   - Inner half (0 to deadband/2): pressure drains toward zero
-//
-// Large diffs (> DoublePressureDiff) build pressure 2x faster.
+// Pressure building rate scales with diff magnitude:
+//   - Below FullPressureDiff: rate lerps from 0 (at diff=0) to 1 (at diff=FullPressureDiff)
+//   - Above FullPressureDiff: rate = 1x
+//   - Above DoublePressureDiff: rate = 2x
 func (s *SlowRampState) updatePressure(diff, dt float64, config SlowRampConfig) {
 	// Normalize: flip signs so diff is always positive
 	// This lets us reason about only one direction
@@ -103,20 +102,21 @@ func (s *SlowRampState) updatePressure(diff, dt float64, config SlowRampConfig) 
 		// Wrong direction - drain toward zero (add because negative)
 		mPressure = min(0, mPressure+dt*config.DecayMultiplier)
 
-	case mDiff <= config.Deadband/2:
-		// Inner deadband - drain toward zero (subtract because positive)
-		mPressure = max(0, mPressure-dt*config.DecayMultiplier)
-
-	case mDiff <= config.Deadband:
-		// Outer deadband - neutral (only reached when mPressure >= 0)
-
 	case mDiff > config.DoublePressureDiff:
 		// Large diff - build at 2x rate
 		mPressure += dt * 2
 
-	default:
+	case mDiff >= config.FullPressureDiff:
 		// Normal - build at 1x rate
 		mPressure += dt
+
+	case config.FullPressureDiff > 0:
+		// Below FullPressureDiff - build at lerped rate (0 at diff=0, 1 at diff=FullPressureDiff)
+		rate := mDiff / config.FullPressureDiff
+		mPressure += dt * rate
+
+	default:
+		// FullPressureDiff disabled (0) and diff is 0 - no change
 	}
 
 	// Denormalize and cap

@@ -162,10 +162,6 @@ type InverterEnablerState struct {
 	// Slow ramp smoothing for Powerwall modes (pressure-gated accelerating ramp)
 	powerwallLastRamp governor.SlowRampState
 	powerwallLowRamp  governor.SlowRampState
-
-	// Last published pressure values (only publish when changed by > threshold)
-	lastPublishedPressureLast float64
-	lastPublishedPressureLow  float64
 }
 
 // ModeResult represents the outcome of mode selection (in inverter counts)
@@ -509,16 +505,8 @@ func unifiedInverterEnabler(
 			sender.PublishDebugSensor("powerctl_powerwall_last_smoothed", state.powerwallLastRamp.Current)
 			sender.PublishDebugSensor("powerctl_powerwall_low_smoothed", state.powerwallLowRamp.Current)
 
-			// Only publish pressure when changed by > 25 to reduce MQTT traffic
-			const pressurePublishThreshold = 25.0
-			if math.Abs(state.powerwallLastRamp.Pressure-state.lastPublishedPressureLast) > pressurePublishThreshold {
-				sender.PublishDebugSensor("powerctl_powerwall_last_pressure", state.powerwallLastRamp.Pressure)
-				state.lastPublishedPressureLast = state.powerwallLastRamp.Pressure
-			}
-			if math.Abs(state.powerwallLowRamp.Pressure-state.lastPublishedPressureLow) > pressurePublishThreshold {
-				sender.PublishDebugSensor("powerctl_powerwall_low_pressure", state.powerwallLowRamp.Pressure)
-				state.lastPublishedPressureLow = state.powerwallLowRamp.Pressure
-			}
+			// Publish pwlast pressure every tick for debugging
+			sender.PublishDebugSensor("powerctl_powerwall_last_pressure", state.powerwallLastRamp.Pressure)
 
 			// Apply changes
 			changed := applyInverterChanges(data, config, sender, modeResult.Battery2Count, modeResult.Battery3Count)
@@ -642,10 +630,10 @@ func forecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessS
 }
 
 // slowRampConfig returns the configuration for Powerwall mode slow ramp smoothing.
-// Deadband is set to half an inverter's power to prevent toggling from small changes.
+// FullPressureDiff is set to half an inverter's power so small changes build pressure slowly.
 func slowRampConfig(wattsPerInverter float64) governor.SlowRampConfig {
 	config := governor.DefaultSlowRampConfig()
-	config.Deadband = wattsPerInverter / 2
+	config.FullPressureDiff = wattsPerInverter / 2
 	return config
 }
 
