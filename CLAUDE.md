@@ -184,7 +184,7 @@ The application uses a goroutine-based architecture with message passing via cha
      - No solar subtraction (batteries are full, dumping excess)
    - **Grid outage behavior**: When grid is unavailable (`binary_sensor.home_sweet_home_grid_status_2` == off), per-battery modes (overflow and forecast excess) are disabled (set to 0W). Global modes (Powerwall Last/Low) still operate to help supply the house during outages.
    - **Safety protections** (checked first, disable ALL inverters including global modes):
-     - **High frequency protection**: If AC frequency 5min P100 (max) > 53Hz, disable all inverters
+     - **High frequency protection**: If AC frequency 5min P100 (max) > 52.75Hz, disable all inverters
      - **Grid off + high Powerwall**: If grid is off AND Powerwall SOC > 90%, disable all inverters
    - **Mode selection** (per-battery first, then global):
      1. Calculate per-battery overflow counts (SOC-based hysteresis, independent per battery)

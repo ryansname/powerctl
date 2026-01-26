@@ -338,9 +338,9 @@ func selectMode(
 	acFreqCurrent := data.GetFloat(config.ACFrequencyTopic).Current
 	acFreqP100 := data.GetPercentile(config.ACFrequencyTopic, P100, Window5Min)
 
-	// Safety check: High grid frequency (>53Hz) - disable all inverters
+	// Safety check: High grid frequency (>52.75Hz) - disable all inverters
 	// Uses 5min P100 (max) to stay in safety mode until frequency has been stable
-	if acFreqP100 > 53.0 {
+	if acFreqP100 > 52.75 {
 		return ModeResult{}, DebugModeInfo{
 			SafetyReason:    "High frequency",
 			GridFreqCurrent: acFreqCurrent,
