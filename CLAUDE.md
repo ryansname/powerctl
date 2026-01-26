@@ -338,16 +338,15 @@ The application uses a goroutine-based architecture with message passing via cha
   - `ThresholdSeconds`: Pressure magnitude required before responding (default: 600)
   - `PressureCapSeconds`: Maximum pressure magnitude (default: 900)
   - `RateAccel`: Acceleration of ramp rate in units/s² (default: 0.00111)
-  - `DecayMultiplier`: How much faster pressure drains vs builds (default: 4.0)
-  - `FullPressureDiff`: Diff at which pressure builds at full (1x) rate; below this, rate is lerped from 0
-  - `DoublePressureDiff`: Diff above which pressure builds at 2x rate (default: 1000)
+  - `DecayMultiplier`: Multiplier for drain rate vs build rate (default: 4.0)
+  - `FullPressureDiff`: Diff at which pressure builds/drains at 1x rate; rate scales linearly with diff
 - **Algorithm behavior**:
   - Ignores brief fluctuations - only responds after sustained change
   - Slow initial response that accelerates over time (opposite of EMA)
   - Never overshoots - step is capped at remaining difference
-  - Hysteresis: pressure drains faster than it builds (DecayMultiplier)
-  - Small diffs (below FullPressureDiff) build pressure at lerped rate (0 at diff=0, 1x at FullPressureDiff)
-  - Large diffs (above DoublePressureDiff) build pressure at 2x rate
+  - Both build and drain rates scale linearly: rate = diff / FullPressureDiff
+  - Drain rate is multiplied by DecayMultiplier for faster response to direction changes
+  - At diff=0, pressure stays constant (no build, no drain)
 - **Debug sensor**: `sensor.powerctl_powerwall_last_pressure`
 
 ### Statistics Algorithm

@@ -18,8 +18,7 @@ type SlowRampConfig struct {
 	PressureCapSeconds float64 // Maximum pressure magnitude (e.g., 900)
 	RateAccel          float64 // Acceleration of ramp rate in units/s² (e.g., 0.00111)
 	DecayMultiplier    float64 // How much faster pressure drains vs builds (e.g., 4.0)
-	FullPressureDiff   float64 // Diff magnitude at which pressure builds at full (1x) rate; below this, rate is lerped from 0
-	DoublePressureDiff float64 // Diff magnitude above which pressure builds 2x faster (e.g., 1000)
+	FullPressureDiff   float64 // Diff magnitude at which pressure builds at 1x rate; rate scales linearly (2x at 2*FullPressureDiff, etc.)
 }
 
 // DefaultSlowRampConfig returns the default configuration for power smoothing.
@@ -31,7 +30,6 @@ func DefaultSlowRampConfig() SlowRampConfig {
 		PressureCapSeconds: 900.0,
 		RateAccel:          100.0 / (300.0 * 300.0), // 100 W/s max at pressure cap
 		DecayMultiplier:    4.0,
-		DoublePressureDiff: 1000.0, // 1kW
 	}
 }
 
@@ -77,10 +75,8 @@ func (s *SlowRampState) Update(target float64, config SlowRampConfig) float64 {
 
 // updatePressure updates the pressure accumulator with hysteresis.
 // Uses normalization to reason about only one direction (positive diff).
-// Pressure building rate scales with diff magnitude:
-//   - Below FullPressureDiff: rate lerps from 0 (at diff=0) to 1 (at diff=FullPressureDiff)
-//   - Above FullPressureDiff: rate = 1x
-//   - Above DoublePressureDiff: rate = 2x
+// Both building and draining rates scale linearly with diff: rate = diff / FullPressureDiff
+// Draining is additionally multiplied by DecayMultiplier for faster response to direction changes.
 func (s *SlowRampState) updatePressure(diff, dt float64, config SlowRampConfig) {
 	// Normalize: flip signs so diff is always positive
 	// This lets us reason about only one direction
@@ -97,26 +93,15 @@ func (s *SlowRampState) updatePressure(diff, dt float64, config SlowRampConfig) 
 	// - mPressure > 0 means pressure in correct direction (building)
 	// - mPressure < 0 means pressure in wrong direction (needs draining)
 
-	switch {
-	case mPressure < 0:
-		// Wrong direction - drain toward zero (add because negative)
-		mPressure = min(0, mPressure+dt*config.DecayMultiplier)
-
-	case mDiff > config.DoublePressureDiff:
-		// Large diff - build at 2x rate
-		mPressure += dt * 2
-
-	case mDiff >= config.FullPressureDiff:
-		// Normal - build at 1x rate
-		mPressure += dt
-
-	case config.FullPressureDiff > 0:
-		// Below FullPressureDiff - build at lerped rate (0 at diff=0, 1 at diff=FullPressureDiff)
+	if config.FullPressureDiff > 0 {
 		rate := mDiff / config.FullPressureDiff
-		mPressure += dt * rate
-
-	default:
-		// FullPressureDiff disabled (0) and diff is 0 - no change
+		if mPressure < 0 {
+			// Wrong direction - drain toward zero at lerped rate × DecayMultiplier
+			mPressure = min(0, mPressure+dt*rate*config.DecayMultiplier)
+		} else {
+			// Correct direction - build at lerped rate
+			mPressure += dt * rate
+		}
 	}
 
 	// Denormalize and cap

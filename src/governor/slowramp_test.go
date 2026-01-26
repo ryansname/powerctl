@@ -7,7 +7,7 @@ import (
 )
 
 // testConfig returns a simple config for testing updatePressure behavior.
-// FullPressureDiff=100, DoublePressureDiff=1000, DecayMultiplier=4, PressureCapSeconds=100
+// FullPressureDiff=100, DecayMultiplier=4, PressureCapSeconds=100
 func testConfig() SlowRampConfig {
 	return SlowRampConfig{
 		ThresholdSeconds:   30,
@@ -15,7 +15,6 @@ func testConfig() SlowRampConfig {
 		RateAccel:          1.0,
 		DecayMultiplier:    4.0,
 		FullPressureDiff:   100,
-		DoublePressureDiff: 1000,
 	}
 }
 
@@ -28,32 +27,31 @@ func TestUpdatePressure(t *testing.T) {
 		diff         float64 // Target - Current
 		wantPressure float64 // Expected pressure after update
 	}{
-		// Building pressure (diff and pressure same direction or pressure=0)
-		{"build_pos_normal", 0, 200, 1},
-		{"build_neg_normal", 0, -200, -1},
-		{"build_pos_double", 0, 1500, 2},   // > DoublePressureDiff
-		{"build_neg_double", 0, -1500, -2}, // > DoublePressureDiff
-		{"build_pos_continues", 10, 200, 11},
-		{"build_neg_continues", -10, -200, -11},
+		// Building pressure - rate scales linearly with diff (rate = diff/FullPressureDiff)
+		{"build_pos_2x", 0, 200, 2},       // rate = 200/100 = 2.0
+		{"build_neg_2x", 0, -200, -2},
+		{"build_pos_15x", 0, 1500, 15},    // rate = 1500/100 = 15.0
+		{"build_neg_15x", 0, -1500, -15},
+		{"build_pos_continues", 10, 200, 12}, // rate = 2.0, so 10 + 2 = 12
+		{"build_neg_continues", -10, -200, -12},
 
 		// Draining pressure (diff and pressure opposite directions)
-		{"drain_pos_pressure", 20, -200, 16},  // 20 - 4 = 16
-		{"drain_neg_pressure", -20, 200, -16}, // -20 + 4 = -16
+		// drain rate = (diff/FullPressureDiff) * DecayMultiplier = 2 * 4 = 8
+		{"drain_pos_pressure", 20, -200, 12},  // 20 - 8 = 12
+		{"drain_neg_pressure", -20, 200, -12}, // -20 + 8 = -12
 
-		// Within FullPressureDiff (0 < diff < 100) - lerped rate
-		{"lerped_quarter", 20, 25, 20.25},  // rate = 25/100 = 0.25
-		{"lerped_quarter_neg", -20, -25, -20.25},
-		{"lerped_zero", 20, 0, 20},         // rate = 0/100 = 0 (no change)
-		{"lerped_half", 20, 50, 20.5},      // rate = 50/100 = 0.5
-		{"lerped_three_quarter", 20, 75, 20.75}, // rate = 75/100 = 0.75
-		{"lerped_three_quarter_neg", -20, -75, -20.75},
+		// Rate scales linearly at all diff values
+		{"rate_quarter", 20, 25, 20.25},       // rate = 25/100 = 0.25
+		{"rate_quarter_neg", -20, -25, -20.25},
+		{"rate_zero", 20, 0, 20},              // rate = 0/100 = 0 (no change)
+		{"rate_half", 20, 50, 20.5},           // rate = 50/100 = 0.5
+		{"rate_three_quarter", 20, 75, 20.75}, // rate = 75/100 = 0.75
+		{"rate_three_quarter_neg", -20, -75, -20.75},
+		{"rate_1x", 20, 100, 21},              // rate = 100/100 = 1.0
+		{"rate_1_5x", 20, 150, 21.5},          // rate = 150/100 = 1.5
 
-		// At or above FullPressureDiff - full rate
-		{"full_rate_exact", 20, 100, 21},   // rate = 1.0
-		{"full_rate_above", 20, 150, 21},   // rate = 1.0
-
-		// Wrong direction still drains
-		{"wrong_dir_drains", 20, -75, 16}, // mPressure > 0 but diff < 0
+		// Wrong direction still drains (drain rate = 0.75 * 4 = 3)
+		{"wrong_dir_drains", 20, -75, 17}, // mPressure > 0 but diff < 0, 20 - 3 = 17
 
 		// Pressure cap
 		{"cap_positive", 99, 200, 100},
@@ -80,7 +78,7 @@ func TestUpdate(t *testing.T) {
 		PressureCapSeconds: 60,
 		RateAccel:          1.0,
 		DecayMultiplier:    4.0,
-		DoublePressureDiff: 1e9, // disabled
+		FullPressureDiff:   500, // diff=500 gives rate=1.0
 	}
 
 	tests := []struct {
@@ -144,12 +142,13 @@ func oscillate(up, down float64, n int) []float64 {
 }
 
 func TestPressureSequences(t *testing.T) {
+	// Use FullPressureDiff=200 so diff=200 gives rate=1.0, diff=500 gives rate=2.5
 	config := SlowRampConfig{
 		ThresholdSeconds:   30,
 		PressureCapSeconds: 60,
 		RateAccel:          1.0,
 		DecayMultiplier:    4.0,
-		DoublePressureDiff: 1e9, // disabled
+		FullPressureDiff:   200,
 	}
 
 	tests := []struct {
@@ -159,10 +158,11 @@ func TestPressureSequences(t *testing.T) {
 	}{
 		{"build_10_steps", repeat(200, 10), 10},
 		{"build_to_cap", repeat(200, 100), 60}, // caps at 60
-		// 10 up at 1x = 10, then 10 down: drain 4x (10→6→2→0 in 3 ticks), then build -1 for 7 ticks = -7
-		{"oscillation_drains_then_builds", oscillate(500, -500, 10), -7},
+		// 10 up at rate=2.5 = 25, then 10 down: drain at rate 10 (25→15→5→0 in 3 ticks),
+		// then build at rate=-2.5 for 7 ticks = -17.5
+		{"oscillation_drains_then_builds", oscillate(500, -500, 10), -17.5},
 		// After 20 up: pressure = 20
-		// Then 10 down: drain 4x (20→16→12→8→4→0 in 5 ticks), then build -1 for 5 ticks = -5
+		// Then 10 down: drain at rate 4 (20→16→12→8→4→0 in 5 ticks), then build -1 for 5 ticks = -5
 		{"build_then_reverse", append(repeat(200, 20), repeat(-200, 10)...), -5},
 	}
 
@@ -183,7 +183,7 @@ func TestSlowRamp_NeverOvershoots(t *testing.T) {
 		PressureCapSeconds: 60,
 		RateAccel:          1.0,
 		DecayMultiplier:    4.0,
-		DoublePressureDiff: 1e9,
+		FullPressureDiff:   200, // diff=200 gives rate=1.0
 	}
 
 	state := SlowRampState{}
@@ -203,7 +203,7 @@ func TestSlowRamp_AcceleratesOverTime(t *testing.T) {
 		PressureCapSeconds: 60,
 		RateAccel:          1.0,
 		DecayMultiplier:    4.0,
-		DoublePressureDiff: 1e9,
+		FullPressureDiff:   10000, // diff=10000 gives rate=1.0
 	}
 
 	state := SlowRampState{}
@@ -232,7 +232,7 @@ func TestSlowRamp_MaxRateAtCap(t *testing.T) {
 		PressureCapSeconds: 60,
 		RateAccel:          1.0,
 		DecayMultiplier:    4.0,
-		DoublePressureDiff: 1e9,
+		FullPressureDiff:   200, // diff=200 gives rate=1.0
 	}
 
 	state := SlowRampState{}
@@ -252,28 +252,32 @@ func TestSlowRamp_MaxRateAtCap(t *testing.T) {
 	assert.InDelta(t, 900.0, delta, 1.0, "Max rate should be 900 W/s at pressure cap")
 }
 
-func TestSlowRamp_DoesNotRampAwayFromTarget(t *testing.T) {
+func TestSlowRamp_RespondsToTargetReversal(t *testing.T) {
 	config := SlowRampConfig{
 		ThresholdSeconds:   30,
 		PressureCapSeconds: 60,
 		RateAccel:          1.0,
 		DecayMultiplier:    4.0,
-		DoublePressureDiff: 1e9,
+		FullPressureDiff:   500, // diff=500 gives rate=1.0
 	}
 
 	state := SlowRampState{}
 	state.Update(500, config) // initialize at 500
 
-	// Build positive pressure past threshold
+	// Build positive pressure past threshold toward 1000
 	for range 35 {
 		state.Update(1000, config)
 	}
-	currentBeforeDrop := state.Current
+	valueAtPeak := state.Current
 
-	// Drop target below current - should not decrease
-	for range 10 {
-		result := state.Update(0, config)
-		assert.GreaterOrEqual(t, result, currentBeforeDrop,
-			"Should not ramp away from target when pressure/diff disagree")
+	// Drop target to 0 - should eventually start moving toward new target
+	// (after pressure drains and reverses)
+	var finalValue float64
+	for range 100 {
+		finalValue = state.Update(0, config)
 	}
+
+	// Should have moved toward new target (0), not stayed at peak
+	assert.Less(t, finalValue, valueAtPeak,
+		"Should eventually respond to target reversal")
 }

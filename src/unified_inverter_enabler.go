@@ -630,10 +630,10 @@ func forecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessS
 }
 
 // slowRampConfig returns the configuration for Powerwall mode slow ramp smoothing.
-// FullPressureDiff is set to half an inverter's power so small changes build pressure slowly.
+// FullPressureDiff is set to 2x inverter's power (510W) so rate=1 at one inverter change.
 func slowRampConfig(wattsPerInverter float64) governor.SlowRampConfig {
 	config := governor.DefaultSlowRampConfig()
-	config.FullPressureDiff = wattsPerInverter / 2
+	config.FullPressureDiff = wattsPerInverter * 2
 	return config
 }
 
