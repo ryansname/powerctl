@@ -177,7 +177,7 @@ func (s *MQTTSender) CreateDebugSensor(sensorID, name, unit string, precision in
 func (s *MQTTSender) PublishDebugSensor(sensorID string, value float64) {
 	s.Send(MQTTMessage{
 		Topic:   "powerctl/sensor/" + sensorID + "/state",
-		Payload: []byte(strconv.FormatFloat(value, 'f', -1, 64)),
+		Payload: []byte(strconv.FormatFloat(value, 'f', 1, 64)),
 		QoS:     0,
 		Retain:  false,
 	})
