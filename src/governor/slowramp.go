@@ -17,8 +17,9 @@ type SlowRampConfig struct {
 	ThresholdSeconds   float64 // Pressure magnitude required before responding (e.g., 600)
 	PressureCapSeconds float64 // Maximum pressure magnitude (e.g., 900)
 	RateAccel          float64 // Acceleration of ramp rate in units/s² (e.g., 0.00111)
-	DecayMultiplier    float64 // How much faster pressure drains vs builds (e.g., 4.0)
+	DecayMultiplier    float64 // How much faster pressure drains vs builds (e.g., 2.0)
 	FullPressureDiff   float64 // Diff magnitude at which pressure builds at 1x rate; rate scales linearly (2x at 2*FullPressureDiff, etc.)
+	Damping            float64 // Pressure pulled toward zero by this amount per second (e.g., 0.5)
 }
 
 // DefaultSlowRampConfig returns the default configuration for power smoothing.
@@ -29,7 +30,8 @@ func DefaultSlowRampConfig() SlowRampConfig {
 		ThresholdSeconds:   600.0,
 		PressureCapSeconds: 900.0,
 		RateAccel:          100.0 / (300.0 * 300.0), // 100 W/s max at pressure cap
-		DecayMultiplier:    4.0,
+		DecayMultiplier:    2.0,
+		Damping:            0.5,
 	}
 }
 
@@ -77,6 +79,7 @@ func (s *SlowRampState) Update(target float64, config SlowRampConfig) float64 {
 // Uses normalization to reason about only one direction (positive diff).
 // Both building and draining rates scale linearly with diff: rate = diff / FullPressureDiff
 // Draining is additionally multiplied by DecayMultiplier for faster response to direction changes.
+//nolint:unparam // dt kept for flexibility even though currently always 1.0
 func (s *SlowRampState) updatePressure(diff, dt float64, config SlowRampConfig) {
 	// Normalize: flip signs so diff is always positive
 	// This lets us reason about only one direction
@@ -107,4 +110,16 @@ func (s *SlowRampState) updatePressure(diff, dt float64, config SlowRampConfig) 
 	// Denormalize and cap
 	s.Pressure = sign * mPressure
 	s.Pressure = max(-config.PressureCapSeconds, min(config.PressureCapSeconds, s.Pressure))
+
+	// Apply damping - pull pressure toward zero
+	// This creates a dead zone where small diffs can't build pressure
+	damping := config.Damping * dt
+	switch {
+	case s.Pressure > damping:
+		s.Pressure -= damping
+	case s.Pressure < -damping:
+		s.Pressure += damping
+	default:
+		s.Pressure = 0
+	}
 }

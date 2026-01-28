@@ -281,3 +281,83 @@ func TestSlowRamp_RespondsToTargetReversal(t *testing.T) {
 	assert.Less(t, finalValue, valueAtPeak,
 		"Should eventually respond to target reversal")
 }
+
+func TestDamping(t *testing.T) {
+	// Config with damping=1.0 for easy math, FullPressureDiff=100
+	config := SlowRampConfig{
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 100,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		FullPressureDiff:   100,
+		Damping:            1.0,
+	}
+
+	tests := []struct {
+		name         string
+		pressure     float64
+		diff         float64
+		wantPressure float64
+	}{
+		// Damping pulls pressure toward zero
+		{"damping_pos", 10, 0, 9},           // 10 - 1 = 9
+		{"damping_neg", -10, 0, -9},         // -10 + 1 = -9
+		{"damping_small_pos", 0.5, 0, 0},    // 0.5 < 1.0 → zeroed
+		{"damping_small_neg", -0.5, 0, 0},   // -0.5 > -1.0 → zeroed
+		{"damping_exact_pos", 1.0, 0, 0},    // exactly at threshold → zeroed
+		{"damping_exact_neg", -1.0, 0, 0},
+
+		// Build rate > damping: net positive gain
+		// rate = 200/100 = 2.0, then damping subtracts 1.0 → net +1.0
+		{"build_minus_damping", 10, 200, 11}, // 10 + 2 - 1 = 11
+
+		// Build rate == damping: no net change
+		// rate = 100/100 = 1.0, then damping subtracts 1.0 → net 0
+		{"build_equals_damping", 10, 100, 10}, // 10 + 1 - 1 = 10
+
+		// Build rate < damping: net negative (pressure decreases)
+		// rate = 50/100 = 0.5, then damping subtracts 1.0 → net -0.5
+		{"build_less_than_damping", 10, 50, 9.5}, // 10 + 0.5 - 1 = 9.5
+
+		// From zero with build > damping
+		{"from_zero_builds", 0, 200, 1}, // 0 + 2 - 1 = 1
+
+		// From zero with build < damping → stays at zero
+		{"from_zero_no_build", 0, 50, 0}, // 0 + 0.5 = 0.5 < 1.0 → zeroed
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &SlowRampState{Pressure: tt.pressure, initialized: true}
+			state.updatePressure(tt.diff, 1.0, config)
+			assert.Equal(t, tt.wantPressure, state.Pressure)
+		})
+	}
+}
+
+func TestDampingCreatesDeadZone(t *testing.T) {
+	// With FullPressureDiff=100 and Damping=0.5, a diff of 50 exactly balances
+	config := SlowRampConfig{
+		ThresholdSeconds:   30,
+		PressureCapSeconds: 100,
+		RateAccel:          1.0,
+		DecayMultiplier:    2.0,
+		FullPressureDiff:   100,
+		Damping:            0.5,
+	}
+
+	state := SlowRampState{initialized: true}
+
+	// Apply diff=50 (rate=0.5) for 100 ticks - should stay at zero
+	for range 100 {
+		state.updatePressure(50, 1.0, config)
+	}
+	assert.Equal(t, 0.0, state.Pressure, "Diff at damping threshold should not build pressure")
+
+	// Apply diff=100 (rate=1.0) for 10 ticks - should build at net 0.5/tick
+	state.Pressure = 0
+	for range 10 {
+		state.updatePressure(100, 1.0, config)
+	}
+	assert.Equal(t, 5.0, state.Pressure, "Diff above damping threshold should build pressure")
+}
