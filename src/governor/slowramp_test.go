@@ -361,3 +361,111 @@ func TestDampingCreatesDeadZone(t *testing.T) {
 	}
 	assert.Equal(t, 5.0, state.Pressure, "Diff above damping threshold should build pressure")
 }
+
+func TestPressureRelease(t *testing.T) {
+	// Config with release factor = 0.1 for easy math
+	// threshold=30, so at pressure=40 (10 above), release = 10 * 0.1 = 1.0/tick
+	config := SlowRampConfig{
+		ThresholdSeconds:      30,
+		PressureCapSeconds:    60,
+		RateAccel:             1.0,
+		DecayMultiplier:       2.0,
+		FullPressureDiff:      100,
+		Damping:               0,                // Disable damping to isolate release behavior
+		PressureReleaseFactor: 0.1,
+	}
+
+	tests := []struct {
+		name         string
+		pressure     float64
+		diff         float64
+		wantPressure float64
+	}{
+		// Below threshold - no release applied
+		{"below_threshold_pos", 20, 0, 20},
+		{"below_threshold_neg", -20, 0, -20},
+		{"at_threshold_pos", 30, 0, 30},
+		{"at_threshold_neg", -30, 0, -30},
+
+		// Above threshold - release pulls toward threshold
+		// At pressure=40, excess=10, release=10*0.1=1.0
+		{"above_threshold_pos", 40, 0, 39},
+		{"above_threshold_neg", -40, 0, -39},
+
+		// Release clamps to threshold (doesn't overshoot)
+		// At pressure=32, excess=2, release=0.2, 32-0.2=31.8 (not clamped, above threshold)
+		// At pressure=30.5, excess=0.5, release=0.05, 30.5-0.05=30.45 (not clamped, above threshold)
+		// Need large enough release to hit clamp: pressure=31, excess=1, release=0.1
+		// If release would take us below threshold, we clamp
+		// At pressure=30.08, excess=0.08, release=0.008, 30.08-0.008=30.072 (above threshold, no clamp)
+		// Test with excess large enough that release hits threshold
+		{"release_to_threshold_pos", 31, 0, 30.9}, // 31 - 0.1 = 30.9, no clamp needed
+		{"release_to_threshold_neg", -31, 0, -30.9},
+
+		// Release scales with excess
+		// At pressure=50, excess=20, release=20*0.1=2.0
+		{"release_scales_pos", 50, 0, 48},
+		{"release_scales_neg", -50, 0, -48},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &SlowRampState{Pressure: tt.pressure, initialized: true}
+			state.updatePressure(tt.diff, 1.0, config)
+			assert.InDelta(t, tt.wantPressure, state.Pressure, 0.001)
+		})
+	}
+}
+
+func TestPressureReleaseEquilibrium(t *testing.T) {
+	// Test that pressure stabilizes at equilibrium
+	// With FullPressureDiff=100, diff=100 gives buildRate=1.0
+	// With PressureReleaseFactor=0.1:
+	// Equilibrium: P = threshold + buildRate * (1/factor - 1) = 30 + 1.0 * (10 - 1) = 39
+	// (Release happens after build in same tick, so equilibrium is slightly lower than buildRate/factor)
+	config := SlowRampConfig{
+		ThresholdSeconds:      30,
+		PressureCapSeconds:    100,
+		RateAccel:             1.0,
+		DecayMultiplier:       2.0,
+		FullPressureDiff:      100,
+		Damping:               0,               // Disable damping to isolate release behavior
+		PressureReleaseFactor: 0.1,
+	}
+
+	state := SlowRampState{initialized: true}
+
+	// Apply sustained diff until equilibrium
+	for range 1000 {
+		state.updatePressure(100, 1.0, config)
+	}
+
+	// Equilibrium: P = threshold + buildRate * (1/factor - 1) = 30 + 1.0 * 9 = 39
+	assert.InDelta(t, 39.0, state.Pressure, 0.1, "Pressure should equilibrate")
+}
+
+func TestPressureReleaseWithHighDiff(t *testing.T) {
+	// Higher diff = higher build rate = higher equilibrium (capped by PressureCapSeconds)
+	config := SlowRampConfig{
+		ThresholdSeconds:      30,
+		PressureCapSeconds:    50, // Low cap to test capping behavior
+		RateAccel:             1.0,
+		DecayMultiplier:       2.0,
+		FullPressureDiff:      100,
+		Damping:               0,
+		PressureReleaseFactor: 0.1,
+	}
+
+	state := SlowRampState{initialized: true}
+
+	// With diff=500, buildRate=5.0
+	// Uncapped equilibrium would be at 30 + 5.0 * 9 = 75
+	// But cap is 50, so it hits cap, then release pulls back
+	// At cap: release = (50-30) * 0.1 = 2.0
+	// Oscillates between 48 (after release) and 50 (after build+cap)
+	for range 1000 {
+		state.updatePressure(500, 1.0, config)
+	}
+
+	assert.InDelta(t, 48.0, state.Pressure, 0.1, "Pressure should stabilize near cap minus release at cap")
+}

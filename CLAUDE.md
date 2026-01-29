@@ -346,11 +346,12 @@ The application uses a goroutine-based architecture with message passing via cha
   - `Update(target, config)`: Main entry point - returns smoothed value
 - **SlowRampConfig**: Tunable parameters for slow ramp
   - `ThresholdSeconds`: Pressure magnitude required before responding (default: 600)
-  - `PressureCapSeconds`: Maximum pressure magnitude (default: 900)
-  - `RateAccel`: Acceleration of ramp rate in units/s² (default: 0.00111)
+  - `PressureCapSeconds`: Maximum pressure magnitude (default: 660)
+  - `RateAccel`: Acceleration of ramp rate in units/s² (default: 0.02778, yields 100 W/s at cap)
   - `DecayMultiplier`: Multiplier for drain rate vs build rate (default: 2.0)
   - `FullPressureDiff`: Diff at which pressure builds/drains at 1x rate; rate scales linearly with diff
   - `Damping`: Pressure pulled toward zero by this amount per second (default: 0.5)
+  - `PressureReleaseFactor`: Release rate per second per unit of pressure above threshold (default: 0.05)
 - **Algorithm behavior**:
   - Ignores brief fluctuations - only responds after sustained change
   - Slow initial response that accelerates over time (opposite of EMA)
@@ -358,6 +359,10 @@ The application uses a goroutine-based architecture with message passing via cha
   - Both build and drain rates scale linearly: rate = diff / FullPressureDiff
   - Drain rate is multiplied by DecayMultiplier for faster response to direction changes
   - Damping constantly pulls pressure toward zero, creating a dead zone for small diffs
+  - **Pressure release**: Above threshold, pressure is released proportionally to excess
+    - Formula: `releaseRate = (|pressure| - threshold) × PressureReleaseFactor`
+    - Creates natural equilibrium where small diffs stabilize at lower pressure
+    - Equilibrium: `P = threshold + buildRate × (1/factor - 1)`
 - **Debug sensor**: `sensor.powerctl_powerwall_last_pressure`
 
 ### Statistics Algorithm

@@ -14,24 +14,27 @@ type SlowRampState struct {
 
 // SlowRampConfig holds tunable parameters for the slow ramp smoother.
 type SlowRampConfig struct {
-	ThresholdSeconds   float64 // Pressure magnitude required before responding (e.g., 600)
-	PressureCapSeconds float64 // Maximum pressure magnitude (e.g., 900)
-	RateAccel          float64 // Acceleration of ramp rate in units/s² (e.g., 0.00111)
-	DecayMultiplier    float64 // How much faster pressure drains vs builds (e.g., 2.0)
-	FullPressureDiff   float64 // Diff magnitude at which pressure builds at 1x rate; rate scales linearly (2x at 2*FullPressureDiff, etc.)
-	Damping            float64 // Pressure pulled toward zero by this amount per second (e.g., 0.5)
+	ThresholdSeconds      float64 // Pressure magnitude required before responding (e.g., 600)
+	PressureCapSeconds    float64 // Maximum pressure magnitude (e.g., 660)
+	RateAccel             float64 // Acceleration of ramp rate in units/s² (e.g., 0.02778)
+	DecayMultiplier       float64 // How much faster pressure drains vs builds (e.g., 2.0)
+	FullPressureDiff      float64 // Diff magnitude at which pressure builds at 1x rate; rate scales linearly (2x at 2*FullPressureDiff, etc.)
+	Damping               float64 // Pressure pulled toward zero by this amount per second (e.g., 0.5)
+	PressureReleaseFactor float64 // Release rate per second per unit of pressure above threshold (e.g., 0.05)
 }
 
 // DefaultSlowRampConfig returns the default configuration for power smoothing.
-// With threshold=600s (10min), pressure cap=900s (15min), progressSeconds at cap=300s.
-// RateAccel chosen so maxRate = 100 W/s at cap: 100 / 300² = 0.00111
+// With threshold=600s (10min), pressure cap=660s (11min), progressSeconds at cap=60s.
+// RateAccel chosen so maxRate = 100 W/s at cap: 100 / 60² = 0.02778
+// PressureReleaseFactor creates equilibrium where buildRate = releaseRate above threshold.
 func DefaultSlowRampConfig() SlowRampConfig {
 	return SlowRampConfig{
-		ThresholdSeconds:   600.0,
-		PressureCapSeconds: 900.0,
-		RateAccel:          100.0 / (300.0 * 300.0), // 100 W/s max at pressure cap
-		DecayMultiplier:    2.0,
-		Damping:            0.5,
+		ThresholdSeconds:      600.0,
+		PressureCapSeconds:    660.0,
+		RateAccel:             100.0 / (60.0 * 60.0), // 100 W/s max at pressure cap
+		DecayMultiplier:       2.0,
+		Damping:               0.5,
+		PressureReleaseFactor: 0.05,
 	}
 }
 
@@ -110,6 +113,18 @@ func (s *SlowRampState) updatePressure(diff, dt float64, config SlowRampConfig) 
 	// Denormalize and cap
 	s.Pressure = sign * mPressure
 	s.Pressure = max(-config.PressureCapSeconds, min(config.PressureCapSeconds, s.Pressure))
+
+	// Apply pressure release when above threshold
+	// Release rate scales linearly with excess pressure, creating natural equilibrium
+	if config.PressureReleaseFactor > 0 && math.Abs(s.Pressure) > config.ThresholdSeconds {
+		excess := math.Abs(s.Pressure) - config.ThresholdSeconds
+		release := excess * config.PressureReleaseFactor * dt
+		if s.Pressure > 0 {
+			s.Pressure = max(config.ThresholdSeconds, s.Pressure-release)
+		} else {
+			s.Pressure = min(-config.ThresholdSeconds, s.Pressure+release)
+		}
+	}
 
 	// Apply damping - pull pressure toward zero
 	// This creates a dead zone where small diffs can't build pressure
