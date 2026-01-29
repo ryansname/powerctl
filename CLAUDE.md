@@ -224,11 +224,21 @@ The application uses a goroutine-based architecture with message passing via cha
     - Logs publish failures
     - **Enable/disable filtering**:
       - Subscribes to `TopicPowerctlEnabledState` (`homeassistant/switch/powerctl_enabled/state`)
-      - When disabled, drops outgoing messages (except discovery config topics)
+      - When disabled, drops ALL outgoing messages (except discovery config topics)
       - `--force-enable` flag bypasses this filter for local development
     - Launched automatically when MQTT connection is established
 
-11. **mqttWorker** (src/mqtt_worker.go)
+11. **mqttInterceptorWorker** (src/mqtt_interceptor.go)
+    - Generic channel-based interceptor for filtering MQTT messages
+    - Takes enable topic as parameter (reusable for different switches)
+    - Receives DisplayData from broadcastWorker to track switch state
+    - Reads from input channel, forwards to output channel only if enabled
+    - Discovery topics (ending in `/config`) always pass through
+    - **Current usage**: Filters `unifiedInverterEnabler` messages via `powerhouse_inverters_enabled` switch
+    - **Message flow**: `unifiedInverterEnabler` → `inverterOutgoingChan` → `mqttInterceptorWorker` → `mqttOutgoingChan`
+    - Allows disabling inverter control while keeping other workers (battery SOC, low voltage protection) active
+
+12. **mqttWorker** (src/mqtt_worker.go)
    - Connects to Home Assistant MQTT broker at `homeassistant.lan:1883`
    - Subscribes to multiple sensor topics simultaneously
    - Filters out invalid values ("Undefined", "unavailable") from dropped sensors
@@ -408,8 +418,9 @@ MQTT Broker → mqttWorker → SensorMessage → statsWorker → DisplayData →
                                                                                            ├─→ lowVoltageWorker (Battery 2)
                                                                                            ├─→ lowVoltageWorker (Battery 3)
                                                                                            ├─→ unifiedInverterEnabler
+                                                                                           ├─→ mqttInterceptorWorker (for powerhouse_inverters_enabled state)
                                                                                            ├─→ powerExcessCalculator → excessChan → dumpLoadEnabler
-                                                                                           ├─→ mqttSenderWorker (for enabled state tracking)
+                                                                                           ├─→ mqttSenderWorker (for powerctl_enabled state tracking)
                                                                                            └─→ debugWorker (if --debug enabled)
 ```
 
@@ -424,8 +435,8 @@ batterySOCWorker → MQTTMessage → mqttOutgoingChan → mqttSenderWorker → M
 lowVoltageWorker → MQTTMessage → mqttOutgoingChan → mqttSenderWorker → MQTT Broker → Node-RED → Home Assistant
 (service calls)    channel      (100 msg buffer)                                       (nodered/proxy/call_service)
 
-unifiedInverterEnabler → MQTTMessage → mqttOutgoingChan → mqttSenderWorker → MQTT Broker → Node-RED → Home Assistant
-(switch control)          channel      (100 msg buffer)                                       (switch.turn_on/turn_off)
+unifiedInverterEnabler → MQTTMessage → inverterOutgoingChan → mqttInterceptorWorker → mqttOutgoingChan → mqttSenderWorker → MQTT Broker
+(switch control)          channel      (100 msg buffer)       (filters if disabled)    (100 msg buffer)                        (switch.turn_on/turn_off)
 
 dumpLoadEnabler → MQTTMessage → mqttOutgoingChan → mqttSenderWorker → MQTT Broker → Node-RED → Home Assistant
 (workmode)         channel      (100 msg buffer)                                       (select.select_option)
@@ -447,7 +458,8 @@ batteryCalibWorker → MQTT attributes topic → Home Assistant statestream → 
 - **powerExcessCalculator** aggregates battery and power data to calculate excess watts, sends to dumpLoadEnabler
 - **dumpLoadEnabler** adjusts miner workmode based on excess power thresholds
 - **unifiedInverterEnabler** manages all inverters with mode-based target power and round-robin distribution
-- **mqttSenderWorker** handles all outgoing MQTT with automatic queuing
+- **mqttInterceptorWorker** filters inverter control messages based on `powerhouse_inverters_enabled` switch
+- **mqttSenderWorker** handles all outgoing MQTT with automatic queuing, filters based on `powerctl_enabled` switch
 - Each topic's statistics are tracked independently and broadcast together
 
 ### Concurrency Model
@@ -456,6 +468,7 @@ batteryCalibWorker → MQTT attributes topic → Home Assistant statestream → 
 - Communication between workers uses buffered channels:
   - 10-message buffers for sensor data and display data
   - 100-message buffer for outgoing MQTT messages (mqttOutgoingChan)
+  - 100-message buffer for inverter messages (inverterOutgoingChan, filtered by interceptor)
 - Context is used for lifecycle management and graceful shutdown
 - If any worker panics, the entire application shuts down gracefully
 - Per-topic state is maintained in a map, allowing dynamic addition of new topics
@@ -618,7 +631,8 @@ Unified inverter enabler (defined in src/battery_config.go):
 - `homeassistant/switch/powerhouse_inverter_[1-9]_switch_0/state` (Inverter switch states)
 
 Powerctl control (defined in src/mqtt_sender.go):
-- `homeassistant/switch/powerctl_enabled/state` (Enabled state for message filtering)
+- `homeassistant/switch/powerctl_enabled/state` (Main enabled state for ALL message filtering)
+- `homeassistant/switch/powerhouse_inverters_enabled/state` (Inverter control filtering only)
 
 **MQTT Publishing:**
 
@@ -630,9 +644,13 @@ Battery entities are auto-created at startup via Home Assistant MQTT discovery (
 - Attributes topics: `homeassistant/sensor/battery_2/attributes` (JSON with calibration_inflows + calibration_outflows)
 - Attributes topics: `homeassistant/sensor/battery_3/attributes` (JSON with calibration_inflows + calibration_outflows)
 
-Powerctl switch is auto-created at startup via MQTT discovery (`MQTTSender.CreatePowerctlSwitch`):
-- Config topic: `homeassistant/switch/powerctl_enabled/config`
-- State topic: `homeassistant/switch/powerctl_enabled/state` (managed by Home Assistant, optimistic mode)
+Powerctl switches are auto-created at startup via MQTT discovery:
+- `powerctl_enabled` (via `CreatePowerctlSwitch`): Main switch that disables ALL outgoing messages
+  - Config topic: `homeassistant/switch/powerctl_enabled/config`
+  - State topic: `homeassistant/switch/powerctl_enabled/state` (managed by Home Assistant, optimistic mode)
+- `powerhouse_inverters_enabled` (via `CreatePowerhouseInvertersSwitch`): Controls only inverter messages
+  - Config topic: `homeassistant/switch/powerhouse_inverters_enabled/config`
+  - State topic: `homeassistant/switch/powerhouse_inverters_enabled/state` (managed by Home Assistant, optimistic mode)
 
 **Home Assistant Statestream:**
 The calibration attributes are republished by Home Assistant's statestream integration as separate sensor topics, which are then subscribed to by mqttWorker and used by batterySOCWorker to calculate state of charge.
@@ -642,7 +660,7 @@ The calibration attributes are republished by Home Assistant's statestream integ
 **Adding topics**: Edit the `topics` slice in src/main.go to add or remove monitored sensors.
 
 **Command Line Flags:**
-- `--force-enable`: Bypass the powerctl_enabled switch. Use this for local development when the deployed instance should be disabled via the switch in Home Assistant. The deployed instance (without this flag) will stop sending commands when the switch is turned off, while the local instance (with this flag) will continue to operate normally.
+- `--force-enable`: Bypass both the `powerctl_enabled` and `powerhouse_inverters_enabled` switches. Use this for local development when the deployed instance should be disabled via switches in Home Assistant. The deployed instance (without this flag) will stop sending commands when switches are turned off, while the local instance (with this flag) will continue to operate normally.
 - `--debug`: Enable the debug introspection worker. Provides an interactive prompt for watching sensor values in real-time. Included in `make run` for local development.
 
 - If there are more than 3 arguments to a function definition, put each one on a new line

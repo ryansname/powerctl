@@ -278,6 +278,7 @@ var selfPublishedFloatTopics = []string{
 // Boolean topics that should be initialized to true if not received within timeout
 var selfPublishedBoolTopics = []string{
 	TopicPowerctlEnabledState,
+	TopicPowerhouseInvertersEnabledState,
 }
 
 // statsWorker receives messages, maintains statistics, and sends to output channel

@@ -312,6 +312,9 @@ func main() {
 	// Add powerctl enabled state topic
 	topics = append(topics, TopicPowerctlEnabledState)
 
+	// Add powerhouse inverters enabled state topic
+	topics = append(topics, TopicPowerhouseInvertersEnabledState)
+
 	// Sort and dedupe topics list
 	slices.Sort(topics)
 	topics = slices.Compact(topics)
@@ -319,9 +322,10 @@ func main() {
 	// Create channels for communication between workers
 	msgChan := make(chan SensorMessage, 10)
 	statsChan := make(chan DisplayData, 10)
-	mqttOutgoingChan := make(chan MQTTMessage, 100) // Larger buffer for queuing
-	mqttClientChan := make(chan mqtt.Client, 1)     // Buffered to prevent blocking onConnect
-	senderDataChan := make(chan DisplayData, 10)   // For mqttSenderWorker to receive enabled state
+	mqttOutgoingChan := make(chan MQTTMessage, 100)     // Larger buffer for queuing
+	inverterOutgoingChan := make(chan MQTTMessage, 100) // For inverter control messages
+	mqttClientChan := make(chan mqtt.Client, 1)         // Buffered to prevent blocking onConnect
+	senderDataChan := make(chan DisplayData, 10)        // For mqttSenderWorker to receive enabled state
 
 	// Launch MQTT sender worker (receives client updates via channel)
 	SafeGo(ctx, cancel, "mqtt-sender-worker", func(ctx context.Context) {
@@ -360,6 +364,13 @@ func main() {
 	if err != nil {
 		cancel()
 		log.Fatalf("Failed to create powerctl switch: %v", err)
+	}
+
+	// Create powerhouse inverters enabled switch
+	err = mqttSender.CreatePowerhouseInvertersSwitch()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create powerhouse inverters switch: %v", err)
 	}
 
 	// Create debug sensors for forecast excess algorithm and slow ramp
@@ -451,12 +462,29 @@ func main() {
 		dumpLoadEnabler(ctx, excessValueChan, dumpLoadDataChan, mqttSender)
 	})
 
-	// Launch unified inverter enabler
+	// Launch unified inverter enabler with interceptor
 	unifiedInverterChan := make(chan DisplayData, 10)
-	downstreamChans = append(downstreamChans, unifiedInverterChan)
+	interceptorDataChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, unifiedInverterChan, interceptorDataChan)
+
+	// Create inverterSender that sends to inverterOutgoingChan (filtered by interceptor)
+	inverterSender := NewMQTTSender(inverterOutgoingChan)
+
+	// Launch interceptor to filter inverter messages based on powerhouse_inverters_enabled switch
+	SafeGo(ctx, cancel, "inverter-interceptor", func(ctx context.Context) {
+		mqttInterceptorWorker(
+			ctx,
+			"Powerhouse inverters",
+			TopicPowerhouseInvertersEnabledState,
+			inverterOutgoingChan,
+			mqttOutgoingChan,
+			interceptorDataChan,
+			*forceEnable,
+		)
+	})
 
 	SafeGo(ctx, cancel, "unified-inverter-enabler", func(ctx context.Context) {
-		unifiedInverterEnabler(ctx, unifiedInverterChan, unifiedInverterConfig, mqttSender)
+		unifiedInverterEnabler(ctx, unifiedInverterChan, unifiedInverterConfig, inverterSender)
 	})
 
 	// Add senderDataChan to downstream channels for mqttSenderWorker to receive enabled state

@@ -183,8 +183,8 @@ func (s *MQTTSender) PublishDebugSensor(sensorID string, value float64) {
 	})
 }
 
-// CreatePowerctlSwitch creates the powerctl_enabled switch via MQTT discovery
-func (s *MQTTSender) CreatePowerctlSwitch() error {
+// createSwitch creates a Home Assistant switch via MQTT discovery
+func (s *MQTTSender) createSwitch(uniqueID, name, icon, stateTopic string) error {
 	type haDeviceConfig struct {
 		Identifiers  []string `json:"identifiers"`
 		Name         string   `json:"name"`
@@ -202,11 +202,11 @@ func (s *MQTTSender) CreatePowerctlSwitch() error {
 	}
 
 	config := haSwitchConfig{
-		Name:         "Enabled",
-		StateTopic:   TopicPowerctlEnabledState,
-		CommandTopic: "powerctl/switch/powerctl_enabled/set",
-		UniqueId:     "powerctl_enabled",
-		Icon:         "mdi:power",
+		Name:         name,
+		StateTopic:   stateTopic,
+		CommandTopic: "powerctl/switch/" + uniqueID + "/set",
+		UniqueId:     uniqueID,
+		Icon:         icon,
 		Optimistic:   true,
 		Device: haDeviceConfig{
 			Identifiers:  []string{"powerctl"},
@@ -221,13 +221,23 @@ func (s *MQTTSender) CreatePowerctlSwitch() error {
 	}
 
 	s.Send(MQTTMessage{
-		Topic:   "homeassistant/switch/powerctl_enabled/config",
+		Topic:   "homeassistant/switch/" + uniqueID + "/config",
 		Payload: payload,
 		QoS:     2,
 		Retain:  true,
 	})
 
 	return nil
+}
+
+// CreatePowerctlSwitch creates the powerctl_enabled switch via MQTT discovery
+func (s *MQTTSender) CreatePowerctlSwitch() error {
+	return s.createSwitch("powerctl_enabled", "Enabled", "mdi:power", TopicPowerctlEnabledState)
+}
+
+// CreatePowerhouseInvertersSwitch creates the powerhouse_inverters_enabled switch via MQTT discovery
+func (s *MQTTSender) CreatePowerhouseInvertersSwitch() error {
+	return s.createSwitch("powerhouse_inverters_enabled", "Inverter Enabled", "mdi:power-plug", TopicPowerhouseInvertersEnabledState)
 }
 
 // isDiscoveryTopic checks if a topic is an MQTT discovery config topic
@@ -238,6 +248,10 @@ func isDiscoveryTopic(topic string) bool {
 // TopicPowerctlEnabledState is the state topic for the powerctl_enabled switch.
 // Statestream publishes here, powerctl reads to check enabled state.
 const TopicPowerctlEnabledState = "homeassistant/switch/powerctl_enabled/state"
+
+// TopicPowerhouseInvertersEnabledState is the state topic for the powerhouse_inverters_enabled switch.
+// Controls whether unifiedInverterEnabler messages are forwarded.
+const TopicPowerhouseInvertersEnabledState = "homeassistant/switch/powerhouse_inverters_enabled/state"
 
 // mqttSenderWorker handles outgoing MQTT messages with queuing and filtering
 func mqttSenderWorker(
