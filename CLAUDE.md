@@ -347,14 +347,16 @@ The application uses a goroutine-based architecture with message passing via cha
 - **SlowRampConfig**: Tunable parameters for slow ramp
   - `ThresholdSeconds`: Pressure magnitude required before responding (default: 600)
   - `PressureCapSeconds`: Maximum pressure magnitude (default: 660)
-  - `RateAccel`: Acceleration of ramp rate in units/s² (default: 0.02778, yields 100 W/s at cap)
+  - `RateLinear`: Linear coefficient for ramp rate (default: 3500/3540 ≈ 0.9887)
+  - `RateQuadratic`: Quadratic coefficient for ramp rate (default: 40/3540 ≈ 0.0113)
   - `DecayMultiplier`: Multiplier for drain rate vs build rate (default: 2.0)
   - `FullPressureDiff`: Diff at which pressure builds/drains at 1x rate; rate scales linearly with diff
   - `Damping`: Pressure pulled toward zero by this amount per second (default: 0.5)
   - `PressureReleaseFactor`: Release rate per second per unit of pressure above threshold (default: 0.05)
 - **Algorithm behavior**:
   - Ignores brief fluctuations - only responds after sustained change
-  - Slow initial response that accelerates over time (opposite of EMA)
+  - Ramp rate formula: `rate = RateLinear × p + RateQuadratic × p²` (where p = progress seconds above threshold)
+    - Default coefficients yield: 1 W/s at p=1, 100 W/s at p=60
   - Never overshoots - step is capped at remaining difference
   - Both build and drain rates scale linearly: rate = diff / FullPressureDiff
   - Drain rate is multiplied by DecayMultiplier for faster response to direction changes

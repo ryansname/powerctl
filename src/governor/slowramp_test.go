@@ -12,7 +12,8 @@ func testConfig() SlowRampConfig {
 	return SlowRampConfig{
 		ThresholdSeconds:   30,
 		PressureCapSeconds: 100,
-		RateAccel:          1.0,
+		RateLinear:         0.0, // Purely quadratic for test compatibility
+		RateQuadratic:      1.0, // rate = p²
 		DecayMultiplier:    4.0,
 		FullPressureDiff:   100,
 	}
@@ -76,7 +77,8 @@ func TestUpdate(t *testing.T) {
 	config := SlowRampConfig{
 		ThresholdSeconds:   30,
 		PressureCapSeconds: 60,
-		RateAccel:          1.0,
+		RateLinear:         0.0,
+		RateQuadratic:      1.0, // rate = p²
 		DecayMultiplier:    4.0,
 		FullPressureDiff:   500, // diff=500 gives rate=1.0
 	}
@@ -146,7 +148,8 @@ func TestPressureSequences(t *testing.T) {
 	config := SlowRampConfig{
 		ThresholdSeconds:   30,
 		PressureCapSeconds: 60,
-		RateAccel:          1.0,
+		RateLinear:         0.0,
+		RateQuadratic:      1.0,
 		DecayMultiplier:    4.0,
 		FullPressureDiff:   200,
 	}
@@ -181,7 +184,8 @@ func TestSlowRamp_NeverOvershoots(t *testing.T) {
 	config := SlowRampConfig{
 		ThresholdSeconds:   30,
 		PressureCapSeconds: 60,
-		RateAccel:          1.0,
+		RateLinear:         0.0,
+		RateQuadratic:      1.0,
 		DecayMultiplier:    4.0,
 		FullPressureDiff:   200, // diff=200 gives rate=1.0
 	}
@@ -201,7 +205,8 @@ func TestSlowRamp_AcceleratesOverTime(t *testing.T) {
 	config := SlowRampConfig{
 		ThresholdSeconds:   30,
 		PressureCapSeconds: 60,
-		RateAccel:          1.0,
+		RateLinear:         0.0,
+		RateQuadratic:      1.0,
 		DecayMultiplier:    4.0,
 		FullPressureDiff:   10000, // diff=10000 gives rate=1.0
 	}
@@ -230,7 +235,8 @@ func TestSlowRamp_MaxRateAtCap(t *testing.T) {
 	config := SlowRampConfig{
 		ThresholdSeconds:   30,
 		PressureCapSeconds: 60,
-		RateAccel:          1.0,
+		RateLinear:         0.0,
+		RateQuadratic:      1.0, // rate = p², at p=30: rate = 900
 		DecayMultiplier:    4.0,
 		FullPressureDiff:   200, // diff=200 gives rate=1.0
 	}
@@ -256,7 +262,8 @@ func TestSlowRamp_RespondsToTargetReversal(t *testing.T) {
 	config := SlowRampConfig{
 		ThresholdSeconds:   30,
 		PressureCapSeconds: 60,
-		RateAccel:          1.0,
+		RateLinear:         0.0,
+		RateQuadratic:      1.0,
 		DecayMultiplier:    4.0,
 		FullPressureDiff:   500, // diff=500 gives rate=1.0
 	}
@@ -287,7 +294,8 @@ func TestDamping(t *testing.T) {
 	config := SlowRampConfig{
 		ThresholdSeconds:   30,
 		PressureCapSeconds: 100,
-		RateAccel:          1.0,
+		RateLinear:         0.0,
+		RateQuadratic:      1.0,
 		DecayMultiplier:    2.0,
 		FullPressureDiff:   100,
 		Damping:            1.0,
@@ -340,7 +348,8 @@ func TestDampingCreatesDeadZone(t *testing.T) {
 	config := SlowRampConfig{
 		ThresholdSeconds:   30,
 		PressureCapSeconds: 100,
-		RateAccel:          1.0,
+		RateLinear:         0.0,
+		RateQuadratic:      1.0,
 		DecayMultiplier:    2.0,
 		FullPressureDiff:   100,
 		Damping:            0.5,
@@ -368,7 +377,8 @@ func TestPressureRelease(t *testing.T) {
 	config := SlowRampConfig{
 		ThresholdSeconds:      30,
 		PressureCapSeconds:    60,
-		RateAccel:             1.0,
+		RateLinear:            0.0,
+		RateQuadratic:         1.0,
 		DecayMultiplier:       2.0,
 		FullPressureDiff:      100,
 		Damping:               0,                // Disable damping to isolate release behavior
@@ -426,7 +436,8 @@ func TestPressureReleaseEquilibrium(t *testing.T) {
 	config := SlowRampConfig{
 		ThresholdSeconds:      30,
 		PressureCapSeconds:    100,
-		RateAccel:             1.0,
+		RateLinear:            0.0,
+		RateQuadratic:         1.0,
 		DecayMultiplier:       2.0,
 		FullPressureDiff:      100,
 		Damping:               0,               // Disable damping to isolate release behavior
@@ -449,7 +460,8 @@ func TestPressureReleaseWithHighDiff(t *testing.T) {
 	config := SlowRampConfig{
 		ThresholdSeconds:      30,
 		PressureCapSeconds:    50, // Low cap to test capping behavior
-		RateAccel:             1.0,
+		RateLinear:            0.0,
+		RateQuadratic:         1.0,
 		DecayMultiplier:       2.0,
 		FullPressureDiff:      100,
 		Damping:               0,

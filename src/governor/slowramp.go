@@ -16,7 +16,8 @@ type SlowRampState struct {
 type SlowRampConfig struct {
 	ThresholdSeconds      float64 // Pressure magnitude required before responding (e.g., 600)
 	PressureCapSeconds    float64 // Maximum pressure magnitude (e.g., 660)
-	RateAccel             float64 // Acceleration of ramp rate in units/s² (e.g., 0.02778)
+	RateLinear            float64 // Linear coefficient: rate = RateLinear*p + RateQuadratic*p² (e.g., 0.9887)
+	RateQuadratic         float64 // Quadratic coefficient for ramp rate (e.g., 0.0113)
 	DecayMultiplier       float64 // How much faster pressure drains vs builds (e.g., 2.0)
 	FullPressureDiff      float64 // Diff magnitude at which pressure builds at 1x rate; rate scales linearly (2x at 2*FullPressureDiff, etc.)
 	Damping               float64 // Pressure pulled toward zero by this amount per second (e.g., 0.5)
@@ -25,13 +26,16 @@ type SlowRampConfig struct {
 
 // DefaultSlowRampConfig returns the default configuration for power smoothing.
 // With threshold=600s (10min), pressure cap=660s (11min), progressSeconds at cap=60s.
-// RateAccel chosen so maxRate = 100 W/s at cap: 100 / 60² = 0.02778
+// Rate formula: rate = RateLinear*p + RateQuadratic*p² gives 1 W/s at p=1, 100 W/s at p=60.
 // PressureReleaseFactor creates equilibrium where buildRate = releaseRate above threshold.
 func DefaultSlowRampConfig() SlowRampConfig {
+	// Coefficients solved for: rate(1)=1, rate(60)=100
+	// RateLinear = 3500/3540, RateQuadratic = 40/3540
 	return SlowRampConfig{
 		ThresholdSeconds:      600.0,
 		PressureCapSeconds:    660.0,
-		RateAccel:             100.0 / (60.0 * 60.0), // 100 W/s max at pressure cap
+		RateLinear:            3500.0 / 3540.0, // ~0.9887, linear term
+		RateQuadratic:         40.0 / 3540.0,   // ~0.0113, quadratic term
 		DecayMultiplier:       2.0,
 		Damping:               0.5,
 		PressureReleaseFactor: 0.05,
@@ -42,7 +46,7 @@ func DefaultSlowRampConfig() SlowRampConfig {
 // The algorithm:
 // 1. Accumulates signed "pressure" based on how long target differs from current
 // 2. Only starts ramping when |pressure| exceeds ThresholdSeconds
-// 3. Ramp rate accelerates quadratically: rate = RateAccel * progressSeconds²
+// 3. Ramp rate: rate = RateLinear*p + RateQuadratic*p² (where p = progress seconds)
 // 4. Step is capped at remaining difference to prevent overshoot
 // 5. Pressure drains faster than it builds (hysteresis) to reject oscillations
 func (s *SlowRampState) Update(target float64, config SlowRampConfig) float64 {
@@ -63,9 +67,9 @@ func (s *SlowRampState) Update(target float64, config SlowRampConfig) float64 {
 	// This prevents ramping away from target when target reverses
 	absPressure := math.Abs(s.Pressure)
 	if absPressure > config.ThresholdSeconds && diff*s.Pressure > 0 {
-		// Quadratic acceleration: slow start, speeds up over time
-		progressSeconds := absPressure - config.ThresholdSeconds
-		maxRate := config.RateAccel * progressSeconds * progressSeconds
+		// Quadratic + linear ramp: rate = RateLinear*p + RateQuadratic*p²
+		p := absPressure - config.ThresholdSeconds
+		maxRate := config.RateLinear*p + config.RateQuadratic*p*p
 
 		// Move toward target, capped by max rate (prevents overshoot)
 		step := diff
