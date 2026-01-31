@@ -51,10 +51,7 @@ var requiredPercentiles = map[string][]PercentileSpec{
 	"homeassistant/sensor/solar_5_battery_voltage/state": {{1, 15 * time.Minute}},
 	"homeassistant/sensor/solar_3_battery_voltage/state": {{1, 15 * time.Minute}},
 
-	// Powerwall SOC - used by unifiedInverterEnabler for P1._15
-	"homeassistant/sensor/home_sweet_home_charge/state": {{1, 15 * time.Minute}},
-
-	// Load power - used by unifiedInverterEnabler for P66._15, P99._15
+	// Load power - used by unifiedInverterEnabler Powerwall Last mode for P66._15, P99._15
 	"homeassistant/sensor/home_sweet_home_load_power_2/state": {
 		{66, 15 * time.Minute},
 		{99, 15 * time.Minute},

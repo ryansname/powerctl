@@ -168,11 +168,17 @@ The application uses a goroutine-based architecture with message passing via cha
      - **Ratchet-down**: Target can only decrease during the day (never increase mid-day)
      - **Daily reset**: Resets when date changes (fresh start each morning)
      - **Night cycle disable**: Returns 0 when current forecast generation is 0
-   - **Global modes** (each mode handles its own solar subtraction if needed):
-     - Powerwall Low Mode: If Powerwall SOC 15min P1 < 30% → (load_power 1min P99 - current solar)
-     - Powerwall Last Mode: Otherwise → 2/3 × (load_power 1min P66 - current solar)
-     - Both modes apply **Pressure-Gated Accelerating Ramp** smoothing via `governor.SlowRampState` (see Governor Package below)
-   - **Current solar generation**: solar_1 + solar_2 (5min P66), computed once and passed to modes that need it
+   - **Global modes**:
+     - Powerwall Low Mode: SOC-based hysteresis controlling all 9 inverters based on Powerwall SOC (current value)
+       - **Turn ON thresholds** (when SOC falling): 41% → 25% with 2% steps
+         - Inverter 1 ON at 41%, Inverter 9 ON at 25%
+       - **Turn OFF thresholds** (when SOC rising): 28% → 44% with 2% steps
+         - Inverter 1 OFF at 28%, Inverter 9 OFF at 44%
+       - Uses previous mode count for hysteresis (not actual switch states)
+       - Each enabled inverter runs at full 255W (no power scaling)
+     - Powerwall Last Mode: 2/3 × (load_power - current solar)
+       - Applies **Pressure-Gated Accelerating Ramp** smoothing via `governor.SlowRampState` (see Governor Package below)
+   - **Current solar generation**: solar_1 + solar_2, computed once and passed to Powerwall Last mode
    - **Per-battery Overflow mode** (SOC-based hysteresis, calculated independently per battery):
      - If NOT in Float Charging: returns 0 inverters
      - Uses separate turn-on and turn-off thresholds to prevent oscillation
@@ -322,8 +328,9 @@ The application uses a goroutine-based architecture with message passing via cha
   - Battery2, Battery3 (BatteryInverterGroup): Inverters per battery with entity IDs and state topics
   - SolarForecastTopic, Solar1PowerTopic, LoadPowerTopic: Input topics for mode/target calculation
   - WattsPerInverter (255W), MaxTransferPower (5000W)
+  - PowerwallLowSOCTurnOnStart/End (41%/25%), PowerwallLowSOCTurnOffStart/End (28%/44%)
   - OverflowSOCTurnOffStart/End (98.5%/95.0%), OverflowSOCTurnOnStart/End (95.75%/99.5%)
-- **InverterEnablerState**: Runtime state with per-battery SOC lockout flags
+- **InverterEnablerState**: Runtime state with per-battery SOC lockout flags, Powerwall Low count for hysteresis
 
 **Sankey Package** (src/sankey/):
 - **Config** (config.go): Complete sankey configuration with Sensors and Groups

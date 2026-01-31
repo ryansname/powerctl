@@ -110,9 +110,14 @@ type UnifiedInverterConfig struct {
 	ACFrequencyTopic string
 
 	// Constants
-	WattsPerInverter      float64
-	MaxTransferPower      float64
-	PowerwallLowThreshold float64
+	WattsPerInverter float64
+	MaxTransferPower float64
+
+	// Powerwall Low mode configuration (SOC-based hysteresis, 9 inverters)
+	PowerwallLowSOCTurnOnStart  float64 // 41% - first inverter turns on when SOC drops below
+	PowerwallLowSOCTurnOnEnd    float64 // 25% - last inverter turns on when SOC drops below
+	PowerwallLowSOCTurnOffStart float64 // 28% - first inverter turns off when SOC rises above
+	PowerwallLowSOCTurnOffEnd   float64 // 44% - last inverter turns off when SOC rises above
 
 	// Overflow mode configuration (SOC-based hysteresis)
 	OverflowFloatChargeState string  // "Float Charging"
@@ -159,9 +164,11 @@ type InverterEnablerState struct {
 	forecastExcess2 ForecastExcessState
 	forecastExcess3 ForecastExcessState
 
-	// Slow ramp smoothing for Powerwall modes (pressure-gated accelerating ramp)
+	// Slow ramp smoothing for Powerwall Last mode (pressure-gated accelerating ramp)
 	powerwallLastRamp governor.SlowRampState
-	powerwallLowRamp  governor.SlowRampState
+
+	// Previous Powerwall Low inverter count for hysteresis
+	powerwallLowCount int
 }
 
 // ModeResult represents the outcome of mode selection (in inverter counts)
@@ -393,11 +400,11 @@ func selectMode(
 	limitedB2, limitedB3 := applyLimitToPerBattery(perBattery2Count, perBattery3Count, limit.Watts, config.WattsPerInverter)
 	limitedPerBatteryTotal := limitedB2 + limitedB3
 
-	// 5. Calculate global targets (Powerwall modes only, with slow ramp smoothing)
+	// 5. Calculate global targets (Powerwall modes)
 	currentSolar := currentSolarGeneration(data, config)
 	requests := []PowerRequest{
 		powerwallLastRequest(data, config, currentSolar, state),
-		powerwallLowRequest(data, config, currentSolar, state),
+		checkPowerwallLow(data, config, state),
 	}
 	limits := []PowerLimit{limit}
 	targetWatts, globalModes := calculateTargetPower(requests, limits)
@@ -501,12 +508,12 @@ func unifiedInverterEnabler(
 			sender.PublishDebugSensor("powerctl_b3_expected_solar", state.forecastExcess3.DebugExpectedSolarWh)
 			sender.PublishDebugSensor("powerctl_b3_excess", state.forecastExcess3.DebugExcessWh)
 
-			// Publish slow ramp debug sensors
+			// Publish slow ramp debug sensors (Powerwall Last only)
 			sender.PublishDebugSensor("powerctl_powerwall_last_smoothed", state.powerwallLastRamp.Current)
-			sender.PublishDebugSensor("powerctl_powerwall_low_smoothed", state.powerwallLowRamp.Current)
-
-			// Publish pwlast pressure every tick for debugging
 			sender.PublishDebugSensor("powerctl_powerwall_last_pressure", state.powerwallLastRamp.Pressure)
+
+			// Publish Powerwall Low count for debugging
+			sender.PublishDebugSensor("powerctl_powerwall_low_count", float64(state.powerwallLowCount))
 
 			// Apply changes
 			changed := applyInverterChanges(data, config, sender, modeResult.Battery2Count, modeResult.Battery3Count)
@@ -657,27 +664,79 @@ func powerwallLastRequest(
 	return PowerRequest{Name: "PowerwallLast", Watts: smoothed}
 }
 
-// powerwallLowRequest returns current load minus current solar if powerwall SOC is low, else 0,
-// with slow ramp smoothing applied (pressure-gated accelerating ramp).
-func powerwallLowRequest(
+// checkPowerwallLow returns inverter count for Powerwall Low mode using SOC-based hysteresis.
+// Uses Powerwall SOC (current value) to determine how many inverters to enable.
+// Hysteresis uses the previous Powerwall Low count, not actual switch states.
+func checkPowerwallLow(
 	data DisplayData,
 	config UnifiedInverterConfig,
-	currentSolar float64,
 	state *InverterEnablerState,
 ) PowerRequest {
-	powerwallSOC15MinP1 := data.GetPercentile(config.PowerwallSOCTopic, P1, Window15Min)
+	soc := data.GetFloat(config.PowerwallSOCTopic).Current
 
-	// Allow negative targets so slow ramp can respond to excess solar generation
-	var rawTarget float64
-	if powerwallSOC15MinP1 >= config.PowerwallLowThreshold {
-		rawTarget = 0
-	} else {
-		loadPower := data.GetFloat(config.LoadPowerTopic).Current
-		rawTarget = loadPower - currentSolar
+	const maxCount = 9
+	offCount := calculatePowerwallLowOffCount(soc, maxCount, config)
+	onCount := calculatePowerwallLowOnCount(soc, maxCount, config)
+
+	// Use previous Powerwall Low count for hysteresis (not actual switch states)
+	previousCount := state.powerwallLowCount
+
+	var count int
+	switch {
+	case previousCount > offCount:
+		count = offCount // SOC rose above OFF threshold, reduce inverters
+	case previousCount < onCount:
+		count = onCount // SOC fell below ON threshold, add inverters
+	default:
+		count = previousCount // In hysteresis zone, stay put
 	}
 
-	smoothed := state.powerwallLowRamp.Update(rawTarget, slowRampConfig(config.WattsPerInverter))
-	return PowerRequest{Name: "PowerwallLow", Watts: smoothed}
+	// Update state for next iteration
+	state.powerwallLowCount = count
+
+	return PowerRequest{Name: "PowerwallLow", Watts: float64(count) * config.WattsPerInverter}
+}
+
+// calculatePowerwallLowOnCount returns min inverters required when SOC is falling.
+// Thresholds spread from TurnOnStart (41%) down to TurnOnEnd (25%) with 2% steps.
+// SOC < 41% → 1 inverter, SOC < 39% → 2, ... SOC < 25% → 9
+func calculatePowerwallLowOnCount(soc float64, maxCount int, config UnifiedInverterConfig) int {
+	if maxCount <= 1 {
+		if soc < config.PowerwallLowSOCTurnOnStart {
+			return maxCount
+		}
+		return 0
+	}
+
+	step := (config.PowerwallLowSOCTurnOnStart - config.PowerwallLowSOCTurnOnEnd) / float64(maxCount-1)
+	for i := 1; i <= maxCount; i++ {
+		threshold := config.PowerwallLowSOCTurnOnStart - float64(i-1)*step
+		if soc < threshold {
+			return i
+		}
+	}
+	return 0
+}
+
+// calculatePowerwallLowOffCount returns max inverters allowed when SOC is rising.
+// Thresholds spread from TurnOffStart (28%) up to TurnOffEnd (44%) with 2% steps.
+// SOC >= 44% → 0 inverters, SOC >= 42% → 1, ... SOC >= 28% → 8, below 28% → 9
+func calculatePowerwallLowOffCount(soc float64, maxCount int, config UnifiedInverterConfig) int {
+	if maxCount <= 1 {
+		if soc >= config.PowerwallLowSOCTurnOffEnd {
+			return 0
+		}
+		return maxCount
+	}
+
+	step := (config.PowerwallLowSOCTurnOffEnd - config.PowerwallLowSOCTurnOffStart) / float64(maxCount-1)
+	for i := maxCount; i >= 1; i-- {
+		threshold := config.PowerwallLowSOCTurnOffStart + float64(i-1)*step
+		if soc >= threshold {
+			return i - 1
+		}
+	}
+	return maxCount
 }
 
 // powerhouseTransferLimit returns the available capacity after accounting for solar generation
