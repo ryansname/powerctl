@@ -708,14 +708,16 @@ func calculatePowerwallLowOnCount(soc float64, maxCount int, config UnifiedInver
 		return 0
 	}
 
+	// Thresholds decrease: 41, 39, 37, ... 25
+	// Find where SOC stops being below thresholds (first threshold >= SOC)
 	step := (config.PowerwallLowSOCTurnOnStart - config.PowerwallLowSOCTurnOnEnd) / float64(maxCount-1)
 	for i := 1; i <= maxCount; i++ {
 		threshold := config.PowerwallLowSOCTurnOnStart - float64(i-1)*step
-		if soc < threshold {
-			return i
+		if soc >= threshold {
+			return i - 1 // SOC is at or above this threshold
 		}
 	}
-	return 0
+	return maxCount // SOC is below all thresholds
 }
 
 // calculatePowerwallLowOffCount returns max inverters allowed when SOC is rising.
@@ -729,14 +731,16 @@ func calculatePowerwallLowOffCount(soc float64, maxCount int, config UnifiedInve
 		return maxCount
 	}
 
+	// Thresholds increase: 28, 30, 32, ... 44
+	// Find first threshold where SOC < threshold (inverters from there onwards stay on)
 	step := (config.PowerwallLowSOCTurnOffEnd - config.PowerwallLowSOCTurnOffStart) / float64(maxCount-1)
-	for i := maxCount; i >= 1; i-- {
+	for i := 1; i <= maxCount; i++ {
 		threshold := config.PowerwallLowSOCTurnOffStart + float64(i-1)*step
-		if soc >= threshold {
-			return i - 1
+		if soc < threshold {
+			return maxCount - i + 1 // Inverters i through maxCount are allowed
 		}
 	}
-	return maxCount
+	return 0 // SOC >= all thresholds
 }
 
 // powerhouseTransferLimit returns the available capacity after accounting for solar generation
