@@ -549,7 +549,8 @@ func unifiedInverterEnabler(
 			sender.PublishDebugSensor("powerctl_b3_expected_solar", state.forecastExcess3.DebugExpectedSolarWh)
 			sender.PublishDebugSensor("powerctl_b3_excess", state.forecastExcess3.DebugExcessWh)
 
-			// Publish Powerwall Low count for debugging
+			// Publish Powerwall Last and Low debug sensors
+			sender.PublishDebugSensor("powerctl_powerwall_last", state.loadWindow.Min()-state.solarWindow.Max())
 			sender.PublishDebugSensor("powerctl_powerwall_low_count", float64(state.powerwallLow.Current))
 
 			// Apply changes
