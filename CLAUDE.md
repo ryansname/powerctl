@@ -51,7 +51,7 @@ Goroutine-based with message passing via channels. All source code in `src/`.
    - **Safety**: High frequency (>52.75Hz) or grid off + Powerwall >90% disables all
    - **Selection**: max(overflow, forecast_excess) per battery, then global modes, round-robin allocation
    - **Limit**: 5000W - solar_1_power 15min P99
-   - **SOC limits**: 0 inv at 12.5%, 1 at 17.5%, 2 at 22.5%, all at 25% (2.5% hysteresis)
+   - **SOC limits**: Per-battery hysteresis with steps = inverter count (ON: 15%→25%, OFF: 12.5%→22.5%)
 
 10. **mqttSenderWorker** (src/mqtt_sender.go) - Outgoing MQTT with 100-msg buffer, filters based on `powerctl_enabled` switch
 
@@ -78,7 +78,12 @@ Goroutine-based with message passing via channels. All source code in `src/`.
 
 **BatteryConfig** (src/battery_config.go): Shared config with inflow/outflow topics, calibration settings. Helpers: `CalibConfig()`, `SOCConfig()`, `LowVoltageProtectionConfig(threshold)`
 
-**Governor Package** (src/governor/): SlowRampState for pressure-gated accelerating ramp smoothing. Ignores brief fluctuations, responds after sustained change.
+**Governor Package** (src/governor/):
+- **SlowRampState**: Pressure-gated accelerating ramp smoothing. Ignores brief fluctuations, responds after sustained change.
+- **SteppedHysteresis**: Converts continuous values to discrete steps with separate enter/exit thresholds. Constructor: `NewSteppedHysteresis(steps, ascending, increaseStart, increaseEnd, decreaseStart, decreaseEnd)`. Call `Update(value)` to get current step.
+  - Ascending mode (value↑ → step↑): Overflow, SOC Limits
+  - Descending mode (value↓ → step↑): Powerwall Low
+  - Thresholds linearly interpolated from start→end for steps 1 through N
 
 ### Statistics Algorithm
 
@@ -142,4 +147,4 @@ MQTT credentials in `.env` (see `.env.example`): `MQTT_USERNAME`, `MQTT_PASSWORD
 ## Code Style
 
 - If >3 arguments to function, put each on new line (shared-type args count as 1)
-- Before committing, update CLAUDE.md
+- Before committing, update CLAUDE.md if necessary, and consolidate it to keep it as small as possible
