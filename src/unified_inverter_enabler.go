@@ -154,10 +154,6 @@ type ForecastExcessInput struct {
 
 // InverterEnablerState holds runtime state for the unified inverter enabler
 type InverterEnablerState struct {
-	// Per-battery SOC limit with 2.5% hysteresis at each level
-	// Stores current max inverters allowed (0, 1, 2, or hardwareMax for unlimited)
-	battery2SOCLimit int
-	battery3SOCLimit int
 	// Last published debug output for change detection
 	lastDebugOutput string
 	// Per-battery forecast excess state
@@ -167,8 +163,12 @@ type InverterEnablerState struct {
 	// Slow ramp smoothing for Powerwall Last mode (pressure-gated accelerating ramp)
 	powerwallLastRamp governor.SlowRampState
 
-	// Previous Powerwall Low inverter count for hysteresis
-	powerwallLowCount int
+	// Stepped hysteresis controllers
+	powerwallLow   *governor.SteppedHysteresis // Powerwall Low mode (9 inverters)
+	overflow2      *governor.SteppedHysteresis // Overflow mode for Battery 2
+	overflow3      *governor.SteppedHysteresis // Overflow mode for Battery 3
+	socLimit2      *governor.SteppedHysteresis // SOC-based inverter limit for Battery 2
+	socLimit3      *governor.SteppedHysteresis // SOC-based inverter limit for Battery 3
 }
 
 // ModeResult represents the outcome of mode selection (in inverter counts)
@@ -200,11 +200,12 @@ type DebugModeInfo struct {
 
 // checkBatteryOverflow returns inverter count for overflow mode using SOC-based hysteresis.
 // If not Float Charging, returns 0.
-// Otherwise, uses separate turn-on and turn-off thresholds to prevent oscillation.
+// Otherwise, uses the SteppedHysteresis controller to determine inverter count.
 func checkBatteryOverflow(
 	data DisplayData,
 	battery BatteryInverterGroup,
 	config UnifiedInverterConfig,
+	hysteresis *governor.SteppedHysteresis,
 ) PowerRequest {
 	name := "Overflow (" + battery.ShortName + ")"
 
@@ -216,74 +217,9 @@ func checkBatteryOverflow(
 	}
 
 	soc := data.GetFloat(battery.SOCTopic).Current
-	maxCount := len(battery.Inverters)
-
-	// Count currently enabled inverters
-	currentCount := 0
-	for _, inv := range battery.Inverters {
-		if data.GetBoolean(inv.StateTopic) {
-			currentCount++
-		}
-	}
-
-	// Calculate OFF count (max allowed based on falling thresholds)
-	offCount := calculateOverflowOffCount(soc, maxCount, config)
-
-	// Calculate ON count (min required based on rising thresholds)
-	onCount := calculateOverflowOnCount(soc, maxCount, config)
-
-	// Apply hysteresis
-	var count int
-	switch {
-	case currentCount > offCount:
-		count = offCount // SOC dropped, reduce
-	case currentCount < onCount:
-		count = onCount // SOC rose, increase
-	default:
-		count = currentCount // Stay in hysteresis zone
-	}
+	count := hysteresis.Update(soc)
 
 	return PowerRequest{Name: name, Watts: float64(count) * config.WattsPerInverter}
-}
-
-// calculateOverflowOffCount returns max inverters allowed based on turn-off thresholds.
-// Thresholds are evenly spread from TurnOffStart (98.5%) to TurnOffEnd (95.0%).
-func calculateOverflowOffCount(soc float64, maxCount int, config UnifiedInverterConfig) int {
-	if maxCount <= 1 {
-		if soc >= config.OverflowSOCTurnOffStart {
-			return maxCount
-		}
-		return 0
-	}
-
-	step := (config.OverflowSOCTurnOffStart - config.OverflowSOCTurnOffEnd) / float64(maxCount-1)
-	for i := 1; i <= maxCount; i++ {
-		threshold := config.OverflowSOCTurnOffStart - float64(i-1)*step
-		if soc >= threshold {
-			return maxCount - i + 1
-		}
-	}
-	return 0
-}
-
-// calculateOverflowOnCount returns min inverters required based on turn-on thresholds.
-// Thresholds are evenly spread from TurnOnStart (95.75%) to TurnOnEnd (99.5%).
-func calculateOverflowOnCount(soc float64, maxCount int, config UnifiedInverterConfig) int {
-	if maxCount <= 1 {
-		if soc >= config.OverflowSOCTurnOnEnd {
-			return maxCount
-		}
-		return 0
-	}
-
-	step := (config.OverflowSOCTurnOnEnd - config.OverflowSOCTurnOnStart) / float64(maxCount-1)
-	for i := maxCount; i >= 1; i-- {
-		threshold := config.OverflowSOCTurnOnStart + float64(i-1)*step
-		if soc >= threshold {
-			return i
-		}
-	}
-	return 0
 }
 
 // applyLimitToPerBattery applies a global limit to per-battery counts.
@@ -366,8 +302,8 @@ func selectMode(
 	// Global modes (Powerwall Last/Low) still work to help supply house during outages
 
 	// 1. Calculate per-battery overflow (SOC-based hysteresis)
-	overflow2 := checkBatteryOverflow(data, config.Battery2, config)
-	overflow3 := checkBatteryOverflow(data, config.Battery3, config)
+	overflow2 := checkBatteryOverflow(data, config.Battery2, config, state.overflow2)
+	overflow3 := checkBatteryOverflow(data, config.Battery3, config, state.overflow3)
 
 	// 2. Calculate per-battery forecast excess (already capped at max inverter power)
 	forecastExcess2 := forecastExcessRequest(data, config, config.Battery2, &state.forecastExcess2)
@@ -390,8 +326,8 @@ func selectMode(
 	// 3.5. Apply SOC-based limits to per-battery counts
 	soc2 := data.GetFloat(config.Battery2.SOCTopic).Current
 	soc3 := data.GetFloat(config.Battery3.SOCTopic).Current
-	maxB2 := maxInvertersForSOC(soc2, len(config.Battery2.Inverters), &state.battery2SOCLimit)
-	maxB3 := maxInvertersForSOC(soc3, len(config.Battery3.Inverters), &state.battery3SOCLimit)
+	maxB2 := maxInvertersForSOC(soc2, state.socLimit2)
+	maxB3 := maxInvertersForSOC(soc3, state.socLimit3)
 	perBattery2Count = min(perBattery2Count, maxB2)
 	perBattery3Count = min(perBattery3Count, maxB3)
 
@@ -485,10 +421,36 @@ func unifiedInverterEnabler(
 ) {
 	log.Println("Unified inverter enabler started")
 
+	b2Inverters := len(config.Battery2.Inverters)
+	b3Inverters := len(config.Battery3.Inverters)
+
 	state := &InverterEnablerState{
-		battery2SOCLimit: len(config.Battery2.Inverters), // Start unlimited
-		battery3SOCLimit: len(config.Battery3.Inverters), // Start unlimited
+		// Powerwall Low: descending (SOC↓ → inverters↑), 9 steps
+		powerwallLow: governor.NewSteppedHysteresis(
+			9, false,
+			config.PowerwallLowSOCTurnOnStart, config.PowerwallLowSOCTurnOnEnd,
+			config.PowerwallLowSOCTurnOffStart, config.PowerwallLowSOCTurnOffEnd,
+		),
+		// Overflow: ascending (SOC↑ → inverters↑), per-battery
+		overflow2: governor.NewSteppedHysteresis(
+			b2Inverters, true,
+			config.OverflowSOCTurnOnStart, config.OverflowSOCTurnOnEnd,
+			config.OverflowSOCTurnOffStart, config.OverflowSOCTurnOffEnd,
+		),
+		overflow3: governor.NewSteppedHysteresis(
+			b3Inverters, true,
+			config.OverflowSOCTurnOnStart, config.OverflowSOCTurnOnEnd,
+			config.OverflowSOCTurnOffStart, config.OverflowSOCTurnOffEnd,
+		),
+		// SOC Limits: ascending (SOC↑ → limit↑), steps = inverter count per battery
+		// Enter thresholds: 15% → 25% (ascending)
+		// Exit thresholds: 12.5% → 22.5% (ascending)
+		socLimit2: governor.NewSteppedHysteresis(b2Inverters, true, 15, 25, 12.5, 22.5),
+		socLimit3: governor.NewSteppedHysteresis(b3Inverters, true, 15, 25, 12.5, 22.5),
 	}
+	// Initialize SOC limits to max (all inverters allowed)
+	state.socLimit2.Current = b2Inverters
+	state.socLimit3.Current = b3Inverters
 
 	for {
 		select {
@@ -513,7 +475,7 @@ func unifiedInverterEnabler(
 			sender.PublishDebugSensor("powerctl_powerwall_last_pressure", state.powerwallLastRamp.Pressure)
 
 			// Publish Powerwall Low count for debugging
-			sender.PublishDebugSensor("powerctl_powerwall_low_count", float64(state.powerwallLowCount))
+			sender.PublishDebugSensor("powerctl_powerwall_low_count", float64(state.powerwallLow.Current))
 
 			// Apply changes
 			changed := applyInverterChanges(data, config, sender, modeResult.Battery2Count, modeResult.Battery3Count)
@@ -666,81 +628,14 @@ func powerwallLastRequest(
 
 // checkPowerwallLow returns inverter count for Powerwall Low mode using SOC-based hysteresis.
 // Uses Powerwall SOC (current value) to determine how many inverters to enable.
-// Hysteresis uses the previous Powerwall Low count, not actual switch states.
 func checkPowerwallLow(
 	data DisplayData,
 	config UnifiedInverterConfig,
 	state *InverterEnablerState,
 ) PowerRequest {
 	soc := data.GetFloat(config.PowerwallSOCTopic).Current
-
-	const maxCount = 9
-	offCount := calculatePowerwallLowOffCount(soc, maxCount, config)
-	onCount := calculatePowerwallLowOnCount(soc, maxCount, config)
-
-	// Use previous Powerwall Low count for hysteresis (not actual switch states)
-	previousCount := state.powerwallLowCount
-
-	var count int
-	switch {
-	case previousCount > offCount:
-		count = offCount // SOC rose above OFF threshold, reduce inverters
-	case previousCount < onCount:
-		count = onCount // SOC fell below ON threshold, add inverters
-	default:
-		count = previousCount // In hysteresis zone, stay put
-	}
-
-	// Update state for next iteration
-	state.powerwallLowCount = count
-
+	count := state.powerwallLow.Update(soc)
 	return PowerRequest{Name: "PowerwallLow", Watts: float64(count) * config.WattsPerInverter}
-}
-
-// calculatePowerwallLowOnCount returns min inverters required when SOC is falling.
-// Thresholds spread from TurnOnStart (41%) down to TurnOnEnd (25%) with 2% steps.
-// SOC < 41% → 1 inverter, SOC < 39% → 2, ... SOC < 25% → 9
-func calculatePowerwallLowOnCount(soc float64, maxCount int, config UnifiedInverterConfig) int {
-	if maxCount <= 1 {
-		if soc < config.PowerwallLowSOCTurnOnStart {
-			return maxCount
-		}
-		return 0
-	}
-
-	// Thresholds decrease: 41, 39, 37, ... 25
-	// Find where SOC stops being below thresholds (first threshold >= SOC)
-	step := (config.PowerwallLowSOCTurnOnStart - config.PowerwallLowSOCTurnOnEnd) / float64(maxCount-1)
-	for i := 1; i <= maxCount; i++ {
-		threshold := config.PowerwallLowSOCTurnOnStart - float64(i-1)*step
-		if soc >= threshold {
-			return i - 1 // SOC is at or above this threshold
-		}
-	}
-	return maxCount // SOC is below all thresholds
-}
-
-// calculatePowerwallLowOffCount returns max inverters allowed when SOC is rising.
-// Thresholds spread from TurnOffStart (28%) up to TurnOffEnd (44%) with 2% steps.
-// SOC >= 44% → 0 inverters, SOC >= 42% → 1, ... SOC >= 28% → 8, below 28% → 9
-func calculatePowerwallLowOffCount(soc float64, maxCount int, config UnifiedInverterConfig) int {
-	if maxCount <= 1 {
-		if soc >= config.PowerwallLowSOCTurnOffEnd {
-			return 0
-		}
-		return maxCount
-	}
-
-	// Thresholds increase: 28, 30, 32, ... 44
-	// Find first threshold where SOC < threshold (inverters from there onwards stay on)
-	step := (config.PowerwallLowSOCTurnOffEnd - config.PowerwallLowSOCTurnOffStart) / float64(maxCount-1)
-	for i := 1; i <= maxCount; i++ {
-		threshold := config.PowerwallLowSOCTurnOffStart + float64(i-1)*step
-		if soc < threshold {
-			return maxCount - i + 1 // Inverters i through maxCount are allowed
-		}
-	}
-	return 0 // SOC >= all thresholds
 }
 
 // powerhouseTransferLimit returns the available capacity after accounting for solar generation
@@ -802,50 +697,10 @@ func calculateInverterCount(targetWatts, wattsPerInverter float64) int {
 }
 
 // maxInvertersForSOC returns the max inverters allowed based on SOC percentage.
-// Uses 2.5% hysteresis at each threshold level:
-//   - 0 inverters: enters at 12.5%, exits at 15%
-//   - max 1 inverter: enters at 17.5%, exits at 20%
-//   - max 2 inverters: enters at 22.5%, exits at 25%
-//
-// currentLimit should be initialized to hardwareMax (unlimited) on startup.
-func maxInvertersForSOC(socPercent float64, hardwareMax int, currentLimit *int) int {
-	// Determine the limit based on "enter" thresholds (SOC falling)
-	var enterLimit int
-	switch {
-	case socPercent < 12.5:
-		enterLimit = 0
-	case socPercent < 17.5:
-		enterLimit = 1
-	case socPercent < 22.5:
-		enterLimit = 2
-	default:
-		enterLimit = hardwareMax
-	}
-
-	// Determine the limit based on "exit" thresholds (SOC rising)
-	var exitLimit int
-	switch {
-	case socPercent >= 25:
-		exitLimit = hardwareMax
-	case socPercent >= 20:
-		exitLimit = 2
-	case socPercent >= 15:
-		exitLimit = 1
-	default:
-		exitLimit = 0
-	}
-
-	// Apply hysteresis: only change if we cross the appropriate threshold
-	if *currentLimit > enterLimit {
-		// SOC dropped below an enter threshold, reduce limit
-		*currentLimit = enterLimit
-	} else if *currentLimit < exitLimit {
-		// SOC rose above an exit threshold, increase limit
-		*currentLimit = exitLimit
-	}
-	// Otherwise, stay at current limit (in hysteresis band)
-
-	return min(*currentLimit, hardwareMax)
+// Uses SteppedHysteresis where step count equals the battery's inverter count.
+// Each step enables one additional inverter as SOC rises.
+func maxInvertersForSOC(socPercent float64, hysteresis *governor.SteppedHysteresis) int {
+	return hysteresis.Update(socPercent)
 }
 
 // applyInverterChanges enables/disables inverters to match desired counts
