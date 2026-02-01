@@ -46,7 +46,7 @@ Goroutine-based with message passing via channels. All source code in `src/`.
 9. **unifiedInverterEnabler** (src/unified_inverter_enabler.go) - Manages all 9 inverters with multiple modes:
    - **Forecast Excess**: Targets 100% battery by solar end using `excess_wh / hours_until_solar_end`
    - **Powerwall Low**: SOC-based hysteresis (ON: 41%→25%, OFF: 28%→44%)
-   - **Powerwall Last**: 2/3 × (load - solar) with pressure-gated ramp smoothing
+   - **Powerwall Last**: min(load, 1hr) - max(solar, 1hr) using 60-bucket rolling windows
    - **Overflow**: Per-battery SOC hysteresis when Float Charging (OFF: 98.5%→95%, ON: 95.75%→99.5%)
    - **Safety**: High frequency (>52.75Hz) or grid off + Powerwall >90% disables all
    - **Selection**: max(overflow, forecast_excess) per battery, then global modes, round-robin allocation
@@ -79,7 +79,6 @@ Goroutine-based with message passing via channels. All source code in `src/`.
 **BatteryConfig** (src/battery_config.go): Shared config with inflow/outflow topics, calibration settings. Helpers: `CalibConfig()`, `SOCConfig()`, `LowVoltageProtectionConfig(threshold)`
 
 **Governor Package** (src/governor/):
-- **SlowRampState**: Pressure-gated accelerating ramp smoothing. Ignores brief fluctuations, responds after sustained change.
 - **SteppedHysteresis**: Converts continuous values to discrete steps with separate enter/exit thresholds. Constructor: `NewSteppedHysteresis(steps, ascending, increaseStart, increaseEnd, decreaseStart, decreaseEnd)`. Call `Update(value)` to get current step.
   - Ascending mode (value↑ → step↑): Overflow, SOC Limits
   - Descending mode (value↓ → step↑): Powerwall Low

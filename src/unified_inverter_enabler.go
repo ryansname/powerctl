@@ -152,6 +152,77 @@ type ForecastExcessInput struct {
 	ShortName           string
 }
 
+// minMaxBucket holds min/max values for a single minute
+type minMaxBucket struct {
+	min, max float64
+}
+
+// RollingMinMax tracks min/max values over a rolling 1-hour window using 60 1-minute buckets
+type RollingMinMax struct {
+	buckets       [60]minMaxBucket
+	currentMinute int // -1 = uninitialized
+}
+
+// NewRollingMinMax creates a new RollingMinMax with all buckets initialized to sentinel values
+func NewRollingMinMax() RollingMinMax {
+	r := RollingMinMax{currentMinute: -1}
+	for i := range r.buckets {
+		r.buckets[i] = minMaxBucket{min: math.MaxFloat64, max: -math.MaxFloat64}
+	}
+	return r
+}
+
+// Update records a value at the current time
+func (r *RollingMinMax) Update(value float64) {
+	r.updateAt(value, time.Now().Minute())
+}
+
+// updateAt records a value at the specified minute (for testing)
+func (r *RollingMinMax) updateAt(value float64, minute int) {
+	if r.currentMinute >= 0 && minute != r.currentMinute {
+		// Clear missed buckets (wrap around)
+		for i := (r.currentMinute + 1) % 60; i != minute; i = (i + 1) % 60 {
+			r.buckets[i] = minMaxBucket{min: math.MaxFloat64, max: -math.MaxFloat64}
+		}
+	}
+
+	if minute != r.currentMinute {
+		// First value for this minute - init directly
+		r.buckets[minute] = minMaxBucket{min: value, max: value}
+		r.currentMinute = minute
+		return
+	}
+
+	// Update existing bucket
+	b := &r.buckets[minute]
+	b.min = min(b.min, value)
+	b.max = max(b.max, value)
+}
+
+// Min returns the minimum value across all buckets, or 0 if no data
+func (r *RollingMinMax) Min() float64 {
+	result := math.MaxFloat64
+	for _, b := range r.buckets {
+		result = min(result, b.min)
+	}
+	if result == math.MaxFloat64 {
+		return 0
+	}
+	return result
+}
+
+// Max returns the maximum value across all buckets, or 0 if no data
+func (r *RollingMinMax) Max() float64 {
+	result := -math.MaxFloat64
+	for _, b := range r.buckets {
+		result = max(result, b.max)
+	}
+	if result == -math.MaxFloat64 {
+		return 0
+	}
+	return result
+}
+
 // InverterEnablerState holds runtime state for the unified inverter enabler
 type InverterEnablerState struct {
 	// Last published debug output for change detection
@@ -160,8 +231,9 @@ type InverterEnablerState struct {
 	forecastExcess2 ForecastExcessState
 	forecastExcess3 ForecastExcessState
 
-	// Slow ramp smoothing for Powerwall Last mode (pressure-gated accelerating ramp)
-	powerwallLastRamp governor.SlowRampState
+	// Rolling min/max windows for Powerwall Last mode (1-hour, 1-minute buckets)
+	loadWindow  RollingMinMax
+	solarWindow RollingMinMax
 
 	// Stepped hysteresis controllers
 	powerwallLow   *governor.SteppedHysteresis // Powerwall Low mode (9 inverters)
@@ -337,9 +409,8 @@ func selectMode(
 	limitedPerBatteryTotal := limitedB2 + limitedB3
 
 	// 5. Calculate global targets (Powerwall modes)
-	currentSolar := currentSolarGeneration(data, config)
 	requests := []PowerRequest{
-		powerwallLastRequest(data, config, currentSolar, state),
+		powerwallLastRequest(state),
 		checkPowerwallLow(data, config, state),
 	}
 	limits := []PowerLimit{limit}
@@ -425,6 +496,9 @@ func unifiedInverterEnabler(
 	b3Inverters := len(config.Battery3.Inverters)
 
 	state := &InverterEnablerState{
+		// Rolling min/max windows for Powerwall Last mode
+		loadWindow:  NewRollingMinMax(),
+		solarWindow: NewRollingMinMax(),
 		// Powerwall Low: descending (SOC↓ → inverters↑), 9 steps
 		powerwallLow: governor.NewSteppedHysteresis(
 			9, false,
@@ -455,6 +529,11 @@ func unifiedInverterEnabler(
 	for {
 		select {
 		case data := <-dataChan:
+			// Update rolling windows for Powerwall Last mode
+			state.loadWindow.Update(data.GetFloat(config.LoadPowerTopic).Current)
+			solar := data.GetFloat(config.Solar1PowerTopic).Current + data.GetFloat(config.Solar2PowerTopic).Current
+			state.solarWindow.Update(solar)
+
 			modeResult, debugInfo := selectMode(data, config, state)
 
 			// Publish debug output only when it changes
@@ -469,10 +548,6 @@ func unifiedInverterEnabler(
 			sender.PublishDebugSensor("powerctl_b2_excess", state.forecastExcess2.DebugExcessWh)
 			sender.PublishDebugSensor("powerctl_b3_expected_solar", state.forecastExcess3.DebugExpectedSolarWh)
 			sender.PublishDebugSensor("powerctl_b3_excess", state.forecastExcess3.DebugExcessWh)
-
-			// Publish slow ramp debug sensors (Powerwall Last only)
-			sender.PublishDebugSensor("powerctl_powerwall_last_smoothed", state.powerwallLastRamp.Current)
-			sender.PublishDebugSensor("powerctl_powerwall_last_pressure", state.powerwallLastRamp.Pressure)
 
 			// Publish Powerwall Low count for debugging
 			sender.PublishDebugSensor("powerctl_powerwall_low_count", float64(state.powerwallLow.Current))
@@ -598,32 +673,13 @@ func forecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessS
 	return result
 }
 
-// slowRampConfig returns the configuration for Powerwall mode slow ramp smoothing.
-// FullPressureDiff is set to 2x inverter's power (510W) so rate=1 at one inverter change.
-// Damping is set so break-even point is at half an inverter's power (127.5W).
-func slowRampConfig(wattsPerInverter float64) governor.SlowRampConfig {
-	config := governor.DefaultSlowRampConfig()
-	config.FullPressureDiff = wattsPerInverter * 2
-	// Damping = breakEvenDiff / FullPressureDiff, where breakEvenDiff = wattsPerInverter / 2
-	config.Damping = (wattsPerInverter / 2) / config.FullPressureDiff
-	return config
-}
-
-// powerwallLastRequest returns 2/3 of the remaining load after solar subtraction,
-// leaving the Powerwall to supply only 1/3 of the net load.
-// Slow ramp smoothing is applied with pressure-gated accelerating ramp.
-func powerwallLastRequest(
-	data DisplayData,
-	config UnifiedInverterConfig,
-	currentSolar float64,
-	state *InverterEnablerState,
-) PowerRequest {
-	loadPower := data.GetFloat(config.LoadPowerTopic).Current
-	// Supply 2/3 of the remaining load after solar, leaving Powerwall to cover only 1/3
-	// Allow negative targets so slow ramp can respond to excess solar generation
-	rawTarget := (loadPower - currentSolar) * (2.0 / 3.0)
-	smoothed := state.powerwallLastRamp.Update(rawTarget, slowRampConfig(config.WattsPerInverter))
-	return PowerRequest{Name: "PowerwallLast", Watts: smoothed}
+// powerwallLastRequest returns the gap between minimum house load and maximum solar generation.
+// Uses 1-hour rolling min/max windows for natural smoothing.
+func powerwallLastRequest(state *InverterEnablerState) PowerRequest {
+	return PowerRequest{
+		Name:  "PowerwallLast",
+		Watts: state.loadWindow.Min() - state.solarWindow.Max(),
+	}
 }
 
 // checkPowerwallLow returns inverter count for Powerwall Low mode using SOC-based hysteresis.
@@ -677,13 +733,6 @@ func calculateTargetPower(requests []PowerRequest, limits []PowerLimit) (float64
 	}
 
 	return max(target, 0), modes
-}
-
-// currentSolarGeneration returns the current solar generation from solar 1 and 2
-func currentSolarGeneration(data DisplayData, config UnifiedInverterConfig) float64 {
-	solar1 := data.GetFloat(config.Solar1PowerTopic).Current
-	solar2 := data.GetFloat(config.Solar2PowerTopic).Current
-	return solar1 + solar2
 }
 
 // calculateInverterCount computes how many inverters are needed for target power
