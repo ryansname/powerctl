@@ -373,7 +373,7 @@ func main() {
 		log.Fatalf("Failed to create powerhouse inverters switch: %v", err)
 	}
 
-	// Create debug sensors for forecast excess algorithm and slow ramp
+	// Create debug sensors for inverter control algorithms
 	debugSensors := []struct {
 		id, name, unit string
 		precision      int
@@ -382,10 +382,8 @@ func main() {
 		{"powerctl_b2_excess", "B2 Excess", "Wh", 0},
 		{"powerctl_b3_expected_solar", "B3 Expected Solar", "Wh", 0},
 		{"powerctl_b3_excess", "B3 Excess", "Wh", 0},
-		{"powerctl_powerwall_last_smoothed", "Powerwall Last Smoothed", "W", 0},
-		{"powerctl_powerwall_low_smoothed", "Powerwall Low Smoothed", "W", 0},
-		{"powerctl_powerwall_last_pressure", "Powerwall Last Pressure", "s", 1},
-		{"powerctl_powerwall_low_pressure", "Powerwall Low Pressure", "s", 1},
+		{"powerctl_powerwall_last", "Powerwall Last", "W", 0},
+		{"powerctl_powerwall_low_count", "Powerwall Low Count", "", 0},
 	}
 	for _, s := range debugSensors {
 		if err := mqttSender.CreateDebugSensor(s.id, s.name, s.unit, s.precision); err != nil {
