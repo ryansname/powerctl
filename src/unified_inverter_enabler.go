@@ -120,8 +120,7 @@ type UnifiedInverterConfig struct {
 	PowerwallLowSOCTurnOffEnd   float64 // 44% - last inverter turns off when SOC rises above
 
 	// Overflow mode configuration (SOC-based hysteresis)
-	OverflowFloatChargeState string  // "Float Charging"
-	OverflowSOCTurnOffStart  float64 // 98.5% - first inverter turns off when SOC drops below
+	OverflowSOCTurnOffStart float64 // 98.5% - first inverter turns off when SOC drops below
 	OverflowSOCTurnOffEnd    float64 // 95.0% - last inverter turns off when SOC drops below
 	OverflowSOCTurnOnStart   float64 // 95.75% - first inverter turns on when SOC rises above
 	OverflowSOCTurnOnEnd     float64 // 99.5% - last inverter turns on when SOC rises above
@@ -271,8 +270,6 @@ type DebugModeInfo struct {
 }
 
 // checkBatteryOverflow returns inverter count for overflow mode using SOC-based hysteresis.
-// If not Float Charging, returns 0.
-// Otherwise, uses the SteppedHysteresis controller to determine inverter count.
 func checkBatteryOverflow(
 	data DisplayData,
 	battery BatteryInverterGroup,
@@ -280,13 +277,6 @@ func checkBatteryOverflow(
 	hysteresis *governor.SteppedHysteresis,
 ) PowerRequest {
 	name := "Overflow (" + battery.ShortName + ")"
-
-	chargeState := data.GetString(battery.ChargeStateTopic)
-	isFloatCharging := strings.Contains(chargeState, config.OverflowFloatChargeState)
-
-	if !isFloatCharging {
-		return PowerRequest{Name: name, Watts: 0}
-	}
 
 	soc := data.GetFloat(battery.SOCTopic).Current
 	count := hysteresis.Update(soc)

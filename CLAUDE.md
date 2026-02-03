@@ -47,7 +47,7 @@ Goroutine-based with message passing via channels. All source code in `src/`.
    - **Forecast Excess**: Targets 100% battery by solar end using `excess_wh / hours_until_solar_end`
    - **Powerwall Low**: SOC-based hysteresis (ON: 41%→25%, OFF: 28%→44%)
    - **Powerwall Last**: min(load, 1hr) - max(solar, 1hr) using 60-bucket rolling windows
-   - **Overflow**: Per-battery SOC hysteresis when Float Charging (OFF: 98.5%→95%, ON: 95.75%→99.5%)
+   - **Overflow**: Per-battery SOC hysteresis (OFF: 98.5%→95%, ON: 95.75%→99.5%)
    - **Safety**: High frequency (>52.75Hz) or grid off + Powerwall >90% disables all
    - **Selection**: max(overflow, forecast_excess) per battery, then global modes, round-robin allocation
    - **Limit**: 5000W - solar_1_power 15min P99

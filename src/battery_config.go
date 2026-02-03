@@ -151,7 +151,6 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 		PowerwallLowSOCTurnOnEnd:    25.0,
 		PowerwallLowSOCTurnOffStart: 28.0,
 		PowerwallLowSOCTurnOffEnd:   44.0,
-		OverflowFloatChargeState:    "Float Charging",
 		OverflowSOCTurnOffStart:     98.5,
 		OverflowSOCTurnOffEnd:       95.0,
 		OverflowSOCTurnOnStart:      95.75,
