@@ -82,7 +82,7 @@ func TestForecastExcessRequestCore_HasExcessEnergy(t *testing.T) {
 	result := forecastExcessRequestCore(input, state)
 
 	assert.Equal(t, "Forecast Excess (Test)", result.Name)
-	assert.InDelta(t, 1000.0, result.Watts, 0.001, "Should return 1000W (2000 Wh / 2 hours)")
+	assert.InDelta(t, 875.0, result.Watts, 0.001, "Should return 875W (1000W optimal - 125W half-inverter offset)")
 }
 
 func TestForecastExcessRequestCore_SolarEndAtThreshold(t *testing.T) {
@@ -113,8 +113,8 @@ func TestForecastExcessRequestCore_SolarEndAtThreshold(t *testing.T) {
 			availableWh:         9500,
 			// Hours: 1.0, Before cutoff: 2500-750=1750
 			// Excess: 9500+1750-10000=1250 Wh
-			// Optimal: 1250/1.0=1250W (hits cap)
-			expectedWatts: 1250,
+			// Optimal: 1250/1.0=1250W, minus half-inverter (125W) = 1125W
+			expectedWatts: 1125,
 		},
 		{
 			name:                "10:15 - mid first period",
@@ -126,8 +126,8 @@ func TestForecastExcessRequestCore_SolarEndAtThreshold(t *testing.T) {
 			// Optimal before handoff: 975/0.75=1300W
 			// Handoff factor: 0.75/1.0=0.75
 			// Optimal after handoff: 1300*0.75=975W
-			// Ratchet-down: min(1250, 975)=975W
-			expectedWatts: 975,
+			// Ratchet-down: min(1250, 975)=975W, minus half-inverter (125W) = 850W
+			expectedWatts: 850,
 		},
 		{
 			name:                "10:30 - start of second period",
@@ -139,8 +139,8 @@ func TestForecastExcessRequestCore_SolarEndAtThreshold(t *testing.T) {
 			// Optimal before handoff: 200/0.5=400W
 			// Handoff factor: 0.5/1.0=0.5
 			// Optimal after handoff: 400*0.5=200W
-			// Ratchet-down: min(975, 200)=200W
-			expectedWatts: 200,
+			// Ratchet-down: min(975, 200)=200W, minus half-inverter (125W) = 75W
+			expectedWatts: 75,
 		},
 		{
 			name:                "10:45 - mid second period",

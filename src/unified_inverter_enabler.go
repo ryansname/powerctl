@@ -608,7 +608,7 @@ func forecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessS
 
 	// Find solar end time: last period where expected generation exceeds inverter capacity
 	maxInverterWatts := float64(input.InverterCount) * input.WattsPerInverter
-	minForecastKw := maxInverterWatts / (input.SolarMultiplier * 1000)
+	minForecastKw := (maxInverterWatts * 1.1) / (input.SolarMultiplier * 1000)
 	solarEndTime := input.Forecast.FindSolarEndTime(minForecastKw)
 
 	// Calculate hours remaining until solar end
@@ -660,7 +660,9 @@ func forecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessS
 	}
 
 	// Cap at maximum inverter power for this battery
-	result = PowerRequest{Name: name, Watts: min(state.currentTargetWatts, maxInverterWatts)}
+	// Offset by half an inverter to counteract ceil rounding in calculateInverterCount
+	halfInverter := 0.5 * input.WattsPerInverter
+	result = PowerRequest{Name: name, Watts: max(0, min(state.currentTargetWatts-halfInverter, maxInverterWatts))}
 	return result
 }
 
