@@ -4,13 +4,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ryansname/powerctl/src/governor"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSumGenerationAfter(t *testing.T) {
 	// Create test periods: 4 consecutive 30-min periods starting at noon
 	noon := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	periods := ForecastPeriods{
+	periods := governor.ForecastPeriods{
 		{PeriodStart: noon, PvEstimate: 2.0},                       // 12:00-12:30, 2kW
 		{PeriodStart: noon.Add(30 * time.Minute), PvEstimate: 3.0}, // 12:30-13:00, 3kW
 		{PeriodStart: noon.Add(60 * time.Minute), PvEstimate: 1.0}, // 13:00-13:30, 1kW
@@ -64,10 +65,9 @@ func TestSumGenerationAfter(t *testing.T) {
 }
 
 func TestSumGenerationAfter_EmptyPeriods(t *testing.T) {
-	periods := ForecastPeriods{}
+	periods := governor.ForecastPeriods{}
 	noon := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 
 	result := periods.SumGenerationAfter(noon)
 	assert.Equal(t, 0.0, result)
 }
-

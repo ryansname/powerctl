@@ -12,53 +12,6 @@ import (
 	"github.com/ryansname/powerctl/src/governor"
 )
 
-// ForecastPeriod represents a single period from Solcast detailed forecast
-type ForecastPeriod struct {
-	PeriodStart  time.Time `json:"period_start"`
-	PvEstimate   float64   `json:"pv_estimate"`
-	PvEstimate10 float64   `json:"pv_estimate10"`
-	PvEstimate90 float64   `json:"pv_estimate90"`
-}
-
-// ForecastPeriods is a slice of ForecastPeriod with helper methods
-type ForecastPeriods []ForecastPeriod
-
-// FindSolarEndTime returns the end of the last period with generation exceeding the threshold.
-// If no periods exceed the threshold, returns zero time.
-func (periods ForecastPeriods) FindSolarEndTime(minPvEstimateKw float64) time.Time {
-	var lastExceeding time.Time
-	for _, period := range periods {
-		if period.PvEstimate > minPvEstimateKw {
-			lastExceeding = period.PeriodStart.Add(30 * time.Minute)
-		}
-	}
-	return lastExceeding
-}
-
-// GetCurrentGeneration returns pv_estimate for the current 30-min period
-func (periods ForecastPeriods) GetCurrentGeneration(now time.Time) float64 {
-	for _, period := range periods {
-		periodEnd := period.PeriodStart.Add(30 * time.Minute)
-		if !now.Before(period.PeriodStart) && now.Before(periodEnd) {
-			return period.PvEstimate
-		}
-	}
-	return 0
-}
-
-// SumGenerationAfter returns total expected kWh from the cutoff time until end of forecast.
-// Each period contributes (pv_estimate * 0.5) kWh since periods are 30 minutes.
-func (periods ForecastPeriods) SumGenerationAfter(cutoff time.Time) float64 {
-	var totalKwh float64
-	for _, period := range periods {
-		// Only count periods that start at or after cutoff
-		if !period.PeriodStart.Before(cutoff) {
-			totalKwh += period.PvEstimate * 0.5
-		}
-	}
-	return totalKwh
-}
-
 // PowerRequest represents a power request from a rule
 type PowerRequest struct {
 	Name  string
@@ -126,113 +79,17 @@ type UnifiedInverterConfig struct {
 	OverflowSOCTurnOnEnd     float64 // 99.5% - last inverter turns on when SOC rises above
 }
 
-// ForecastExcessState tracks per-battery state for forecast excess inverter mode
-type ForecastExcessState struct {
-	currentTargetWatts    float64
-	lastActiveDate        time.Time // For daily reset (zero value triggers reset on startup)
-	lastForecastRemaining float64   // For caching (only recalculate when forecast changes)
-	cachedResult          PowerRequest
-
-	// Debug values from last calculation (published to HA sensors)
-	DebugExpectedSolarWh float64
-	DebugExcessWh        float64
-}
-
-// ForecastExcessInput holds typed input data for forecastExcessRequestCore
-type ForecastExcessInput struct {
-	Now                 time.Time
-	ForecastRemainingWh float64
-	Forecast            ForecastPeriods
-	AvailableWh         float64
-	InverterCount       int
-	WattsPerInverter    float64
-	SolarMultiplier     float64
-	CapacityWh          float64
-	ShortName           string
-}
-
-// minMaxBucket holds min/max values for a single minute
-type minMaxBucket struct {
-	min, max float64
-}
-
-// RollingMinMax tracks min/max values over a rolling 1-hour window using 60 1-minute buckets
-type RollingMinMax struct {
-	buckets       [60]minMaxBucket
-	currentMinute int // -1 = uninitialized
-}
-
-// NewRollingMinMax creates a new RollingMinMax with all buckets initialized to sentinel values
-func NewRollingMinMax() RollingMinMax {
-	r := RollingMinMax{currentMinute: -1}
-	for i := range r.buckets {
-		r.buckets[i] = minMaxBucket{min: math.MaxFloat64, max: -math.MaxFloat64}
-	}
-	return r
-}
-
-// Update records a value at the current time
-func (r *RollingMinMax) Update(value float64) {
-	r.updateAt(value, time.Now().Minute())
-}
-
-// updateAt records a value at the specified minute (for testing)
-func (r *RollingMinMax) updateAt(value float64, minute int) {
-	if r.currentMinute >= 0 && minute != r.currentMinute {
-		// Clear missed buckets (wrap around)
-		for i := (r.currentMinute + 1) % 60; i != minute; i = (i + 1) % 60 {
-			r.buckets[i] = minMaxBucket{min: math.MaxFloat64, max: -math.MaxFloat64}
-		}
-	}
-
-	if minute != r.currentMinute {
-		// First value for this minute - init directly
-		r.buckets[minute] = minMaxBucket{min: value, max: value}
-		r.currentMinute = minute
-		return
-	}
-
-	// Update existing bucket
-	b := &r.buckets[minute]
-	b.min = min(b.min, value)
-	b.max = max(b.max, value)
-}
-
-// Min returns the minimum value across all buckets, or 0 if no data
-func (r *RollingMinMax) Min() float64 {
-	result := math.MaxFloat64
-	for _, b := range r.buckets {
-		result = min(result, b.min)
-	}
-	if result == math.MaxFloat64 {
-		return 0
-	}
-	return result
-}
-
-// Max returns the maximum value across all buckets, or 0 if no data
-func (r *RollingMinMax) Max() float64 {
-	result := -math.MaxFloat64
-	for _, b := range r.buckets {
-		result = max(result, b.max)
-	}
-	if result == -math.MaxFloat64 {
-		return 0
-	}
-	return result
-}
-
 // InverterEnablerState holds runtime state for the unified inverter enabler
 type InverterEnablerState struct {
 	// Last published debug output for change detection
 	lastDebugOutput string
 	// Per-battery forecast excess state
-	forecastExcess2 ForecastExcessState
-	forecastExcess3 ForecastExcessState
+	forecastExcess2 governor.ForecastExcessState
+	forecastExcess3 governor.ForecastExcessState
 
 	// Rolling min/max windows for Powerwall Last mode (1-hour, 1-minute buckets)
-	loadWindow  RollingMinMax
-	solarWindow RollingMinMax
+	loadWindow  governor.RollingMinMax
+	solarWindow governor.RollingMinMax
 
 	// Stepped hysteresis controllers
 	powerwallLow   *governor.SteppedHysteresis // Powerwall Low mode (9 inverters)
@@ -487,8 +344,8 @@ func unifiedInverterEnabler(
 
 	state := &InverterEnablerState{
 		// Rolling min/max windows for Powerwall Last mode
-		loadWindow:  NewRollingMinMax(),
-		solarWindow: NewRollingMinMax(),
+		loadWindow:  governor.NewRollingMinMax(),
+		solarWindow: governor.NewRollingMinMax(),
 		// Powerwall Low: descending (SOC↓ → inverters↑), 9 steps
 		powerwallLow: governor.NewSteppedHysteresis(
 			9, false,
@@ -560,14 +417,14 @@ func unifiedInverterEnabler(
 }
 
 // forecastExcessRequest calculates forecast excess inverter power for a single battery.
-// This is a wrapper that extracts data from DisplayData and calls forecastExcessRequestCore.
+// Extracts data from DisplayData and delegates to governor.ForecastExcessRequestCore.
 func forecastExcessRequest(
 	data DisplayData,
 	config UnifiedInverterConfig,
 	battery BatteryInverterGroup,
-	state *ForecastExcessState,
+	state *governor.ForecastExcessState,
 ) PowerRequest {
-	input := ForecastExcessInput{
+	input := governor.ForecastExcessInput{
 		Now:                 time.Now(),
 		ForecastRemainingWh: data.GetFloat(config.SolarForecastRemainingTopic).Current,
 		AvailableWh:         data.GetFloat(battery.AvailableEnergyTopic).Current,
@@ -578,92 +435,8 @@ func forecastExcessRequest(
 		ShortName:           battery.ShortName,
 	}
 	data.GetJSON(config.DetailedForecastTopic, &input.Forecast)
-	return forecastExcessRequestCore(input, state)
-}
-
-// forecastExcessRequestCore calculates forecast excess inverter power for a single battery.
-// Returns target watts based on excess energy divided by hours until solar ends.
-// Target can only decrease during the day unless a daily reset occurs.
-func forecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessState) PowerRequest {
-	name := "Forecast Excess (" + input.ShortName + ")"
-
-	// Check if forecast has changed - if not, return cached result
-	if input.ForecastRemainingWh == state.lastForecastRemaining {
-		return state.cachedResult
-	}
-
-	// Cache the result on any exit path
-	var result PowerRequest
-	defer func() {
-		state.lastForecastRemaining = input.ForecastRemainingWh
-		state.cachedResult = result
-	}()
-
-	// Night cycle check: if current forecast generation is 0, disable forecast excess
-	currentGeneration := input.Forecast.GetCurrentGeneration(input.Now)
-	if currentGeneration == 0 {
-		result = PowerRequest{Name: name, Watts: 0}
-		return result
-	}
-
-	// Find solar end time: last period where expected generation exceeds inverter capacity
-	maxInverterWatts := float64(input.InverterCount) * input.WattsPerInverter
-	minForecastKw := (maxInverterWatts * 1.1) / (input.SolarMultiplier * 1000)
-	solarEndTime := input.Forecast.FindSolarEndTime(minForecastKw)
-
-	// Calculate hours remaining until solar end
-	hoursRemaining := solarEndTime.Sub(input.Now).Hours()
-	if hoursRemaining <= 0 {
-		result = PowerRequest{Name: name, Watts: 0}
-		return result
-	}
-
-	// Check for daily reset (date changed, or zero value on startup)
-	today := time.Date(input.Now.Year(), input.Now.Month(), input.Now.Day(), 0, 0, 0, 0, input.Now.Location())
-	dailyReset := !state.lastActiveDate.Equal(today)
-	if dailyReset {
-		state.lastActiveDate = today
-	}
-
-	// Calculate excess energy
-	// Exclude solar after cutoff - it can be fully inverted without using the battery
-	forecastAfterCutoffKwh := input.Forecast.SumGenerationAfter(solarEndTime)
-	solarBeforeCutoffWh := input.ForecastRemainingWh - (forecastAfterCutoffKwh * 1000)
-	expectedSolarWh := input.SolarMultiplier * solarBeforeCutoffWh
-	excessWh := (input.AvailableWh + expectedSolarWh) - input.CapacityWh
-
-	// Store debug values for HA sensors
-	state.DebugExpectedSolarWh = expectedSolarWh
-	state.DebugExcessWh = excessWh
-
-	if excessWh <= 0 {
-		state.currentTargetWatts = 0
-		result = PowerRequest{Name: name, Watts: 0}
-		return result
-	}
-
-	// Calculate optimal power
-	optimalWatts := excessWh / hoursRemaining
-
-	// Lerp down to 0 in the last hour before solar end for smooth handoff to other modes
-	const handoffWindowHours = 1.0
-	if hoursRemaining < handoffWindowHours {
-		handoffFactor := hoursRemaining / handoffWindowHours
-		optimalWatts *= handoffFactor
-	}
-
-	// Apply ratchet-down logic (can only decrease unless daily reset)
-	if dailyReset {
-		state.currentTargetWatts = optimalWatts
-	} else {
-		state.currentTargetWatts = min(state.currentTargetWatts, optimalWatts)
-	}
-
-	// Cap at maximum inverter power for this battery
-	// Offset by half an inverter to counteract ceil rounding in calculateInverterCount
-	halfInverter := 0.5 * input.WattsPerInverter
-	result = PowerRequest{Name: name, Watts: max(0, min(state.currentTargetWatts-halfInverter, maxInverterWatts))}
-	return result
+	result := governor.ForecastExcessRequestCore(input, state)
+	return PowerRequest{Name: result.Name, Watts: result.Watts}
 }
 
 // powerwallLastRequest returns the gap between minimum house load and maximum solar generation.
