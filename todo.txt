@@ -6,3 +6,22 @@
   - Requires: "plugin"-ish system for workers to register their own topics
 
 - Use the proposed derived sensor system to implement the median calculations
+
+- Add change detection to debug sensor publishes (unified_inverter_enabler.go:536-544, battery_soc_worker.go:80-85)
+  - ~8 MQTT messages/second of redundant traffic when values haven't changed
+  - Debug output table already has change detection (line 531-533), sensors should match
+  - Add last-published-value tracking to InverterEnablerState and batterySOCWorker state
+
+- Prevent MQTTSender.Send() from blocking workers indefinitely
+  - Bare channel send blocks forever if 100-msg buffer fills (mqtt_sender.go:33-35)
+  - If MQTT broker is slow, all publishing workers freeze (including safety-critical ones)
+  - Non-blocking drop is only safe for periodic state updates (SOC, debug sensors)
+  - One-shot events (calibration refs) and service calls (inverter off) have internal state
+    that won't re-trigger after a drop — these need guaranteed delivery or explicit retry
+  - Needs careful per-caller analysis; may need separate channels or priority levels
+
+- Handle initial MQTT connection failure (mqtt_worker.go:82-85)
+  - If initial client.Connect() fails, function returns normally (not a panic)
+  - SafeGo treats it as clean exit, does NOT retry
+  - SetAutoReconnect(true) only works after successful first connection
+  - System starts without MQTT connectivity and never recovers
