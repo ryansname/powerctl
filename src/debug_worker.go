@@ -514,7 +514,9 @@ func debugWorker(ctx context.Context, cancel context.CancelFunc, dataChan <-chan
 	state := NewDebugState()
 	state.SetReadline(rl)
 
-	go readlineLoop(ctx, cancel, rl, commandChan)
+	SafeGo(ctx, cancel, "readlineLoop", func(ctx context.Context) {
+		readlineLoop(ctx, cancel, rl, commandChan)
+	})
 
 	for {
 		select {
