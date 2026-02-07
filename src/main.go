@@ -315,6 +315,9 @@ func main() {
 	// Add powerhouse inverters enabled state topic
 	topics = append(topics, TopicPowerhouseInvertersEnabledState)
 
+	// Add PW2 discharge switch state topic
+	topics = append(topics, TopicPW2DischargeState)
+
 	// Sort and dedupe topics list
 	slices.Sort(topics)
 	topics = slices.Compact(topics)
@@ -373,6 +376,13 @@ func main() {
 		log.Fatalf("Failed to create powerhouse inverters switch: %v", err)
 	}
 
+	// Create PW2 discharge switch
+	err = mqttSender.CreatePW2DischargeSwitch()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create PW2 discharge switch: %v", err)
+	}
+
 	// Create debug sensors for inverter control algorithms
 	debugSensors := []struct {
 		id, name, unit string
@@ -398,10 +408,10 @@ func main() {
 	SafeGo(ctx, cancel, "sankey-worker", func(ctx context.Context) {
 		log.Println("Generating sankey configurations...")
 		configs := sankey.Generate()
-		mqttSender.CallService("notify", "send_message", "notify.sankey_config", map[string]string{
+		mqttSender.CallService("notify", "send_message", "notify.sankey_config", map[string]any{
 			"message": configs.SankeyConfig,
 		})
-		mqttSender.CallService("notify", "send_message", "notify.sankey_templates", map[string]string{
+		mqttSender.CallService("notify", "send_message", "notify.sankey_templates", map[string]any{
 			"message": configs.Templates,
 		})
 		mqttSender.CallService("homeassistant", "reload_all", "", nil)
@@ -483,6 +493,14 @@ func main() {
 
 	SafeGo(ctx, cancel, "unified-inverter-enabler", func(ctx context.Context) {
 		unifiedInverterEnabler(ctx, unifiedInverterChan, unifiedInverterConfig, inverterSender)
+	})
+
+	// Launch Powerwall 2 discharge worker
+	pw2DischargeChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, pw2DischargeChan)
+
+	SafeGo(ctx, cancel, "pw2-discharge", func(ctx context.Context) {
+		powerwallDischargeWorker(ctx, pw2DischargeChan, mqttSender)
 	})
 
 	// Add senderDataChan to downstream channels for mqttSenderWorker to receive enabled state

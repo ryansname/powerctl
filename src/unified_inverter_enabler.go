@@ -386,7 +386,7 @@ func unifiedInverterEnabler(
 			// Publish debug output only when it changes
 			debugOutput := formatDebugOutput(debugInfo)
 			if debugOutput != state.lastDebugOutput {
-				sender.CallService("input_text", "set_value", "input_text.powerhouse_control_debug", map[string]string{"value": debugOutput})
+				sender.CallService("input_text", "set_value", "input_text.powerhouse_control_debug", map[string]any{"value": debugOutput})
 				state.lastDebugOutput = debugOutput
 			}
 

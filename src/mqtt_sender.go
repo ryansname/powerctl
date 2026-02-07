@@ -44,7 +44,7 @@ func (s *MQTTSender) Send(msg MQTTMessage) {
 }
 
 // CallService sends a Home Assistant service call via the Node-RED proxy
-func (s *MQTTSender) CallService(domain, service, entityID string, data map[string]string) {
+func (s *MQTTSender) CallService(domain, service, entityID string, data map[string]any) {
 	payload := map[string]any{
 		"domain":  domain,
 		"service": service,
@@ -247,6 +247,11 @@ func (s *MQTTSender) CreatePowerctlSwitch() error {
 // CreatePowerhouseInvertersSwitch creates the powerhouse_inverters_enabled switch via MQTT discovery
 func (s *MQTTSender) CreatePowerhouseInvertersSwitch() error {
 	return s.createSwitch("powerhouse_inverters_enabled", "Inverter Enabled", "mdi:power-plug", TopicPowerhouseInvertersEnabledState)
+}
+
+// CreatePW2DischargeSwitch creates the powerctl_pw2_discharge switch via MQTT discovery
+func (s *MQTTSender) CreatePW2DischargeSwitch() error {
+	return s.createSwitch("powerctl_pw2_discharge", "PW2 Discharge", "mdi:battery-arrow-down", TopicPW2DischargeState)
 }
 
 // isDiscoveryTopic checks if a topic is an MQTT discovery config topic
