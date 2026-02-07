@@ -315,8 +315,9 @@ func main() {
 	// Add powerhouse inverters enabled state topic
 	topics = append(topics, TopicPowerhouseInvertersEnabledState)
 
-	// Add PW2 discharge switch state topic
+	// Add PW2 discharge and expecting power cuts switch state topics
 	topics = append(topics, TopicPW2DischargeState)
+	topics = append(topics, TopicExpectingPowerCutsState)
 
 	// Sort and dedupe topics list
 	slices.Sort(topics)
@@ -381,6 +382,13 @@ func main() {
 	if err != nil {
 		cancel()
 		log.Fatalf("Failed to create PW2 discharge switch: %v", err)
+	}
+
+	// Create expecting power cuts switch
+	err = mqttSender.CreateExpectingPowerCutsSwitch()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create expecting power cuts switch: %v", err)
 	}
 
 	// Create debug sensors for inverter control algorithms
@@ -501,6 +509,14 @@ func main() {
 
 	SafeGo(ctx, cancel, "pw2-discharge", func(ctx context.Context) {
 		powerwallDischargeWorker(ctx, pw2DischargeChan, mqttSender)
+	})
+
+	// Launch expecting power cuts worker
+	expectingPowerCutsChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, expectingPowerCutsChan)
+
+	SafeGo(ctx, cancel, "expecting-power-cuts", func(ctx context.Context) {
+		expectingPowerCutsWorker(ctx, expectingPowerCutsChan, mqttSender)
 	})
 
 	// Add senderDataChan to downstream channels for mqttSenderWorker to receive enabled state

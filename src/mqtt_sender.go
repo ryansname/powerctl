@@ -254,6 +254,11 @@ func (s *MQTTSender) CreatePW2DischargeSwitch() error {
 	return s.createSwitch("powerctl_pw2_discharge", "PW2 Discharge", "mdi:battery-arrow-down", TopicPW2DischargeState)
 }
 
+// CreateExpectingPowerCutsSwitch creates the expecting power cuts switch via MQTT discovery
+func (s *MQTTSender) CreateExpectingPowerCutsSwitch() error {
+	return s.createSwitch("powerctl_expecting_power_cuts", "Expecting Power Cuts", "mdi:transmission-tower-off", TopicExpectingPowerCutsState)
+}
+
 // isDiscoveryTopic checks if a topic is an MQTT discovery config topic
 func isDiscoveryTopic(topic string) bool {
 	return strings.HasSuffix(topic, "/config")
