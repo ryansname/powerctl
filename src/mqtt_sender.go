@@ -1,15 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
+
+type lastSentInfo struct {
+	payload []byte
+	sentAt  time.Time
+}
+
+const resendInterval = 5 * time.Minute
 
 // MQTTMessage represents an outgoing MQTT message
 type MQTTMessage struct {
@@ -266,6 +275,7 @@ func mqttSenderWorker(
 	var client mqtt.Client
 	var messageQueue []MQTTMessage
 	enabled := true // Default to enabled
+	lastSent := make(map[string]lastSentInfo)
 
 	for {
 		select {
@@ -290,6 +300,10 @@ func mqttSenderWorker(
 					if token.Error() != nil {
 						log.Printf("Failed to publish queued message to %s: %v\n", msg.Topic, token.Error())
 					}
+					lastSent[msg.Topic] = lastSentInfo{
+						payload: bytes.Clone(msg.Payload),
+						sentAt:  time.Now(),
+					}
 				}
 				messageQueue = nil // Clear the queue
 				if queuedCount > 0 {
@@ -305,12 +319,26 @@ func mqttSenderWorker(
 				continue
 			}
 
+			// Change detection: skip if payload unchanged and recently sent.
+			// Service calls are commands that must always be forwarded.
+			if msg.Topic != "nodered/proxy/call_service" {
+				if last, ok := lastSent[msg.Topic]; ok {
+					if bytes.Equal(last.payload, msg.Payload) && time.Since(last.sentAt) < resendInterval {
+						continue
+					}
+				}
+			}
+
 			if client != nil && client.IsConnected() {
 				// We have a client, publish immediately
 				token := client.Publish(msg.Topic, msg.QoS, msg.Retain, msg.Payload)
 				token.Wait()
 				if token.Error() != nil {
 					log.Printf("Failed to publish to %s: %v\n", msg.Topic, token.Error())
+				}
+				lastSent[msg.Topic] = lastSentInfo{
+					payload: bytes.Clone(msg.Payload),
+					sentAt:  time.Now(),
 				}
 			} else {
 				// No client yet, queue the message

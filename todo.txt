@@ -7,11 +7,6 @@
 
 - Use the proposed derived sensor system to implement the median calculations
 
-- Add change detection to debug sensor publishes (unified_inverter_enabler.go:536-544, battery_soc_worker.go:80-85)
-  - ~8 MQTT messages/second of redundant traffic when values haven't changed
-  - Debug output table already has change detection (line 531-533), sensors should match
-  - Add last-published-value tracking to InverterEnablerState and batterySOCWorker state
-
 - Prevent MQTTSender.Send() from blocking workers indefinitely
   - Bare channel send blocks forever if 100-msg buffer fills (mqtt_sender.go:33-35)
   - If MQTT broker is slow, all publishing workers freeze (including safety-critical ones)
