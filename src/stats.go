@@ -20,6 +20,7 @@ const (
 	P1   = 1
 	P50  = 50
 	P66  = 66
+	P90  = 90
 	P99  = 99
 	P100 = 100
 )
@@ -57,10 +58,10 @@ var requiredPercentiles = map[string][]PercentileSpec{
 		{99, 15 * time.Minute},
 	},
 
-	// Solar 1 power - used by power_excess_calculator for P50._5, unifiedInverterEnabler for P99._15
+	// Solar 1 power - used by power_excess_calculator for P50._5, unifiedInverterEnabler for P90._15
 	TopicSolar1Power: {
 		{50, 5 * time.Minute},
-		{99, 15 * time.Minute},
+		{90, 15 * time.Minute},
 	},
 
 	// Tesla battery remaining - used by powerExcessCalculator for P50._5

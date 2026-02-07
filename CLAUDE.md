@@ -50,7 +50,7 @@ Goroutine-based with message passing via channels. All source code in `src/`.
    - **Overflow**: Per-battery SOC hysteresis (OFF: 98.5%→95%, ON: 95.75%→99.5%)
    - **Safety**: High frequency (>52.75Hz) or grid off + Powerwall >90% disables all
    - **Selection**: max(overflow, forecast_excess) per battery, then global modes, round-robin allocation
-   - **Limit**: 5000W - solar_1_power 15min P99
+   - **Limit**: 5000W - solar_1_power 15min P90
    - **SOC limits**: Per-battery hysteresis with steps = inverter count (ON: 15%→25%, OFF: 12.5%→22.5%)
 
 10. **mqttSenderWorker** (src/mqtt_sender.go) - Outgoing MQTT with 100-msg buffer, filters based on `powerctl_enabled` switch

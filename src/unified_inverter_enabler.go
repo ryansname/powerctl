@@ -462,8 +462,8 @@ func checkPowerwallLow(
 
 // powerhouseTransferLimit returns the available capacity after accounting for solar generation
 func powerhouseTransferLimit(data DisplayData, config UnifiedInverterConfig) PowerLimit {
-	solar1Power15MinP99 := data.GetPercentile(config.Solar1PowerTopic, P99, Window15Min)
-	availableCapacity := config.MaxTransferPower - solar1Power15MinP99
+	solar1Power15MinP90 := data.GetPercentile(config.Solar1PowerTopic, P90, Window15Min)
+	availableCapacity := config.MaxTransferPower - solar1Power15MinP90
 	return PowerLimit{Name: "PowerhouseTransfer", Watts: availableCapacity}
 }
 
