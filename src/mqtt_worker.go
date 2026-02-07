@@ -51,7 +51,7 @@ func mqttWorker(
 
 				// Skip invalid values from HA - sensor has dropped out
 				// TODO: Track how long sensors have been invalid and send notification
-				if value == "Undefined" || value == "unavailable" {
+				if value == "Undefined" || value == "unavailable" || value == "unknown" {
 					return
 				}
 

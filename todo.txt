@@ -20,3 +20,8 @@
   - SafeGo treats it as clean exit, does NOT retry
   - SetAutoReconnect(true) only works after successful first connection
   - System starts without MQTT connectivity and never recovers
+
+- Handle HA placeholder states consistently (mqtt_worker.go)
+  - "Undefined", "unavailable", and "unknown" are filtered at MQTT ingress
+  - Consider whether other placeholder values exist (e.g., "none", "")
+  - The TODO comment about tracking how long sensors have been invalid still applies

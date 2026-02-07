@@ -277,6 +277,8 @@ var selfPublishedFloatTopics = []string{
 var selfPublishedBoolTopics = []string{
 	TopicPowerctlEnabledState,
 	TopicPowerhouseInvertersEnabledState,
+	TopicPW2DischargeState,
+	TopicExpectingPowerCutsState,
 }
 
 // statsWorker receives messages, maintains statistics, and sends to output channel

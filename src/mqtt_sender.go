@@ -192,7 +192,9 @@ func (s *MQTTSender) PublishDebugSensor(sensorID string, value float64) {
 	})
 }
 
-// createSwitch creates a Home Assistant switch via MQTT discovery
+// createSwitch creates a Home Assistant switch via MQTT discovery.
+// NOTE: The stateTopic must also be added to selfPublishedBoolTopics in stats.go
+// and expectedTopics in main.go, or startup will block/error on first run.
 func (s *MQTTSender) createSwitch(uniqueID, name, icon, stateTopic string) error {
 	type haDeviceConfig struct {
 		Identifiers  []string `json:"identifiers"`
