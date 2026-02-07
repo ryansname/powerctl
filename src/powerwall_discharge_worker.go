@@ -10,7 +10,11 @@ import (
 // TopicPW2DischargeState is the state topic for the powerctl_pw2_discharge switch.
 const TopicPW2DischargeState = "homeassistant/switch/powerctl_pw2_discharge/state"
 
+// TopicPW2OperationMode is the state topic for the Powerwall 2 operation mode select entity.
+const TopicPW2OperationMode = "homeassistant/select/home_sweet_home_operation_mode/state"
+
 const pw2SiteID = "2233628"
+const pw2OperationModeEntity = "select.home_sweet_home_operation_mode"
 
 // powerwallDischargeWorker monitors the PW2 discharge switch and controls
 // Tesla Powerwall 2 discharge via TOU tariff manipulation.
@@ -21,39 +25,51 @@ func powerwallDischargeWorker(
 ) {
 	log.Println("Powerwall discharge worker started")
 
-	discharging := false
+	var lastCommandSent time.Time
 	var lastTOURefresh time.Time
+	commandCooldown := 60 * time.Second
 
 	for {
 		select {
 		case data := <-dataChan:
-			enabled := data.GetBoolean(TopicPW2DischargeState)
+			switchEnabled := data.GetBoolean(TopicPW2DischargeState)
+			currentMode := data.GetString(TopicPW2OperationMode)
+
+			// Cooldown after sending commands (wait for mode to update)
+			if time.Since(lastCommandSent) < commandCooldown {
+				continue
+			}
+
+			actuallyDischarging := currentMode == "autonomous"
 
 			switch {
-			case enabled && !discharging:
+			case switchEnabled && !actuallyDischarging:
 				log.Println("PW2 discharge: activating")
 				startDischarge(sender)
-				discharging = true
+				requestModeUpdate(sender)
+				lastCommandSent = time.Now()
 				lastTOURefresh = time.Now()
-			case !enabled && discharging:
+			case !switchEnabled && actuallyDischarging:
 				log.Println("PW2 discharge: deactivating")
 				stopDischarge(sender)
-				discharging = false
-			case discharging && time.Since(lastTOURefresh) >= time.Hour:
-				log.Println("PW2 discharge: refreshing TOU tariff")
-				sendTOUTariff(sender)
+				requestModeUpdate(sender)
+				lastCommandSent = time.Now()
+			case switchEnabled && actuallyDischarging && time.Since(lastTOURefresh) >= time.Hour:
+				log.Println("PW2 discharge: refreshing discharge state")
+				startDischarge(sender)
 				lastTOURefresh = time.Now()
 			}
 
 		case <-ctx.Done():
-			if discharging {
-				log.Println("PW2 discharge: restoring normal mode on shutdown")
-				stopDischarge(sender)
-			}
 			log.Println("Powerwall discharge worker stopped")
 			return
 		}
 	}
+}
+
+// requestModeUpdate triggers a HA entity update to speed up feedback after commands.
+func requestModeUpdate(sender *MQTTSender) {
+	sender.CallService("homeassistant", "update_entity", pw2OperationModeEntity, nil)
 }
 
 // startDischarge pushes a TOU tariff and sets autonomous mode with battery export.

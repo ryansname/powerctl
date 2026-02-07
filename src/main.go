@@ -315,8 +315,9 @@ func main() {
 	// Add powerhouse inverters enabled state topic
 	topics = append(topics, TopicPowerhouseInvertersEnabledState)
 
-	// Add PW2 discharge and expecting power cuts switch state topics
+	// Add PW2 discharge, operation mode, and expecting power cuts state topics
 	topics = append(topics, TopicPW2DischargeState)
+	topics = append(topics, TopicPW2OperationMode)
 	topics = append(topics, TopicExpectingPowerCutsState)
 
 	// Sort and dedupe topics list
