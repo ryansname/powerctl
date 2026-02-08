@@ -318,6 +318,7 @@ func main() {
 	// Add PW2 discharge, operation mode, and expecting power cuts state topics
 	topics = append(topics, TopicPW2DischargeState)
 	topics = append(topics, TopicPW2OperationMode)
+	topics = append(topics, TopicPW2BackupReserve)
 	topics = append(topics, TopicExpectingPowerCutsState)
 
 	// Sort and dedupe topics list

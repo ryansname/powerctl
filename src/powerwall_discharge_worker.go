@@ -13,8 +13,12 @@ const TopicPW2DischargeState = "homeassistant/switch/powerctl_pw2_discharge/stat
 // TopicPW2OperationMode is the state topic for the Powerwall 2 operation mode select entity.
 const TopicPW2OperationMode = "homeassistant/select/home_sweet_home_operation_mode/state"
 
+// TopicPW2BackupReserve is the state topic for the Powerwall 2 backup reserve number entity.
+const TopicPW2BackupReserve = "homeassistant/number/home_sweet_home_backup_reserve/state"
+
 const pw2SiteID = "2233628"
 const pw2OperationModeEntity = "select.home_sweet_home_operation_mode"
+const pw2BackupReserveEntity = "number.home_sweet_home_backup_reserve"
 
 // powerwallDischargeWorker monitors the PW2 discharge switch and controls
 // Tesla Powerwall 2 discharge via TOU tariff manipulation.
@@ -34,18 +38,19 @@ func powerwallDischargeWorker(
 		case data := <-dataChan:
 			switchEnabled := data.GetBoolean(TopicPW2DischargeState)
 			currentMode := data.GetString(TopicPW2OperationMode)
+			backupReserve := data.GetFloat(TopicPW2BackupReserve).Current
 
 			// Cooldown after sending commands (wait for mode to update)
 			if time.Since(lastCommandSent) < commandCooldown {
 				continue
 			}
 
-			actuallyDischarging := currentMode == "autonomous"
+			actuallyDischarging := currentMode == "Time-Based Control"
 
 			switch {
 			case switchEnabled && !actuallyDischarging:
 				log.Println("PW2 discharge: activating")
-				startDischarge(sender)
+				startDischarge(sender, backupReserve)
 				requestModeUpdate(sender)
 				lastCommandSent = time.Now()
 				lastTOURefresh = time.Now()
@@ -56,7 +61,7 @@ func powerwallDischargeWorker(
 				lastCommandSent = time.Now()
 			case switchEnabled && actuallyDischarging && time.Since(lastTOURefresh) >= time.Hour:
 				log.Println("PW2 discharge: refreshing discharge state")
-				startDischarge(sender)
+				startDischarge(sender, backupReserve)
 				lastTOURefresh = time.Now()
 			}
 
@@ -73,7 +78,7 @@ func requestModeUpdate(sender *MQTTSender) {
 }
 
 // startDischarge pushes a TOU tariff and sets autonomous mode with battery export.
-func startDischarge(sender *MQTTSender) {
+func startDischarge(sender *MQTTSender, currentReserve float64) {
 	sendTOUTariff(sender)
 	sendTeslaAPI(sender, "OPERATION_MODE", map[string]any{
 		"default_real_mode": "autonomous",
@@ -81,6 +86,11 @@ func startDischarge(sender *MQTTSender) {
 	sendTeslaAPI(sender, "ENERGY_SITE_IMPORT_EXPORT_CONFIG", map[string]any{
 		"customer_preferred_export_rule": "battery_ok",
 	})
+	nudgeReserve := 22.0
+	if currentReserve != 21 {
+		nudgeReserve = 21.0
+	}
+	setBackupReserve(sender, nudgeReserve)
 }
 
 // stopDischarge restores self-consumption mode with no battery export.
@@ -90,6 +100,14 @@ func stopDischarge(sender *MQTTSender) {
 	})
 	sendTeslaAPI(sender, "ENERGY_SITE_IMPORT_EXPORT_CONFIG", map[string]any{
 		"customer_preferred_export_rule": "never",
+	})
+	setBackupReserve(sender, 20)
+}
+
+// setBackupReserve sets the Powerwall backup reserve percentage via HA.
+func setBackupReserve(sender *MQTTSender, percent float64) {
+	sender.CallService("number", "set_value", pw2BackupReserveEntity, map[string]any{
+		"value": percent,
 	})
 }
 
@@ -125,8 +143,12 @@ func sendTOUTariff(sender *MQTTSender) {
 // from the current hour and SUPER_OFF_PEAK for the remaining hours.
 // Wrapping (toHour < fromHour) is valid and covers the full 24 hours.
 func buildTOUTariff(now time.Time) map[string]any {
-	onPeakStart := now.Hour()
-	onPeakEnd := (now.Hour() + 3) % 24
+	startMin := now.Hour()*60 + now.Minute()/30*30
+	endMin := (startMin + 60) / 30 * 30
+	onPeakStartHour := (startMin / 60) % 24
+	onPeakStartMin := startMin % 60
+	onPeakEndHour := (endMin / 60) % 24
+	onPeakEndMin := endMin % 60
 
 	touPeriods := map[string]any{
 		"ON_PEAK": map[string]any{
@@ -134,10 +156,10 @@ func buildTOUTariff(now time.Time) map[string]any {
 				map[string]any{
 					"fromDayOfWeek": 0,
 					"toDayOfWeek":   6,
-					"fromHour":      onPeakStart,
-					"fromMinute":    0,
-					"toHour":        onPeakEnd,
-					"toMinute":      0,
+					"fromHour":      onPeakStartHour,
+					"fromMinute":    onPeakStartMin,
+					"toHour":        onPeakEndHour,
+					"toMinute":      onPeakEndMin,
 				},
 			},
 		},
@@ -146,10 +168,10 @@ func buildTOUTariff(now time.Time) map[string]any {
 				map[string]any{
 					"fromDayOfWeek": 0,
 					"toDayOfWeek":   6,
-					"fromHour":      onPeakEnd,
-					"fromMinute":    0,
-					"toHour":        onPeakStart,
-					"toMinute":      0,
+					"fromHour":      onPeakEndHour,
+					"fromMinute":    onPeakEndMin,
+					"toHour":        onPeakStartHour,
+					"toMinute":      onPeakStartMin,
 				},
 			},
 		},
@@ -220,3 +242,4 @@ func buildTOUTariff(now time.Time) map[string]any {
 		},
 	}
 }
+
