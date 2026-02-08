@@ -246,9 +246,9 @@ func (s *MQTTSender) CreatePowerctlSwitch() error {
 	return s.createSwitch("powerctl_enabled", "Enabled", "mdi:power", TopicPowerctlEnabledState)
 }
 
-// CreatePowerhouseInvertersSwitch creates the powerhouse_inverters_enabled switch via MQTT discovery
+// CreatePowerhouseInvertersSwitch creates the powerctl_inverter_enabled switch via MQTT discovery
 func (s *MQTTSender) CreatePowerhouseInvertersSwitch() error {
-	return s.createSwitch("powerhouse_inverters_enabled", "Inverter Enabled", "mdi:power-plug", TopicPowerhouseInvertersEnabledState)
+	return s.createSwitch("powerctl_inverter_enabled", "Inverter Enabled", "mdi:power-plug", TopicPowerhouseInvertersEnabledState)
 }
 
 // CreatePW2DischargeSwitch creates the powerctl_pw2_discharge switch via MQTT discovery
@@ -270,9 +270,9 @@ func isDiscoveryTopic(topic string) bool {
 // Statestream publishes here, powerctl reads to check enabled state.
 const TopicPowerctlEnabledState = "homeassistant/switch/powerctl_enabled/state"
 
-// TopicPowerhouseInvertersEnabledState is the state topic for the powerhouse_inverters_enabled switch.
+// TopicPowerhouseInvertersEnabledState is the state topic for the powerctl_inverter_enabled switch.
 // Controls whether unifiedInverterEnabler messages are forwarded.
-const TopicPowerhouseInvertersEnabledState = "homeassistant/switch/powerhouse_inverters_enabled/state"
+const TopicPowerhouseInvertersEnabledState = "homeassistant/switch/powerctl_inverter_enabled/state"
 
 // mqttSenderWorker handles outgoing MQTT messages with queuing and filtering
 func mqttSenderWorker(

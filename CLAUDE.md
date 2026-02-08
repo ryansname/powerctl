@@ -55,7 +55,7 @@ Goroutine-based with message passing via channels. All source code in `src/`.
 
 10. **mqttSenderWorker** (src/mqtt_sender.go) - Outgoing MQTT with 100-msg buffer, filters based on `powerctl_enabled` switch
 
-11. **mqttInterceptorWorker** (src/mqtt_interceptor.go) - Filters inverter messages via `powerhouse_inverters_enabled` switch
+11. **mqttInterceptorWorker** (src/mqtt_interceptor.go) - Filters inverter messages via `powerctl_inverter_enabled` switch
 
 12. **mqttWorker** (src/mqtt_worker.go) - Connects to MQTT broker, subscribes to topics, forwards to statsWorker
 

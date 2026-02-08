@@ -487,7 +487,7 @@ func main() {
 	// Create inverterSender that sends to inverterOutgoingChan (filtered by interceptor)
 	inverterSender := NewMQTTSender(inverterOutgoingChan)
 
-	// Launch interceptor to filter inverter messages based on powerhouse_inverters_enabled switch
+	// Launch interceptor to filter inverter messages based on powerctl_inverter_enabled switch
 	SafeGo(ctx, cancel, "inverter-interceptor", func(ctx context.Context) {
 		mqttInterceptorWorker(
 			ctx,
