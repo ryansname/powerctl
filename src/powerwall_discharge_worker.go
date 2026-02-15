@@ -139,12 +139,14 @@ func sendTOUTariff(sender *MQTTSender) {
 	})
 }
 
-// buildTOUTariff creates a tariff_content_v2 structure with ON_PEAK for 3 hours
-// from the current hour and SUPER_OFF_PEAK for the remaining hours.
+// buildTOUTariff creates a tariff_content_v2 structure with ON_PEAK for ~90 minutes
+// from the current time and SUPER_OFF_PEAK for the remaining hours.
+// Start rounds down to nearest 30min, end rounds to nearest 30min from now+90min.
 // Wrapping (toHour < fromHour) is valid and covers the full 24 hours.
 func buildTOUTariff(now time.Time) map[string]any {
-	startMin := now.Hour()*60 + now.Minute()/30*30
-	endMin := (startMin + 60) / 30 * 30
+	totalMin := now.Hour()*60 + now.Minute()
+	startMin := totalMin / 30 * 30
+	endMin := (totalMin + 90 + 15) / 30 * 30
 	onPeakStartHour := (startMin / 60) % 24
 	onPeakStartMin := startMin % 60
 	onPeakEndHour := (endMin / 60) % 24

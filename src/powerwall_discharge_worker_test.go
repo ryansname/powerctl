@@ -7,20 +7,26 @@ import (
 
 func TestBuildTOUTariffPeakWindow(t *testing.T) {
 	tests := []struct {
-		name                                                 string
-		hour, min                                            int
+		name                                             string
+		hour, min                                        int
 		wantFromHour, wantFromMin, wantToHour, wantToMin int
 	}{
-		{"on the hour", 3, 0, 3, 0, 4, 0},
-		{"early in half hour", 3, 5, 3, 0, 4, 0},
-		{"mid half hour", 3, 15, 3, 0, 4, 0},
-		{"just before half hour", 3, 29, 3, 0, 4, 0},
-		{"on the half hour", 3, 30, 3, 30, 4, 30},
-		{"late in half hour", 3, 45, 3, 30, 4, 30},
-		{"midnight", 0, 0, 0, 0, 1, 0},
-		{"before midnight", 23, 0, 23, 0, 0, 0},
-		{"before midnight half hour", 23, 30, 23, 30, 0, 30},
-		{"late before midnight", 23, 45, 23, 30, 0, 30},
+		{"on the hour", 3, 0, 3, 0, 4, 30},
+		{"early in half hour", 3, 5, 3, 0, 4, 30},
+		{"mid half hour", 3, 15, 3, 0, 5, 0},
+		{"just before half hour", 3, 29, 3, 0, 5, 0},
+		{"on the half hour", 3, 30, 3, 30, 5, 0},
+		{"late in half hour", 3, 45, 3, 30, 5, 30},
+		{"midnight", 0, 0, 0, 0, 1, 30},
+		{"before midnight", 23, 0, 23, 0, 0, 30},
+		{"before midnight half hour", 23, 30, 23, 30, 1, 0},
+		{"late before midnight", 23, 45, 23, 30, 1, 30},
+		// User-specified examples
+		{"user example 0:30", 0, 30, 0, 30, 2, 0},
+		{"user example 0:31", 0, 31, 0, 30, 2, 0},
+		{"user example 0:45", 0, 45, 0, 30, 2, 30},
+		{"user example 0:59", 0, 59, 0, 30, 2, 30},
+		{"user example 1:00", 1, 0, 1, 0, 2, 30},
 	}
 
 	for _, tt := range tests {
