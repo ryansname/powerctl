@@ -483,8 +483,7 @@ func getHistoryFilePath() string {
 		cacheDir = filepath.Join(home, ".cache")
 	}
 	powerctlCache := filepath.Join(cacheDir, "powerctl")
-	// Create directory if it doesn't exist
-	_ = os.MkdirAll(powerctlCache, 0750)
+	_ = os.MkdirAll(powerctlCache, 0750) //nolint:gosec // path from XDG_CACHE_HOME or user home dir
 	return filepath.Join(powerctlCache, "debug_history")
 }
 
