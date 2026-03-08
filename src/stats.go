@@ -104,6 +104,7 @@ type StringTopicData struct {
 // BooleanTopicData holds current value for a boolean topic (on/off switches)
 type BooleanTopicData struct {
 	Current bool
+	Raw     string
 }
 
 // weightedValue represents a value with its duration weight for percentile calculation
@@ -249,7 +250,7 @@ func cloneTopicData(topicData map[string]any) map[string]any {
 		case *StringTopicData:
 			clone[topic] = &StringTopicData{Current: d.Current}
 		case *BooleanTopicData:
-			clone[topic] = &BooleanTopicData{Current: d.Current}
+			clone[topic] = &BooleanTopicData{Current: d.Current, Raw: d.Raw}
 		}
 	}
 	return clone
@@ -319,22 +320,12 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 				}
 
 				// Handle as float topic
-				var data *FloatTopicData
-				if existing, exists := topicData[msg.Topic]; exists {
-					// Check if existing data is actually FloatTopicData
-					if floatData, ok := existing.(*FloatTopicData); ok {
-						data = floatData
-					} else {
-						// Type mismatch: topic was previously string, now numeric
-						log.Printf("ERROR: Topic %s type changed from string to float (value=%s)\n", msg.Topic, msg.Value)
-						return
-					}
-				} else {
+				data, _ := topicData[msg.Topic].(*FloatTopicData)
+				if data == nil {
 					data = &FloatTopicData{}
 					topicData[msg.Topic] = data
 				}
 
-				// Update current value
 				data.Current = value
 
 				// Add new reading to internal storage (percentiles calculated on ticker)
@@ -347,38 +338,19 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 				// Check if value is a boolean (case-insensitive "on" or "off")
 				lowerValue := strings.ToLower(msg.Value)
 				if lowerValue == "on" || lowerValue == "off" {
-					// Handle as boolean topic
-					var data *BooleanTopicData
-					if existing, exists := topicData[msg.Topic]; exists {
-						if boolData, ok := existing.(*BooleanTopicData); ok {
-							data = boolData
-						} else {
-							log.Printf("ERROR: Topic %s type changed to boolean (value=%s)\n", msg.Topic, msg.Value)
-							return
-						}
-					} else {
+					data, _ := topicData[msg.Topic].(*BooleanTopicData)
+					if data == nil {
 						data = &BooleanTopicData{}
 						topicData[msg.Topic] = data
 					}
 					data.Current = (lowerValue == "on")
+					data.Raw = msg.Value
 				} else {
-					// Handle as string topic
-					var data *StringTopicData
-					if existing, exists := topicData[msg.Topic]; exists {
-						// Check if existing data is actually StringTopicData
-						if stringData, ok := existing.(*StringTopicData); ok {
-							data = stringData
-						} else {
-							// Type mismatch: topic was previously float, now string
-							log.Printf("ERROR: Topic %s type changed from float to string (value=%s)\n", msg.Topic, msg.Value)
-							return
-						}
-					} else {
+					data, _ := topicData[msg.Topic].(*StringTopicData)
+					if data == nil {
 						data = &StringTopicData{}
 						topicData[msg.Topic] = data
 					}
-
-					// Update current value
 					data.Current = msg.Value
 				}
 			}

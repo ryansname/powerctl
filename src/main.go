@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,10 +63,15 @@ func (d *DisplayData) GetPercentile(topic string, percentile int, window time.Du
 	panic(fmt.Sprintf("GetPercentile: P%d with %v window is not registered for topic %q (add it to requiredPercentiles)", percentile, window, topic))
 }
 
-// GetString extracts a string value from DisplayData
+// GetString extracts a string value from DisplayData.
+// Trims surrounding quotes in case the MQTT payload is JSON-encoded.
+// Also works for boolean topics, returning the raw value (e.g. "off").
 func (d *DisplayData) GetString(topic string) string {
-	if td, ok := d.TopicData[topic].(*StringTopicData); ok {
-		return td.Current
+	switch td := d.TopicData[topic].(type) {
+	case *StringTopicData:
+		return strings.Trim(td.Current, "\"")
+	case *BooleanTopicData:
+		return strings.Trim(td.Raw, "\"")
 	}
 	return ""
 }
@@ -321,6 +327,10 @@ func main() {
 	topics = append(topics, TopicPW2BackupReserve)
 	topics = append(topics, TopicExpectingPowerCutsState)
 
+	// Add lounge AC topics for tile color worker
+	topics = append(topics, TopicLoungeACAction)
+	topics = append(topics, TopicLoungeACState)
+
 	// Sort and dedupe topics list
 	slices.Sort(topics)
 	topics = slices.Compact(topics)
@@ -519,6 +529,14 @@ func main() {
 
 	SafeGo(ctx, cancel, "expecting-power-cuts", func(ctx context.Context) {
 		expectingPowerCutsWorker(ctx, expectingPowerCutsChan, mqttSender)
+	})
+
+	// Launch AC tile color worker
+	acTileChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, acTileChan)
+
+	SafeGo(ctx, cancel, "ac-tile-worker", func(ctx context.Context) {
+		acTileWorker(ctx, acTileChan, mqttSender)
 	})
 
 	// Add senderDataChan to downstream channels for mqttSenderWorker to receive enabled state

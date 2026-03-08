@@ -233,6 +233,72 @@ func TestCalculateSelectedPercentile_OutlierFiltering(t *testing.T) {
 	assert.Equal(t, 100.0, p99_2)
 }
 
+func TestCloneTopicData(t *testing.T) {
+	tests := []struct {
+		name     string
+		topic    string
+		original any
+		verify   func(t *testing.T, original, cloned any)
+	}{
+		{
+			name:     "float",
+			topic:    "sensor/power",
+			original: &FloatTopicData{Current: 42.5},
+			verify: func(t *testing.T, original, cloned any) {
+				c, ok := cloned.(*FloatTopicData)
+				assert.True(t, ok)
+				assert.Equal(t, 42.5, c.Current)
+
+				o, ok := original.(*FloatTopicData)
+				assert.True(t, ok)
+				o.Current = 99.0
+				assert.Equal(t, 42.5, c.Current)
+			},
+		},
+		{
+			name:     "string",
+			topic:    "climate/state",
+			original: &StringTopicData{Current: "cool"},
+			verify: func(t *testing.T, original, cloned any) {
+				c, ok := cloned.(*StringTopicData)
+				assert.True(t, ok)
+				assert.Equal(t, "cool", c.Current)
+
+				o, ok := original.(*StringTopicData)
+				assert.True(t, ok)
+				o.Current = "heat"
+				assert.Equal(t, "cool", c.Current)
+			},
+		},
+		{
+			name:     "boolean",
+			topic:    "switch/enabled",
+			original: &BooleanTopicData{Current: true, Raw: "ON"},
+			verify: func(t *testing.T, original, cloned any) {
+				c, ok := cloned.(*BooleanTopicData)
+				assert.True(t, ok)
+				assert.True(t, c.Current)
+				assert.Equal(t, "ON", c.Raw)
+
+				o, ok := original.(*BooleanTopicData)
+				assert.True(t, ok)
+				o.Current = false
+				o.Raw = "OFF"
+				assert.True(t, c.Current)
+				assert.Equal(t, "ON", c.Raw)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := map[string]any{tt.topic: tt.original}
+			clone := cloneTopicData(original)
+			tt.verify(t, original[tt.topic], clone[tt.topic])
+		})
+	}
+}
+
 func TestCalculateRequiredStats_UnregisteredTopicSkipped(t *testing.T) {
 	now := time.Now()
 	readings := Readings{
