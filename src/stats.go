@@ -272,6 +272,8 @@ var selfPublishedFloatTopics = []string{
 	"homeassistant/sensor/battery_2_state_of_charge/state",
 	TopicBattery3Energy,
 	"homeassistant/sensor/battery_3_state_of_charge/state",
+	// Solar 2 inverter goes unavailable at night; default to 0 so startup isn't blocked
+	"homeassistant/sensor/primo_5_0_ac_power/state",
 }
 
 // Boolean topics that should be initialized to true if not received within timeout
