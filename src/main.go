@@ -331,6 +331,10 @@ func main() {
 	topics = append(topics, TopicLoungeACAction)
 	topics = append(topics, TopicLoungeACState)
 
+	// Add powerhouse cooling topics
+	topics = append(topics, TopicPowerhouseBlowerTemp)
+	topics = append(topics, TopicPowerhouseBlowerSwitch0State)
+
 	// Sort and dedupe topics list
 	slices.Sort(topics)
 	topics = slices.Compact(topics)
@@ -537,6 +541,14 @@ func main() {
 
 	SafeGo(ctx, cancel, "ac-tile-worker", func(ctx context.Context) {
 		acTileWorker(ctx, acTileChan, mqttSender)
+	})
+
+	// Launch powerhouse cooling worker
+	coolingChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, coolingChan)
+
+	SafeGo(ctx, cancel, "powerhouse-cooling-worker", func(ctx context.Context) {
+		powerhouseCoolingWorker(ctx, coolingChan, mqttSender)
 	})
 
 	// Add senderDataChan to downstream channels for mqttSenderWorker to receive enabled state
