@@ -24,10 +24,18 @@ var acHvacActionStates = map[string]bool{
 	"heat_cool": true,
 }
 
-// acActionColors maps hvac_action values to tile colors.
+// acActionColors maps hvac_action values to tile colors (active, 75% brightness).
 var acActionColors = map[string]hsColor{
 	"cooling": {200, 80},
 	"heating": {0, 85},
+}
+
+// acStateIdleColors maps climate state to tile colors when hvac_action is "idle".
+// Uses same color as active but at 25% brightness to indicate standby.
+var acStateIdleColors = map[string]hsColor{
+	"cool":      {200, 80},
+	"heat":      {0, 85},
+	"heat_cool": {0, 85},
 }
 
 // acStateColors maps climate state to tile colors for modes
@@ -57,17 +65,8 @@ func acTileWorker(
 ) {
 	log.Println("AC tile worker started")
 
+	lastState := ""
 	lastAction := ""
-
-	lookupColor := func(action string) (hsColor, bool) {
-		if c, ok := acActionColors[action]; ok {
-			return c, true
-		}
-		if c, ok := acStateColors[action]; ok {
-			return c, true
-		}
-		return hsColor{}, false
-	}
 
 	for {
 		select {
@@ -76,19 +75,34 @@ func acTileWorker(
 			hvacAction := data.GetString(TopicLoungeACAction)
 			action := resolveACTileAction(state, hvacAction)
 
-			if action == "" || action == lastAction {
+			if action == "" || (action == lastAction && state == lastState) {
 				continue
 			}
 			lastAction = action
+			lastState = state
 
-			if color, ok := lookupColor(action); ok {
-				log.Printf("AC tile: action=%s, setting tiles to hs(%.0f, %.0f)\n", action, color.Hue, color.Saturation)
+			if color, ok := acActionColors[action]; ok {
+				log.Printf("AC tile: state=%s action=%s, setting tiles to hs(%.0f, %.0f) 75%%\n", state, action, color.Hue, color.Saturation)
+				sender.CallService("light", "turn_on", "light.tiles", map[string]any{
+					"hs_color":       []float64{color.Hue, color.Saturation},
+					"brightness_pct": 75,
+				})
+			} else if action == "idle" {
+				if color, ok := acStateIdleColors[state]; ok {
+					log.Printf("AC tile: state=%s action=idle, setting tiles to hs(%.0f, %.0f) 25%%\n", state, color.Hue, color.Saturation)
+					sender.CallService("light", "turn_on", "light.tiles", map[string]any{
+						"hs_color":       []float64{color.Hue, color.Saturation},
+						"brightness_pct": 25,
+					})
+				}
+			} else if color, ok := acStateColors[action]; ok {
+				log.Printf("AC tile: state=%s, setting tiles to hs(%.0f, %.0f) 75%%\n", state, color.Hue, color.Saturation)
 				sender.CallService("light", "turn_on", "light.tiles", map[string]any{
 					"hs_color":       []float64{color.Hue, color.Saturation},
 					"brightness_pct": 75,
 				})
 			} else {
-				log.Printf("AC tile: action=%s, turning tiles off\n", action)
+				log.Printf("AC tile: state=%s action=%s, turning tiles off\n", state, action)
 				sender.CallService("light", "turn_off", "light.tiles", nil)
 			}
 
