@@ -91,6 +91,9 @@ type InverterEnablerState struct {
 	loadWindow  governor.RollingMinMax
 	solarWindow governor.RollingMinMax
 
+	// Combined solar max for grid-off per-battery mode gating
+	gridOffSolarMax governor.RollingMinMax
+
 	// Stepped hysteresis controllers
 	powerwallLow   *governor.SteppedHysteresis // Powerwall Low mode (9 inverters)
 	overflow2      *governor.SteppedHysteresis // Overflow mode for Battery 2
@@ -217,9 +220,6 @@ func selectMode(
 		}
 	}
 
-	// Grid off: disable per-battery modes (overflow and forecast excess)
-	// Global modes (Powerwall Last/Low) still work to help supply house during outages
-
 	// 1. Calculate per-battery overflow (SOC-based hysteresis)
 	overflow2 := checkBatteryOverflow(data, config.Battery2, config, state.overflow2)
 	overflow3 := checkBatteryOverflow(data, config.Battery3, config, state.overflow3)
@@ -228,12 +228,19 @@ func selectMode(
 	forecastExcess2 := forecastExcessRequest(data, config, config.Battery2, &state.forecastExcess2)
 	forecastExcess3 := forecastExcessRequest(data, config, config.Battery3, &state.forecastExcess3)
 
-	// Zero out per-battery modes when grid is unavailable
+	// Grid off: disable per-battery modes only when solar is high (>= 3kW max over 1hr).
+	// When solar is low, allow overflow/forecast excess to prevent wasting energy on borderline days.
+	// Global modes (Powerwall Last/Low) always work during outages regardless.
 	if !gridAvailable {
-		overflow2.Watts = 0
-		overflow3.Watts = 0
-		forecastExcess2.Watts = 0
-		forecastExcess3.Watts = 0
+		combinedSolar := data.GetFloat(config.Solar1PowerTopic).Current +
+			data.GetFloat(config.Solar2PowerTopic).Current
+		state.gridOffSolarMax.Update(combinedSolar)
+		if state.gridOffSolarMax.Max() >= 3000 {
+			overflow2.Watts = 0
+			overflow3.Watts = 0
+			forecastExcess2.Watts = 0
+			forecastExcess3.Watts = 0
+		}
 	}
 
 	// 3. For each battery, take max of overflow and forecast excess
@@ -344,8 +351,9 @@ func unifiedInverterEnabler(
 
 	state := &InverterEnablerState{
 		// Rolling min/max windows for Powerwall Last mode
-		loadWindow:  governor.NewRollingMinMax(),
-		solarWindow: governor.NewRollingMinMax(),
+		loadWindow:      governor.NewRollingMinMax(),
+		solarWindow:     governor.NewRollingMinMax(),
+		gridOffSolarMax: governor.NewRollingMinMax(),
 		// Powerwall Low: descending (SOC↓ → inverters↑), 9 steps
 		powerwallLow: governor.NewSteppedHysteresis(
 			9, false,
