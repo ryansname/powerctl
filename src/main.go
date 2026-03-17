@@ -229,7 +229,7 @@ func main() {
 		OutflowEnergyTopics: []string{
 			"homeassistant/sensor/powerhouse_inverter_1_switch_0_energy/state",
 			"homeassistant/sensor/powerhouse_inverter_2_switch_0_energy/state",
-			// "homeassistant/sensor/powerhouse_inverter_3_switch_0_energy/state", // inverter 3 dead
+			"homeassistant/sensor/powerhouse_inverter_3_switch_0_energy/state",
 			"homeassistant/sensor/powerhouse_inverter_4_switch_0_energy/state",
 		},
 		InflowPowerTopics: []string{
@@ -238,7 +238,7 @@ func main() {
 		OutflowPowerTopics: []string{
 			"homeassistant/sensor/powerhouse_inverter_1_switch_0_power/state",
 			"homeassistant/sensor/powerhouse_inverter_2_switch_0_power/state",
-			// "homeassistant/sensor/powerhouse_inverter_3_switch_0_power/state", // inverter 3 dead
+			"homeassistant/sensor/powerhouse_inverter_3_switch_0_power/state",
 			"homeassistant/sensor/powerhouse_inverter_4_switch_0_power/state",
 		},
 		ChargeStateTopic:    "homeassistant/sensor/solar_5_charge_state/state",
@@ -253,7 +253,7 @@ func main() {
 		InverterSwitchIDs: []string{
 			"switch.powerhouse_inverter_1_switch_0",
 			"switch.powerhouse_inverter_2_switch_0",
-			// "switch.powerhouse_inverter_3_switch_0", // inverter 3 dead
+			"switch.powerhouse_inverter_3_switch_0",
 			"switch.powerhouse_inverter_4_switch_0",
 		},
 	}
