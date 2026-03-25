@@ -285,6 +285,7 @@ func selectMode(
 
 	// Build debug info with contributing flags
 	debug := DebugModeInfo{
+		PowerwallSOC: powerwallSOC,
 		Modes: []ModeState{
 			{Name: "Forecast Excess (B2)", Watts: forecastExcess2.Watts, Contributing: limitedB2 > 0 && perBattery2.Name == forecastExcess2.Name},
 			{Name: "Forecast Excess (B3)", Watts: forecastExcess3.Watts, Contributing: limitedB3 > 0 && perBattery3.Name == forecastExcess3.Name},
