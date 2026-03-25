@@ -147,7 +147,7 @@ static_scale: 0
 sort_by: state
 throttle: 5000
 layout: horizontal
-height: 200
+height: 215
 unit_prefix: ""
 round: 0
 convert_units_to: "W"
