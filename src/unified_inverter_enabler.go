@@ -397,7 +397,9 @@ func unifiedInverterEnabler(
 			modeResult, debugInfo := selectMode(data, config, state)
 
 			// Expecting power cuts: block discharge for batteries around 50% SOC (hysteresis: 47-53%)
-			if data.GetBoolean(TopicExpectingPowerCutsState) {
+			// Only when grid is on -- no point conserving energy during an actual outage
+			conservingForPowerCut := data.GetBoolean(TopicExpectingPowerCutsState) && data.GetBoolean(config.GridStatusTopic)
+			if conservingForPowerCut {
 				if state.powerCutAllow2.Update(data.GetFloat(config.Battery2.SOCTopic).Current) == 0 {
 					modeResult.Battery2Count = 0
 				}
