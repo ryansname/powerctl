@@ -276,6 +276,11 @@ var selfPublishedFloatTopics = []string{
 	"homeassistant/sensor/primo_5_0_ac_power/state",
 }
 
+// String topics that should be initialized to a default if not received within timeout
+var selfPublishedStringTopics = map[string]string{
+	TopicMinerWorkmode: WorkmodeOff, // dump_load_enabler controls this; default to off
+}
+
 // Boolean topics that should be initialized to true if not received within timeout
 var selfPublishedBoolTopics = []string{
 	TopicPowerctlEnabledState,
@@ -399,6 +404,13 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 					log.Printf("Initializing missing self-published topic to 0.0: %s\n", topic)
 					topicData[topic] = &FloatTopicData{Current: 0.0}
 					topicReadings[topic] = Readings{{Value: 0.0, Timestamp: time.Now()}}
+				}
+			}
+			// Initialize self-published string topics to defaults if not yet received
+			for topic, defaultValue := range selfPublishedStringTopics {
+				if _, exists := topicData[topic]; !exists {
+					log.Printf("Initializing missing self-published topic to %q: %s\n", defaultValue, topic)
+					topicData[topic] = &StringTopicData{Current: defaultValue}
 				}
 			}
 			// Initialize self-published boolean topics to true if not yet received

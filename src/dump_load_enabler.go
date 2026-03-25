@@ -7,7 +7,7 @@ import (
 
 const (
 	MinerWorkmodeEntity = "select.miner1_workmode_set"
-	// Topic to read current miner workmode from HA
+	// Topic to read current miner workmode from HA (self-published; see selfPublishedStringTopics in stats.go)
 	TopicMinerWorkmode = "homeassistant/select/miner1_workmode_set/state"
 
 	WorkmodeSuper    = "Super"
