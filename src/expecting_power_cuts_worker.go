@@ -14,6 +14,9 @@ const TopicExpectingPowerCutsState = "homeassistant/switch/powerctl_expecting_po
 // PowerwallSOCTopic is the Powerwall 2 state of charge topic.
 const PowerwallSOCTopic = "homeassistant/sensor/home_sweet_home_charge/state"
 
+// TopicHotWaterCylinderState is the state topic for the hot water cylinder switch.
+const TopicHotWaterCylinderState = "homeassistant/switch/hot_water_cylinder/state"
+
 // expectingPowerCutsWorker monitors Powerwall SOC and automatically toggles
 // the PW2 discharge switch when the expecting power cuts switch is enabled.
 // Uses hysteresis: enables discharge at >=90% SOC, disables at <=85% SOC.
@@ -51,6 +54,32 @@ func expectingPowerCutsWorker(
 
 			if time.Since(lastCommandSent) < commandCooldown {
 				continue
+			}
+
+			// State-based power cut preparation: hold PW2 at 50%, turn off hot water
+			backupReserve := data.GetFloat(TopicPW2BackupReserve).Current
+			hotWaterOn := data.GetBoolean(TopicHotWaterCylinderState)
+
+			if enabled {
+				if backupReserve != 50 {
+					log.Println("Expecting power cuts: setting PW2 backup reserve to 50%")
+					setBackupReserve(sender, 50)
+					lastCommandSent = time.Now()
+				}
+			} else if backupReserve == 50 {
+				log.Println("Expecting power cuts: restoring PW2 backup reserve to 10%")
+				setBackupReserve(sender, 10)
+				lastCommandSent = time.Now()
+			}
+
+			if enabled && hotWaterOn {
+				log.Println("Expecting power cuts: turning off hot water cylinder")
+				sender.CallService("switch", "turn_off", "switch.hot_water_cylinder", nil)
+				lastCommandSent = time.Now()
+			} else if !enabled && !hotWaterOn {
+				log.Println("Expecting power cuts: turning on hot water cylinder")
+				sender.CallService("switch", "turn_on", "switch.hot_water_cylinder", nil)
+				lastCommandSent = time.Now()
 			}
 
 			shouldDischarge := enabled && hysteresis.Update(soc) > 0

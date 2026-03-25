@@ -101,7 +101,7 @@ func stopDischarge(sender *MQTTSender) {
 	sendTeslaAPI(sender, "ENERGY_SITE_IMPORT_EXPORT_CONFIG", map[string]any{
 		"customer_preferred_export_rule": "never",
 	})
-	setBackupReserve(sender, 20)
+	setBackupReserve(sender, 10)
 }
 
 // setBackupReserve sets the Powerwall backup reserve percentage via HA.

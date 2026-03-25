@@ -100,6 +100,8 @@ type InverterEnablerState struct {
 	overflow3      *governor.SteppedHysteresis // Overflow mode for Battery 3
 	socLimit2      *governor.SteppedHysteresis // SOC-based inverter limit for Battery 2
 	socLimit3      *governor.SteppedHysteresis // SOC-based inverter limit for Battery 3
+	powerCutAllow2 *governor.SteppedHysteresis // Expecting power cuts: allow inverters above ~50% SOC
+	powerCutAllow3 *governor.SteppedHysteresis // Expecting power cuts: allow inverters above ~50% SOC
 }
 
 // ModeResult represents the outcome of mode selection (in inverter counts)
@@ -376,6 +378,9 @@ func unifiedInverterEnabler(
 		// Exit thresholds: 12.5% → 22.5% (ascending)
 		socLimit2: governor.NewSteppedHysteresis(b2Inverters, true, 15, 25, 12.5, 22.5),
 		socLimit3: governor.NewSteppedHysteresis(b3Inverters, true, 15, 25, 12.5, 22.5),
+		// Expecting power cuts: 1-step ascending, allow at 53%, block at 47%
+		powerCutAllow2: governor.NewSteppedHysteresis(1, true, 53, 53, 47, 47),
+		powerCutAllow3: governor.NewSteppedHysteresis(1, true, 53, 53, 47, 47),
 	}
 	// Initialize SOC limits to max (all inverters allowed)
 	state.socLimit2.Current = b2Inverters
@@ -390,6 +395,19 @@ func unifiedInverterEnabler(
 			state.solarWindow.Update(solar)
 
 			modeResult, debugInfo := selectMode(data, config, state)
+
+			// Expecting power cuts: block discharge for batteries around 50% SOC (hysteresis: 47-53%)
+			if data.GetBoolean(TopicExpectingPowerCutsState) {
+				if state.powerCutAllow2.Update(data.GetFloat(config.Battery2.SOCTopic).Current) == 0 {
+					modeResult.Battery2Count = 0
+				}
+				if state.powerCutAllow3.Update(data.GetFloat(config.Battery3.SOCTopic).Current) == 0 {
+					modeResult.Battery3Count = 0
+				}
+				if modeResult.TotalCount() == 0 {
+					debugInfo.SafetyReason = "Expecting power cuts (batteries < 50%)"
+				}
+			}
 
 			// Publish debug output only when it changes
 			debugOutput := formatDebugOutput(debugInfo)

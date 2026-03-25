@@ -326,6 +326,7 @@ func main() {
 	topics = append(topics, TopicPW2OperationMode)
 	topics = append(topics, TopicPW2BackupReserve)
 	topics = append(topics, TopicExpectingPowerCutsState)
+	topics = append(topics, TopicHotWaterCylinderState)
 
 	// Add lounge AC topics for tile color worker
 	topics = append(topics, TopicLoungeACAction)
