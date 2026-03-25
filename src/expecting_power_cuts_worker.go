@@ -61,12 +61,12 @@ func expectingPowerCutsWorker(
 			hotWaterOn := data.GetBoolean(TopicHotWaterCylinderState)
 
 			if enabled {
-				if backupReserve != 50 {
+				if backupReserve < 50 {
 					log.Println("Expecting power cuts: setting PW2 backup reserve to 50%")
 					setBackupReserve(sender, 50)
 					lastCommandSent = time.Now()
 				}
-			} else if backupReserve == 50 {
+			} else if backupReserve >= 50 {
 				log.Println("Expecting power cuts: restoring PW2 backup reserve to 10%")
 				setBackupReserve(sender, 10)
 				lastCommandSent = time.Now()
