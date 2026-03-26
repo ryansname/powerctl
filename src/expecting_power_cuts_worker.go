@@ -34,6 +34,7 @@ func expectingPowerCutsWorker(
 
 	var autoDisableTimer *time.Timer
 	var autoDisableChan <-chan time.Time
+	hotWaterTurnedOff := false
 
 	for {
 		select {
@@ -60,25 +61,30 @@ func expectingPowerCutsWorker(
 			backupReserve := data.GetFloat(TopicPW2BackupReserve).Current
 			hotWaterOn := data.GetBoolean(TopicHotWaterCylinderState)
 
-			if enabled {
-				if backupReserve < 50 {
-					log.Println("Expecting power cuts: setting PW2 backup reserve to 50%")
-					setBackupReserve(sender, 50)
-					lastCommandSent = time.Now()
-				}
-			} else if backupReserve >= 50 {
-				log.Println("Expecting power cuts: restoring PW2 backup reserve to 10%")
+			if enabled && backupReserve < 50 {
+				log.Println("Power cut prep: setting PW2 backup reserve to 50%")
+				setBackupReserve(sender, 50)
+				lastCommandSent = time.Now()
+			} else if !enabled && backupReserve >= 50 {
+				log.Println("Power cut prep over: restoring PW2 backup reserve to 10%")
 				setBackupReserve(sender, 10)
 				lastCommandSent = time.Now()
 			}
 
 			if enabled && hotWaterOn {
-				log.Println("Expecting power cuts: turning off hot water cylinder")
-				sender.CallService("switch", "turn_off", "switch.hot_water_cylinder", nil)
-				lastCommandSent = time.Now()
-			} else if !enabled && !hotWaterOn {
-				log.Println("Expecting power cuts: turning on hot water cylinder")
+				if !hotWaterTurnedOff {
+					log.Println("Power cut prep: turning off hot water cylinder")
+					sender.CallService("switch", "turn_off", "switch.hot_water_cylinder", nil)
+					hotWaterTurnedOff = true
+					lastCommandSent = time.Now()
+				} else {
+					// Someone manually turned it back on — don't fight them
+					hotWaterTurnedOff = false
+				}
+			} else if !enabled && hotWaterTurnedOff {
+				log.Println("Power cut prep over: turning on hot water cylinder")
 				sender.CallService("switch", "turn_on", "switch.hot_water_cylinder", nil)
+				hotWaterTurnedOff = false
 				lastCommandSent = time.Now()
 			}
 
