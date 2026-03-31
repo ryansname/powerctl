@@ -1,6 +1,10 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code when working with this repository.
+You should use the home assistant integration to investigate and confirm names, options and behaviours; it is preferrable to automate and manage things within Powerctl.
+When controlling devices in powerctl you can take two approaches:
+1. Rely on internal state - this is good when the humans want to be able to override what is happening, but can be confusing #2 should be preferred unless there is good reason.
+2. Rely on HA state via MQTT - this way there is not a desync between the HA view and powerctl view
 
 ## Project Overview
 

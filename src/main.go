@@ -328,9 +328,10 @@ func main() {
 	topics = append(topics, TopicExpectingPowerCutsState)
 	topics = append(topics, TopicHotWaterCylinderState)
 
-	// Add lounge AC topics for tile color worker
+	// Add lounge AC and temperature topics for tile color worker
 	topics = append(topics, TopicLoungeACAction)
 	topics = append(topics, TopicLoungeACState)
+	topics = append(topics, TopicTemperatureInside)
 
 	// Add powerhouse cooling topics
 	topics = append(topics, TopicPowerhouseBlowerTemp)

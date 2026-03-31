@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 )
 
 // TopicLoungeACAction is the hvac_action attribute topic for the lounge AC.
@@ -10,6 +11,9 @@ const TopicLoungeACAction = "homeassistant/climate/lounge/hvac_action"
 
 // TopicLoungeACState is the state topic for the lounge AC.
 const TopicLoungeACState = "homeassistant/climate/lounge/state"
+
+// TopicTemperatureInside is the indoor temperature sensor.
+const TopicTemperatureInside = "homeassistant/sensor/temperature_inside_temperature/state"
 
 type hsColor struct {
 	Hue        float64
@@ -45,6 +49,18 @@ var acStateColors = map[string]hsColor{
 	"dry":      {200, 80},
 }
 
+// temperatureToHue maps temperature (18-23C) to hue (240 blue → 0 red).
+func temperatureToHue(temp float64) float64 {
+	clamped := max(18.0, min(temp, 23.0))
+	return (23 - clamped) / 5 * 240
+}
+
+// isTileActiveTime returns true between 7am and 10pm.
+func isTileActiveTime() bool {
+	h := time.Now().Hour()
+	return h >= 7 && h < 22
+}
+
 // resolveACTileAction determines the effective action for tile color.
 // Checks state first: for states that report hvac_action (cool/heat),
 // uses that to distinguish active vs idle. For other states (fan_only, dry),
@@ -67,6 +83,8 @@ func acTileWorker(
 
 	lastState := ""
 	lastAction := ""
+	lastTemp := 0.0
+	lastActiveTime := true
 
 	for {
 		select {
@@ -74,36 +92,66 @@ func acTileWorker(
 			state := data.GetString(TopicLoungeACState)
 			hvacAction := data.GetString(TopicLoungeACAction)
 			action := resolveACTileAction(state, hvacAction)
+			temp := data.GetFloat(TopicTemperatureInside).Current
+			activeTime := isTileActiveTime()
 
-			if action == "" || (action == lastAction && state == lastState) {
+			if action == "" {
+				continue
+			}
+
+			// Detect changes to avoid redundant sends.
+			tempChanged := temp != lastTemp
+			timeChanged := activeTime != lastActiveTime
+			acChanged := action != lastAction || state != lastState
+			if !acChanged && !tempChanged && !timeChanged {
 				continue
 			}
 			lastAction = action
 			lastState = state
+			lastTemp = temp
+			lastActiveTime = activeTime
+
+			if !activeTime {
+				if acChanged || timeChanged {
+					log.Printf("AC tile: outside active hours, turning tiles off\n")
+					sender.CallService("light", "turn_off", "light.tiles", nil)
+				}
+				continue
+			}
 
 			if color, ok := acActionColors[action]; ok {
-				log.Printf("AC tile: state=%s action=%s, setting tiles to hs(%.0f, %.0f) 75%%\n", state, action, color.Hue, color.Saturation)
-				sender.CallService("light", "turn_on", "light.tiles", map[string]any{
-					"hs_color":       []float64{color.Hue, color.Saturation},
-					"brightness_pct": 75,
-				})
-			} else if action == "idle" {
-				if color, ok := acStateIdleColors[state]; ok {
-					log.Printf("AC tile: state=%s action=idle, setting tiles to hs(%.0f, %.0f) 25%%\n", state, color.Hue, color.Saturation)
+				if acChanged || timeChanged {
+					log.Printf("AC tile: state=%s action=%s, setting tiles to hs(%.0f, %.0f) 75%%\n", state, action, color.Hue, color.Saturation)
 					sender.CallService("light", "turn_on", "light.tiles", map[string]any{
 						"hs_color":       []float64{color.Hue, color.Saturation},
-						"brightness_pct": 25,
+						"brightness_pct": 75,
 					})
 				}
+			} else if action == "idle" {
+				if color, ok := acStateIdleColors[state]; ok {
+					if acChanged || timeChanged {
+						log.Printf("AC tile: state=%s action=idle, setting tiles to hs(%.0f, %.0f) 25%%\n", state, color.Hue, color.Saturation)
+						sender.CallService("light", "turn_on", "light.tiles", map[string]any{
+							"hs_color":       []float64{color.Hue, color.Saturation},
+							"brightness_pct": 25,
+						})
+					}
+				}
 			} else if color, ok := acStateColors[action]; ok {
-				log.Printf("AC tile: state=%s, setting tiles to hs(%.0f, %.0f) 75%%\n", state, color.Hue, color.Saturation)
-				sender.CallService("light", "turn_on", "light.tiles", map[string]any{
-					"hs_color":       []float64{color.Hue, color.Saturation},
-					"brightness_pct": 75,
-				})
+				if acChanged || timeChanged {
+					log.Printf("AC tile: state=%s, setting tiles to hs(%.0f, %.0f) 75%%\n", state, color.Hue, color.Saturation)
+					sender.CallService("light", "turn_on", "light.tiles", map[string]any{
+						"hs_color":       []float64{color.Hue, color.Saturation},
+						"brightness_pct": 75,
+					})
+				}
 			} else {
-				log.Printf("AC tile: state=%s action=%s, turning tiles off\n", state, action)
-				sender.CallService("light", "turn_off", "light.tiles", nil)
+				hue := temperatureToHue(temp)
+				log.Printf("AC tile: AC off, temp=%.1f°C, setting tiles to hs(%.0f, 80) 50%%\n", temp, hue)
+				sender.CallService("light", "turn_on", "light.tiles", map[string]any{
+					"hs_color":       []float64{hue, 80},
+					"brightness_pct": 50,
+				})
 			}
 
 		case <-ctx.Done():
