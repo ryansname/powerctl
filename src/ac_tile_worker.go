@@ -15,6 +15,9 @@ const TopicLoungeACState = "homeassistant/climate/lounge/state"
 // TopicTemperatureInside is the indoor temperature sensor.
 const TopicTemperatureInside = "homeassistant/sensor/temperature_inside_temperature/state"
 
+// TopicSunState is the sun entity state (above_horizon / below_horizon).
+const TopicSunState = "homeassistant/sun/sun/state"
+
 type hsColor struct {
 	Hue        float64
 	Saturation float64
@@ -85,6 +88,7 @@ func acTileWorker(
 	lastAction := ""
 	lastTemp := 0.0
 	lastActiveTime := true
+	lastSunBelow := false
 
 	for {
 		select {
@@ -94,6 +98,7 @@ func acTileWorker(
 			action := resolveACTileAction(state, hvacAction)
 			temp := data.GetFloat(TopicTemperatureInside).Current
 			activeTime := isTileActiveTime()
+			sunBelow := data.GetString(TopicSunState) == "below_horizon"
 
 			if action == "" {
 				continue
@@ -102,14 +107,24 @@ func acTileWorker(
 			// Detect changes to avoid redundant sends.
 			tempChanged := temp != lastTemp
 			timeChanged := activeTime != lastActiveTime
+			sunChanged := sunBelow != lastSunBelow
 			acChanged := action != lastAction || state != lastState
-			if !acChanged && !tempChanged && !timeChanged {
+			if !acChanged && !tempChanged && !timeChanged && !sunChanged {
 				continue
 			}
 			lastAction = action
 			lastState = state
 			lastTemp = temp
 			lastActiveTime = activeTime
+			lastSunBelow = sunBelow
+
+			// Halve brightness after sunset.
+			dimBrightness := func(pct int) int {
+				if sunBelow {
+					return pct / 2
+				}
+				return pct
+			}
 
 			if !activeTime {
 				if acChanged || timeChanged {
@@ -119,38 +134,44 @@ func acTileWorker(
 				continue
 			}
 
+			stateChanged := acChanged || timeChanged || sunChanged
+
 			if color, ok := acActionColors[action]; ok {
-				if acChanged || timeChanged {
-					log.Printf("AC tile: state=%s action=%s, setting tiles to hs(%.0f, %.0f) 75%%\n", state, action, color.Hue, color.Saturation)
+				if stateChanged {
+					brightness := dimBrightness(75)
+					log.Printf("AC tile: state=%s action=%s, setting tiles to hs(%.0f, %.0f) %d%%\n", state, action, color.Hue, color.Saturation, brightness)
 					sender.CallService("light", "turn_on", "light.tiles", map[string]any{
 						"hs_color":       []float64{color.Hue, color.Saturation},
-						"brightness_pct": 75,
+						"brightness_pct": brightness,
 					})
 				}
 			} else if action == "idle" {
 				if color, ok := acStateIdleColors[state]; ok {
-					if acChanged || timeChanged {
-						log.Printf("AC tile: state=%s action=idle, setting tiles to hs(%.0f, %.0f) 25%%\n", state, color.Hue, color.Saturation)
+					if stateChanged {
+						brightness := dimBrightness(25)
+						log.Printf("AC tile: state=%s action=idle, setting tiles to hs(%.0f, %.0f) %d%%\n", state, color.Hue, color.Saturation, brightness)
 						sender.CallService("light", "turn_on", "light.tiles", map[string]any{
 							"hs_color":       []float64{color.Hue, color.Saturation},
-							"brightness_pct": 25,
+							"brightness_pct": brightness,
 						})
 					}
 				}
 			} else if color, ok := acStateColors[action]; ok {
-				if acChanged || timeChanged {
-					log.Printf("AC tile: state=%s, setting tiles to hs(%.0f, %.0f) 75%%\n", state, color.Hue, color.Saturation)
+				if stateChanged {
+					brightness := dimBrightness(75)
+					log.Printf("AC tile: state=%s, setting tiles to hs(%.0f, %.0f) %d%%\n", state, color.Hue, color.Saturation, brightness)
 					sender.CallService("light", "turn_on", "light.tiles", map[string]any{
 						"hs_color":       []float64{color.Hue, color.Saturation},
-						"brightness_pct": 75,
+						"brightness_pct": brightness,
 					})
 				}
 			} else {
 				hue := temperatureToHue(temp)
-				log.Printf("AC tile: AC off, temp=%.1f°C, setting tiles to hs(%.0f, 80) 50%%\n", temp, hue)
+				brightness := dimBrightness(50)
+				log.Printf("AC tile: AC off, temp=%.1f°C, setting tiles to hs(%.0f, 80) %d%%\n", temp, hue, brightness)
 				sender.CallService("light", "turn_on", "light.tiles", map[string]any{
 					"hs_color":       []float64{hue, 80},
-					"brightness_pct": 50,
+					"brightness_pct": brightness,
 				})
 			}
 
