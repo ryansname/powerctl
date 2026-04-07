@@ -144,8 +144,8 @@ type DebugModeInfo struct {
 	// Per-battery low voltage safety state
 	Battery2LowVoltage bool
 	Battery3LowVoltage bool
-	Battery2VoltageMin float64 // 1-hour rolling minimum voltage for B2
-	Battery3VoltageMin float64 // 1-hour rolling minimum voltage for B3
+	Battery2VoltageMin float64 // 15 min rolling minimum voltage for B2
+	Battery3VoltageMin float64 // 15 min rolling minimum voltage for B3
 }
 
 // checkBatteryOverflow returns inverter count for overflow mode using SOC-based hysteresis.

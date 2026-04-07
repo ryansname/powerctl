@@ -15,7 +15,7 @@ type minMaxBucket struct {
 // advancing past a bucket automatically expires its old data.
 type RollingMinMax struct {
 	buckets       []minMaxBucket
-	currentMinute int64 // absolute minute counter, -1 = uninitialized
+	currentMinute int64 // absolute minute counter
 }
 
 // NewRollingMinMax creates a new RollingMinMax with a window of the given number of minutes.
@@ -41,40 +41,21 @@ func (r *RollingMinMax) Update(value float64) {
 // updateAt records a value at the specified absolute minute (for testing).
 // minute must be non-decreasing across calls; earlier minutes are ignored.
 func (r *RollingMinMax) updateAt(value float64, minute int64) {
+	if r.currentMinute == -1 {
+		r.currentMinute = minute
+	}
 	n := int64(len(r.buckets))
 	if n <= 0 {
 		return
 	}
 
-	if r.currentMinute >= 0 && minute < r.currentMinute {
-		return // time travel guard
-	}
-
-	if r.currentMinute >= 0 && minute != r.currentMinute {
-		gap := minute - r.currentMinute
-		if gap >= n {
-			// Entire window is stale — clear every bucket.
-			for i := range r.buckets {
-				r.buckets[i] = minMaxBucket{min: math.MaxFloat64, max: -math.MaxFloat64}
-			}
-		} else {
-			// Clear skipped buckets between currentMinute (exclusive) and minute (exclusive).
-			for i := int64(1); i < gap; i++ {
-				idx := int((r.currentMinute + i) % n)
-				r.buckets[idx] = minMaxBucket{min: math.MaxFloat64, max: -math.MaxFloat64}
-			}
-		}
-	}
-
-	idx := int(minute % n)
-	if minute != r.currentMinute {
-		// First value for this minute - init directly (overwrites any stale wrapped data)
-		r.buckets[idx] = minMaxBucket{min: value, max: value}
-		r.currentMinute = minute
-		return
+	for ; r.currentMinute < minute; r.currentMinute++ {
+		idx := int((r.currentMinute + 1) % n)
+		r.buckets[idx] = minMaxBucket{min: math.MaxFloat64, max: -math.MaxFloat64}
 	}
 
 	// Update existing bucket
+	idx := int((r.currentMinute) % n)
 	b := &r.buckets[idx]
 	b.min = min(b.min, value)
 	b.max = max(b.max, value)
