@@ -21,10 +21,10 @@ func powerhouseCoolingWorker(ctx context.Context, dataChan <-chan DisplayData, s
 		coolOff       = 27.0
 	)
 
-	// RollingMinMax uses 60 1-minute buckets (~960 bytes fixed).
+	// RollingMinMax with 60 1-minute buckets (~960 bytes).
 	// For the first ~59 minutes, Max() reflects a "since-startup max" rather
 	// than a true 1-hour window — this is acceptable warm-up behavior.
-	tracker := governor.NewRollingMinMax()
+	tracker := governor.NewRollingMinMax(60)
 
 	log.Println("Powerhouse cooling worker started")
 

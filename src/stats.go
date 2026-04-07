@@ -48,10 +48,6 @@ type PercentileSpec struct {
 // Topics not in this map will only have their Current value tracked (no percentile calculations).
 // This dramatically reduces computation by only calculating what's actually used.
 var requiredPercentiles = map[string][]PercentileSpec{
-	// Voltage topics - used by lowVoltageWorker for P1._15
-	"homeassistant/sensor/solar_5_battery_voltage/state": {{1, 15 * time.Minute}},
-	"homeassistant/sensor/solar_3_battery_voltage/state": {{1, 15 * time.Minute}},
-
 	// Load power - used by unifiedInverterEnabler Powerwall Last mode for P66._15, P99._15
 	"homeassistant/sensor/home_sweet_home_load_power_2/state": {
 		{66, 15 * time.Minute},

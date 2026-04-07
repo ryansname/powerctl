@@ -451,16 +451,13 @@ func main() {
 	})
 	log.Println("Stats worker started")
 
-	// Low voltage threshold for protection
-	lowVoltageThreshold := 50.75
-
-	// Launch battery workers and collect downstream channels
+	// Launch battery workers and collect downstream channels.
+	// Low voltage protection lives inside unifiedInverterEnabler (per-battery safety gate).
 	var downstreamChans []chan<- DisplayData
 	for _, b := range batteries {
 		calibChan := make(chan DisplayData, 10)
 		socChan := make(chan DisplayData, 10)
-		lowVoltageChan := make(chan DisplayData, 10)
-		downstreamChans = append(downstreamChans, calibChan, socChan, lowVoltageChan)
+		downstreamChans = append(downstreamChans, calibChan, socChan)
 
 		// Launch calibration worker
 		calibConfig := b.CalibConfig()
@@ -475,12 +472,6 @@ func main() {
 			batterySOCWorker(ctx, socChan, socConfig, mqttSender)
 		})
 		log.Printf("%s SOC worker started\n", b.Name)
-
-		// Launch low voltage protection worker
-		lowVoltageConfig := b.LowVoltageProtectionConfig(lowVoltageThreshold)
-		SafeGo(ctx, cancel, b.Name+"-low-voltage", func(ctx context.Context) {
-			lowVoltageWorker(ctx, lowVoltageChan, lowVoltageConfig, mqttSender)
-		})
 	}
 
 	// Launch power excess calculator and dump load enabler

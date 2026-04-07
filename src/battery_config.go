@@ -53,14 +53,6 @@ type BatterySOCConfig struct {
 	ConversionLossRate float64
 }
 
-// LowVoltageConfig holds configuration for the low voltage protection worker
-type LowVoltageConfig struct {
-	Name                string
-	BatteryVoltageTopic string
-	InverterSwitchIDs   []string
-	LowVoltageThreshold float64
-}
-
 // CalibConfig creates a BatteryCalibConfig from the shared BatteryConfig
 func (c *BatteryConfig) CalibConfig() BatteryCalibConfig {
 	deviceID := strings.ReplaceAll(strings.ToLower(c.Name), " ", "_")
@@ -91,16 +83,6 @@ func (c *BatteryConfig) SOCConfig() BatterySOCConfig {
 	}
 }
 
-// LowVoltageProtectionConfig creates a LowVoltageConfig from the shared BatteryConfig
-func (c *BatteryConfig) LowVoltageProtectionConfig(threshold float64) LowVoltageConfig {
-	return LowVoltageConfig{
-		Name:                c.Name,
-		BatteryVoltageTopic: c.BatteryVoltageTopic,
-		InverterSwitchIDs:   c.InverterSwitchIDs,
-		LowVoltageThreshold: threshold,
-	}
-}
-
 // BuildUnifiedInverterConfig creates configuration for the unified inverter enabler
 func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverterConfig {
 	buildInverterGroup := func(b BatteryConfig, availableEnergyTopic string) BatteryInverterGroup {
@@ -127,6 +109,7 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 			Inverters:            inverters,
 			ChargeStateTopic:     b.ChargeStateTopic,
 			SOCTopic:             "homeassistant/sensor/" + deviceID + "_state_of_charge/state",
+			BatteryVoltageTopic:  b.BatteryVoltageTopic,
 			CapacityWh:           b.CapacityKWh * 1000,
 			SolarMultiplier:      3.9, // Solar array size relative to Solcast 1kW reference
 			AvailableEnergyTopic: availableEnergyTopic,
@@ -155,6 +138,8 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 		OverflowSOCTurnOffEnd:       95.0,
 		OverflowSOCTurnOnStart:      95.75,
 		OverflowSOCTurnOnEnd:        99.5,
+		LowVoltageTripThreshold:     50.75,
+		LowVoltageResetThreshold:    52.00,
 	}
 }
 
@@ -174,6 +159,8 @@ func (c UnifiedInverterConfig) Topics() []string {
 		c.Battery3.ChargeStateTopic,
 		c.Battery2.SOCTopic,
 		c.Battery3.SOCTopic,
+		c.Battery2.BatteryVoltageTopic,
+		c.Battery3.BatteryVoltageTopic,
 		c.Battery2.AvailableEnergyTopic,
 		c.Battery3.AvailableEnergyTopic,
 	}

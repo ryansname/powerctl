@@ -37,6 +37,7 @@ type BatteryInverterGroup struct {
 	Inverters            []InverterInfo
 	ChargeStateTopic     string
 	SOCTopic             string
+	BatteryVoltageTopic  string  // Topic for battery voltage (used by low voltage safety)
 	CapacityWh           float64 // Battery capacity in Wh (e.g., 10000 for 10 kWh)
 	SolarMultiplier      float64 // Multiplier for solar forecast (e.g., 4.5)
 	AvailableEnergyTopic string  // Topic for battery available energy
@@ -77,6 +78,10 @@ type UnifiedInverterConfig struct {
 	OverflowSOCTurnOffEnd    float64 // 95.0% - last inverter turns off when SOC drops below
 	OverflowSOCTurnOnStart   float64 // 95.75% - first inverter turns on when SOC rises above
 	OverflowSOCTurnOnEnd     float64 // 99.5% - last inverter turns on when SOC rises above
+
+	// Low voltage safety (per-battery, applies to 15-min P1 voltage)
+	LowVoltageTripThreshold  float64 // e.g. 50.75V - latch battery inverters off below this
+	LowVoltageResetThreshold float64 // e.g. 52.00V - release once 15-min P1 recovers above this
 }
 
 // InverterEnablerState holds runtime state for the unified inverter enabler
@@ -94,6 +99,10 @@ type InverterEnablerState struct {
 	// Combined solar max for grid-off per-battery mode gating
 	gridOffSolarMax governor.RollingMinMax
 
+	// Per-battery rolling minimum voltage for low voltage safety (1-hour window)
+	battery2VoltageMin governor.RollingMinMax
+	battery3VoltageMin governor.RollingMinMax
+
 	// Stepped hysteresis controllers
 	powerwallLow   *governor.SteppedHysteresis // Powerwall Low mode (9 inverters)
 	overflow2      *governor.SteppedHysteresis // Overflow mode for Battery 2
@@ -102,6 +111,8 @@ type InverterEnablerState struct {
 	socLimit3      *governor.SteppedHysteresis // SOC-based inverter limit for Battery 3
 	powerCutAllow2 *governor.SteppedHysteresis // Expecting power cuts: allow inverters above ~50% SOC
 	powerCutAllow3 *governor.SteppedHysteresis // Expecting power cuts: allow inverters above ~50% SOC
+	lowVoltage2    *governor.SteppedHysteresis // Low voltage safety latch for Battery 2
+	lowVoltage3    *governor.SteppedHysteresis // Low voltage safety latch for Battery 3
 }
 
 // ModeResult represents the outcome of mode selection (in inverter counts)
@@ -129,6 +140,12 @@ type DebugModeInfo struct {
 	GridFreqCurrent float64 // Current AC frequency (for safety display)
 	GridFreqP100    float64 // AC frequency 5min P100 (for safety display)
 	PowerwallSOC    float64 // Powerwall SOC % (for safety display)
+
+	// Per-battery low voltage safety state
+	Battery2LowVoltage bool
+	Battery3LowVoltage bool
+	Battery2VoltageMin float64 // 1-hour rolling minimum voltage for B2
+	Battery3VoltageMin float64 // 1-hour rolling minimum voltage for B3
 }
 
 // checkBatteryOverflow returns inverter count for overflow mode using SOC-based hysteresis.
@@ -337,6 +354,14 @@ func formatDebugOutput(debug DebugModeInfo) string {
 		fmt.Fprintf(&sb, "| %s | %.0f | %s |\n", m.Name, m.Watts, marker)
 	}
 
+	// Append a low-voltage row for any battery currently latched off
+	if debug.Battery2LowVoltage {
+		fmt.Fprintf(&sb, "| Low Voltage (B2) | %.2fV | ⚠ |\n", debug.Battery2VoltageMin)
+	}
+	if debug.Battery3LowVoltage {
+		fmt.Fprintf(&sb, "| Low Voltage (B3) | %.2fV | ⚠ |\n", debug.Battery3VoltageMin)
+	}
+
 	return sb.String()
 }
 
@@ -354,9 +379,11 @@ func unifiedInverterEnabler(
 
 	state := &InverterEnablerState{
 		// Rolling min/max windows for Powerwall Last mode
-		loadWindow:      governor.NewRollingMinMax(),
-		solarWindow:     governor.NewRollingMinMax(),
-		gridOffSolarMax: governor.NewRollingMinMax(),
+		loadWindow:         governor.NewRollingMinMax(60),
+		solarWindow:        governor.NewRollingMinMax(60),
+		gridOffSolarMax:    governor.NewRollingMinMax(60),
+		battery2VoltageMin: governor.NewRollingMinMax(15),
+		battery3VoltageMin: governor.NewRollingMinMax(15),
 		// Powerwall Low: descending (SOC↓ → inverters↑), 9 steps
 		powerwallLow: governor.NewSteppedHysteresis(
 			9, false,
@@ -382,6 +409,18 @@ func unifiedInverterEnabler(
 		// Expecting power cuts: 1-step ascending, allow at 53%, block at 47%
 		powerCutAllow2: governor.NewSteppedHysteresis(1, true, 53, 53, 47, 47),
 		powerCutAllow3: governor.NewSteppedHysteresis(1, true, 53, 53, 47, 47),
+		// Low voltage safety: 1-step descending. Trip when 15-min P1 voltage drops
+		// below TripThreshold, release once it has recovered above ResetThreshold.
+		lowVoltage2: governor.NewSteppedHysteresis(
+			1, false,
+			config.LowVoltageTripThreshold, config.LowVoltageTripThreshold,
+			config.LowVoltageResetThreshold, config.LowVoltageResetThreshold,
+		),
+		lowVoltage3: governor.NewSteppedHysteresis(
+			1, false,
+			config.LowVoltageTripThreshold, config.LowVoltageTripThreshold,
+			config.LowVoltageResetThreshold, config.LowVoltageResetThreshold,
+		),
 	}
 	// Initialize SOC limits to max (all inverters allowed)
 	state.socLimit2.Current = b2Inverters
@@ -396,6 +435,48 @@ func unifiedInverterEnabler(
 			state.solarWindow.Update(solar)
 
 			modeResult, debugInfo := selectMode(data, config, state)
+
+			// Low voltage safety: per-battery latch using a 1-hour rolling minimum.
+			// When the observed minimum drops below the trip threshold, force that
+			// battery's inverters off until the minimum recovers above the reset
+			// threshold. Applies regardless of other modes and runs before the
+			// power-cut conservation block so a voltage trip always wins.
+			state.battery2VoltageMin.Update(data.GetFloat(config.Battery2.BatteryVoltageTopic).Current)
+			state.battery3VoltageMin.Update(data.GetFloat(config.Battery3.BatteryVoltageTopic).Current)
+			b2VoltageMin := state.battery2VoltageMin.Min()
+			b3VoltageMin := state.battery3VoltageMin.Min()
+			prevB2Latched := state.lowVoltage2.Current > 0
+			prevB3Latched := state.lowVoltage3.Current > 0
+			b2LowVoltage := state.lowVoltage2.Update(b2VoltageMin) > 0
+			b3LowVoltage := state.lowVoltage3.Update(b3VoltageMin) > 0
+			if b2LowVoltage != prevB2Latched {
+				if b2LowVoltage {
+					log.Printf("Battery 2: LOW VOLTAGE TRIP (1h min %.2fV < %.2fV) - forcing inverters off\n",
+						b2VoltageMin, config.LowVoltageTripThreshold)
+				} else {
+					log.Printf("Battery 2: low voltage cleared (1h min %.2fV >= %.2fV)\n",
+						b2VoltageMin, config.LowVoltageResetThreshold)
+				}
+			}
+			if b3LowVoltage != prevB3Latched {
+				if b3LowVoltage {
+					log.Printf("Battery 3: LOW VOLTAGE TRIP (1h min %.2fV < %.2fV) - forcing inverters off\n",
+						b3VoltageMin, config.LowVoltageTripThreshold)
+				} else {
+					log.Printf("Battery 3: low voltage cleared (1h min %.2fV >= %.2fV)\n",
+						b3VoltageMin, config.LowVoltageResetThreshold)
+				}
+			}
+			if b2LowVoltage {
+				modeResult.Battery2Count = 0
+			}
+			if b3LowVoltage {
+				modeResult.Battery3Count = 0
+			}
+			debugInfo.Battery2LowVoltage = b2LowVoltage
+			debugInfo.Battery3LowVoltage = b3LowVoltage
+			debugInfo.Battery2VoltageMin = b2VoltageMin
+			debugInfo.Battery3VoltageMin = b3VoltageMin
 
 			// Expecting power cuts: block discharge for batteries around 50% SOC (hysteresis: 47-53%)
 			// Only when grid is on -- no point conserving energy during an actual outage
