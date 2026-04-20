@@ -33,7 +33,7 @@ type InverterInfo struct {
 // BatteryInverterGroup holds inverters for a single battery
 type BatteryInverterGroup struct {
 	Name                 string
-	ShortName            string // Short name for display (e.g., "B2", "B3")
+	ShortName            string // Short name for display (e.g., "B2")
 	Inverters            []InverterInfo
 	ChargeStateTopic     string
 	SOCTopic             string
@@ -46,7 +46,6 @@ type BatteryInverterGroup struct {
 // UnifiedInverterConfig holds configuration for the unified inverter enabler
 type UnifiedInverterConfig struct {
 	Battery2 BatteryInverterGroup
-	Battery3 BatteryInverterGroup
 
 	// Topics for mode selection and target calculation
 	SolarForecastTopic          string // Total forecast for today (kWh, converted to Wh)
@@ -75,9 +74,9 @@ type UnifiedInverterConfig struct {
 
 	// Overflow mode configuration (SOC-based hysteresis)
 	OverflowSOCTurnOffStart float64 // 98.5% - first inverter turns off when SOC drops below
-	OverflowSOCTurnOffEnd    float64 // 95.0% - last inverter turns off when SOC drops below
-	OverflowSOCTurnOnStart   float64 // 95.75% - first inverter turns on when SOC rises above
-	OverflowSOCTurnOnEnd     float64 // 99.5% - last inverter turns on when SOC rises above
+	OverflowSOCTurnOffEnd   float64 // 95.0% - last inverter turns off when SOC drops below
+	OverflowSOCTurnOnStart  float64 // 95.75% - first inverter turns on when SOC rises above
+	OverflowSOCTurnOnEnd    float64 // 99.5% - last inverter turns on when SOC rises above
 
 	// Low voltage safety (per-battery, applies to 15-min P1 voltage)
 	LowVoltageTripThreshold  float64 // e.g. 50.75V - latch battery inverters off below this
@@ -88,9 +87,8 @@ type UnifiedInverterConfig struct {
 type InverterEnablerState struct {
 	// Last published debug output for change detection
 	lastDebugOutput string
-	// Per-battery forecast excess state
+	// Forecast excess state for Battery 2
 	forecastExcess2 governor.ForecastExcessState
-	forecastExcess3 governor.ForecastExcessState
 
 	// Rolling min/max windows for Powerwall Last mode (1-hour, 1-minute buckets)
 	loadWindow  governor.RollingMinMax
@@ -99,31 +97,25 @@ type InverterEnablerState struct {
 	// Combined solar max for grid-off per-battery mode gating
 	gridOffSolarMax governor.RollingMinMax
 
-	// Per-battery rolling minimum voltage for low voltage safety (1-hour window)
+	// Battery 2 rolling minimum voltage for low voltage safety (1-hour window)
 	battery2VoltageMin governor.RollingMinMax
-	battery3VoltageMin governor.RollingMinMax
 
 	// Stepped hysteresis controllers
 	powerwallLow   *governor.SteppedHysteresis // Powerwall Low mode (9 inverters)
 	overflow2      *governor.SteppedHysteresis // Overflow mode for Battery 2
-	overflow3      *governor.SteppedHysteresis // Overflow mode for Battery 3
 	socLimit2      *governor.SteppedHysteresis // SOC-based inverter limit for Battery 2
-	socLimit3      *governor.SteppedHysteresis // SOC-based inverter limit for Battery 3
 	powerCutAllow2 *governor.SteppedHysteresis // Expecting power cuts: allow inverters above ~50% SOC
-	powerCutAllow3 *governor.SteppedHysteresis // Expecting power cuts: allow inverters above ~50% SOC
 	lowVoltage2    *governor.SteppedHysteresis // Low voltage safety latch for Battery 2
-	lowVoltage3    *governor.SteppedHysteresis // Low voltage safety latch for Battery 3
 }
 
 // ModeResult represents the outcome of mode selection (in inverter counts)
 type ModeResult struct {
 	Battery2Count int
-	Battery3Count int
 }
 
 // TotalCount returns the total number of inverters
 func (m ModeResult) TotalCount() int {
-	return m.Battery2Count + m.Battery3Count
+	return m.Battery2Count
 }
 
 // ModeState represents a mode's value and whether it's contributing to the final inverter count
@@ -141,11 +133,9 @@ type DebugModeInfo struct {
 	GridFreqP100    float64 // AC frequency 5min P100 (for safety display)
 	PowerwallSOC    float64 // Powerwall SOC % (for safety display)
 
-	// Per-battery low voltage safety state
+	// Battery 2 low voltage safety state
 	Battery2LowVoltage bool
-	Battery3LowVoltage bool
 	Battery2VoltageMin float64 // 15 min rolling minimum voltage for B2
-	Battery3VoltageMin float64 // 15 min rolling minimum voltage for B3
 }
 
 // checkBatteryOverflow returns inverter count for overflow mode using SOC-based hysteresis.
@@ -163,51 +153,8 @@ func checkBatteryOverflow(
 	return PowerRequest{Name: name, Watts: float64(count) * config.WattsPerInverter}
 }
 
-// applyLimitToPerBattery applies a global limit to per-battery counts.
-// When reducing, it reduces from the higher count first (B3 wins ties).
-func applyLimitToPerBattery(b2Count, b3Count int, limitWatts, wattsPerInverter float64) (int, int) {
-	maxTotal := int(limitWatts / wattsPerInverter)
-	for b2Count+b3Count > maxTotal {
-		switch {
-		case b2Count > b3Count:
-			b2Count--
-		case b3Count > 0:
-			b3Count--
-		default:
-			b2Count--
-		}
-	}
-	return b2Count, b3Count
-}
-
-// roundRobinFromBase adds inverters to reach targetTotal using strict alternation.
-// Starts from B3: B3 → B2 → B3 → B2... (skips if at max).
-// max2/max3 come from maxInvertersForSOC to respect SOC limits.
-func roundRobinFromBase(base2, base3, targetTotal, max2, max3 int) (b2Count, b3Count int) {
-	b2Count, b3Count = base2, base3
-	turn := 3 // Start with B3
-	for b2Count+b3Count < targetTotal {
-		if turn == 3 {
-			if b3Count < max3 {
-				b3Count++
-			}
-			turn = 2
-		} else {
-			if b2Count < max2 {
-				b2Count++
-			}
-			turn = 3
-		}
-		if b2Count >= max2 && b3Count >= max3 {
-			break
-		}
-	}
-	return
-}
-
 // selectMode calculates per-battery overflow/forecast excess and global targets, applying limits,
 // and returns whichever produces higher total inverter count.
-// If global is higher, it starts from limited per-battery base and round-robins additional inverters.
 func selectMode(
 	data DisplayData,
 	config UnifiedInverterConfig,
@@ -239,13 +186,11 @@ func selectMode(
 		}
 	}
 
-	// 1. Calculate per-battery overflow (SOC-based hysteresis)
+	// 1. Per-battery overflow (SOC-based hysteresis)
 	overflow2 := checkBatteryOverflow(data, config.Battery2, config, state.overflow2)
-	overflow3 := checkBatteryOverflow(data, config.Battery3, config, state.overflow3)
 
-	// 2. Calculate per-battery forecast excess (already capped at max inverter power)
+	// 2. Per-battery forecast excess (already capped at max inverter power)
 	forecastExcess2 := forecastExcessRequest(data, config, config.Battery2, &state.forecastExcess2)
-	forecastExcess3 := forecastExcessRequest(data, config, config.Battery3, &state.forecastExcess3)
 
 	// Grid off: disable per-battery modes only when solar is high (>= 3kW max over 1hr).
 	// When solar is low, allow overflow/forecast excess to prevent wasting energy on borderline days.
@@ -256,30 +201,25 @@ func selectMode(
 		state.gridOffSolarMax.Update(combinedSolar)
 		if state.gridOffSolarMax.Max() >= 3000 {
 			overflow2.Watts = 0
-			overflow3.Watts = 0
 			forecastExcess2.Watts = 0
-			forecastExcess3.Watts = 0
 		}
 	}
 
-	// 3. For each battery, take max of overflow and forecast excess
+	// 3. Take max of overflow and forecast excess
 	perBattery2 := maxPowerRequest(overflow2, forecastExcess2)
-	perBattery3 := maxPowerRequest(overflow3, forecastExcess3)
 	perBattery2Count := calculateInverterCount(perBattery2.Watts, config.WattsPerInverter)
-	perBattery3Count := calculateInverterCount(perBattery3.Watts, config.WattsPerInverter)
 
-	// 3.5. Apply SOC-based limits to per-battery counts
+	// 3.5. Apply SOC-based limit
 	soc2 := data.GetFloat(config.Battery2.SOCTopic).Current
-	soc3 := data.GetFloat(config.Battery3.SOCTopic).Current
 	maxB2 := maxInvertersForSOC(soc2, state.socLimit2)
-	maxB3 := maxInvertersForSOC(soc3, state.socLimit3)
 	perBattery2Count = min(perBattery2Count, maxB2)
-	perBattery3Count = min(perBattery3Count, maxB3)
 
-	// 4. Apply global limit to per-battery counts (PowerhouseTransfer limit)
+	// 4. Apply global limit (PowerhouseTransfer limit)
 	limit := powerhouseTransferLimit(data, config)
-	limitedB2, limitedB3 := applyLimitToPerBattery(perBattery2Count, perBattery3Count, limit.Watts, config.WattsPerInverter)
-	limitedPerBatteryTotal := limitedB2 + limitedB3
+	limitedB2 := min(perBattery2Count, int(limit.Watts/config.WattsPerInverter))
+	if limitedB2 < 0 {
+		limitedB2 = 0
+	}
 
 	// 5. Calculate global targets (Powerwall modes)
 	requests := []PowerRequest{
@@ -291,7 +231,7 @@ func selectMode(
 	globalCount := calculateInverterCount(targetWatts, config.WattsPerInverter)
 
 	// 6. Compare and select
-	globalWins := globalCount > limitedPerBatteryTotal && targetWatts > 0
+	globalWins := globalCount > limitedB2 && targetWatts > 0
 
 	// Clear global mode contributions if global doesn't win
 	if !globalWins {
@@ -305,21 +245,17 @@ func selectMode(
 		PowerwallSOC: powerwallSOC,
 		Modes: []ModeState{
 			{Name: "Forecast Excess (B2)", Watts: forecastExcess2.Watts, Contributing: limitedB2 > 0 && perBattery2.Name == forecastExcess2.Name},
-			{Name: "Forecast Excess (B3)", Watts: forecastExcess3.Watts, Contributing: limitedB3 > 0 && perBattery3.Name == forecastExcess3.Name},
 			globalModes[0],
 			globalModes[1],
 			{Name: "Overflow (B2)", Watts: overflow2.Watts, Contributing: limitedB2 > 0 && perBattery2.Name == overflow2.Name},
-			{Name: "Overflow (B3)", Watts: overflow3.Watts, Contributing: limitedB3 > 0 && perBattery3.Name == overflow3.Name},
 		},
 	}
 
 	if globalWins {
-		// Global target is higher: round-robin from limited per-battery base
-		b2, b3 := roundRobinFromBase(limitedB2, limitedB3, globalCount, maxB2, maxB3)
-		return ModeResult{Battery2Count: b2, Battery3Count: b3}, debug
+		return ModeResult{Battery2Count: min(globalCount, maxB2)}, debug
 	}
 
-	return ModeResult{Battery2Count: limitedB2, Battery3Count: limitedB3}, debug
+	return ModeResult{Battery2Count: limitedB2}, debug
 }
 
 // formatDebugOutput formats debug mode values as a GFM table for Home Assistant
@@ -354,18 +290,15 @@ func formatDebugOutput(debug DebugModeInfo) string {
 		fmt.Fprintf(&sb, "| %s | %.0f | %s |\n", m.Name, m.Watts, marker)
 	}
 
-	// Append a low-voltage row for any battery currently latched off
+	// Append a low-voltage row if battery is currently latched off
 	if debug.Battery2LowVoltage {
 		fmt.Fprintf(&sb, "| Low Voltage (B2) | %.2fV | ⚠ |\n", debug.Battery2VoltageMin)
-	}
-	if debug.Battery3LowVoltage {
-		fmt.Fprintf(&sb, "| Low Voltage (B3) | %.2fV | ⚠ |\n", debug.Battery3VoltageMin)
 	}
 
 	return sb.String()
 }
 
-// unifiedInverterEnabler manages all inverters across both batteries
+// unifiedInverterEnabler manages all inverters on Battery 2
 func unifiedInverterEnabler(
 	ctx context.Context,
 	dataChan <-chan DisplayData,
@@ -375,7 +308,6 @@ func unifiedInverterEnabler(
 	log.Println("Unified inverter enabler started")
 
 	b2Inverters := len(config.Battery2.Inverters)
-	b3Inverters := len(config.Battery3.Inverters)
 
 	state := &InverterEnablerState{
 		// Rolling min/max windows for Powerwall Last mode
@@ -383,32 +315,24 @@ func unifiedInverterEnabler(
 		solarWindow:        governor.NewRollingMinMax(60),
 		gridOffSolarMax:    governor.NewRollingMinMax(60),
 		battery2VoltageMin: governor.NewRollingMinMax(15),
-		battery3VoltageMin: governor.NewRollingMinMax(15),
 		// Powerwall Low: descending (SOC↓ → inverters↑), 9 steps
 		powerwallLow: governor.NewSteppedHysteresis(
 			9, false,
 			config.PowerwallLowSOCTurnOnStart, config.PowerwallLowSOCTurnOnEnd,
 			config.PowerwallLowSOCTurnOffStart, config.PowerwallLowSOCTurnOffEnd,
 		),
-		// Overflow: ascending (SOC↑ → inverters↑), per-battery
+		// Overflow: ascending (SOC↑ → inverters↑)
 		overflow2: governor.NewSteppedHysteresis(
 			b2Inverters, true,
 			config.OverflowSOCTurnOnStart, config.OverflowSOCTurnOnEnd,
 			config.OverflowSOCTurnOffStart, config.OverflowSOCTurnOffEnd,
 		),
-		overflow3: governor.NewSteppedHysteresis(
-			b3Inverters, true,
-			config.OverflowSOCTurnOnStart, config.OverflowSOCTurnOnEnd,
-			config.OverflowSOCTurnOffStart, config.OverflowSOCTurnOffEnd,
-		),
-		// SOC Limits: ascending (SOC↑ → limit↑), steps = inverter count per battery
+		// SOC Limits: ascending (SOC↑ → limit↑), steps = inverter count
 		// Enter thresholds: 15% → 25% (ascending)
 		// Exit thresholds: 12.5% → 22.5% (ascending)
 		socLimit2: governor.NewSteppedHysteresis(b2Inverters, true, 15, 25, 12.5, 22.5),
-		socLimit3: governor.NewSteppedHysteresis(b3Inverters, true, 15, 25, 12.5, 22.5),
 		// Expecting power cuts: 1-step ascending, allow at 53%, block at 47%
 		powerCutAllow2: governor.NewSteppedHysteresis(1, true, 53, 53, 47, 47),
-		powerCutAllow3: governor.NewSteppedHysteresis(1, true, 53, 53, 47, 47),
 		// Low voltage safety: 1-step descending. Trip when 15-min P1 voltage drops
 		// below TripThreshold, release once it has recovered above ResetThreshold.
 		lowVoltage2: governor.NewSteppedHysteresis(
@@ -416,15 +340,9 @@ func unifiedInverterEnabler(
 			config.LowVoltageTripThreshold, config.LowVoltageTripThreshold,
 			config.LowVoltageResetThreshold, config.LowVoltageResetThreshold,
 		),
-		lowVoltage3: governor.NewSteppedHysteresis(
-			1, false,
-			config.LowVoltageTripThreshold, config.LowVoltageTripThreshold,
-			config.LowVoltageResetThreshold, config.LowVoltageResetThreshold,
-		),
 	}
-	// Initialize SOC limits to max (all inverters allowed)
+	// Initialize SOC limit to max (all inverters allowed)
 	state.socLimit2.Current = b2Inverters
-	state.socLimit3.Current = b3Inverters
 
 	for {
 		select {
@@ -437,18 +355,14 @@ func unifiedInverterEnabler(
 			modeResult, debugInfo := selectMode(data, config, state)
 
 			// Low voltage safety: per-battery latch using a 1-hour rolling minimum.
-			// When the observed minimum drops below the trip threshold, force that
+			// When the observed minimum drops below the trip threshold, force the
 			// battery's inverters off until the minimum recovers above the reset
 			// threshold. Applies regardless of other modes and runs before the
 			// power-cut conservation block so a voltage trip always wins.
 			state.battery2VoltageMin.Update(data.GetFloat(config.Battery2.BatteryVoltageTopic).Current)
-			state.battery3VoltageMin.Update(data.GetFloat(config.Battery3.BatteryVoltageTopic).Current)
 			b2VoltageMin := state.battery2VoltageMin.Min()
-			b3VoltageMin := state.battery3VoltageMin.Min()
 			prevB2Latched := state.lowVoltage2.Current > 0
-			prevB3Latched := state.lowVoltage3.Current > 0
 			b2LowVoltage := state.lowVoltage2.Update(b2VoltageMin) > 0
-			b3LowVoltage := state.lowVoltage3.Update(b3VoltageMin) > 0
 			if b2LowVoltage != prevB2Latched {
 				if b2LowVoltage {
 					log.Printf("Battery 2: LOW VOLTAGE TRIP (1h min %.2fV < %.2fV) - forcing inverters off\n",
@@ -458,38 +372,21 @@ func unifiedInverterEnabler(
 						b2VoltageMin, config.LowVoltageResetThreshold)
 				}
 			}
-			if b3LowVoltage != prevB3Latched {
-				if b3LowVoltage {
-					log.Printf("Battery 3: LOW VOLTAGE TRIP (1h min %.2fV < %.2fV) - forcing inverters off\n",
-						b3VoltageMin, config.LowVoltageTripThreshold)
-				} else {
-					log.Printf("Battery 3: low voltage cleared (1h min %.2fV >= %.2fV)\n",
-						b3VoltageMin, config.LowVoltageResetThreshold)
-				}
-			}
 			if b2LowVoltage {
 				modeResult.Battery2Count = 0
 			}
-			if b3LowVoltage {
-				modeResult.Battery3Count = 0
-			}
 			debugInfo.Battery2LowVoltage = b2LowVoltage
-			debugInfo.Battery3LowVoltage = b3LowVoltage
 			debugInfo.Battery2VoltageMin = b2VoltageMin
-			debugInfo.Battery3VoltageMin = b3VoltageMin
 
-			// Expecting power cuts: block discharge for batteries around 50% SOC (hysteresis: 47-53%)
+			// Expecting power cuts: block discharge around 50% SOC (hysteresis: 47-53%)
 			// Only when grid is on -- no point conserving energy during an actual outage
 			conservingForPowerCut := data.GetBoolean(TopicExpectingPowerCutsState) && data.GetBoolean(config.GridStatusTopic)
 			if conservingForPowerCut {
 				if state.powerCutAllow2.Update(data.GetFloat(config.Battery2.SOCTopic).Current) == 0 {
 					modeResult.Battery2Count = 0
 				}
-				if state.powerCutAllow3.Update(data.GetFloat(config.Battery3.SOCTopic).Current) == 0 {
-					modeResult.Battery3Count = 0
-				}
 				if modeResult.TotalCount() == 0 {
-					debugInfo.SafetyReason = "Expecting power cuts (batteries < 50%)"
+					debugInfo.SafetyReason = "Expecting power cuts (battery < 50%)"
 				}
 			}
 
@@ -503,20 +400,18 @@ func unifiedInverterEnabler(
 			// Publish forecast excess debug sensors
 			sender.PublishDebugSensor("powerctl_b2_expected_solar", state.forecastExcess2.DebugExpectedSolarWh)
 			sender.PublishDebugSensor("powerctl_b2_excess", state.forecastExcess2.DebugExcessWh)
-			sender.PublishDebugSensor("powerctl_b3_expected_solar", state.forecastExcess3.DebugExpectedSolarWh)
-			sender.PublishDebugSensor("powerctl_b3_excess", state.forecastExcess3.DebugExcessWh)
 
 			// Publish Powerwall Last and Low debug sensors
 			sender.PublishDebugSensor("powerctl_powerwall_last", state.loadWindow.Min()-state.solarWindow.Max())
 			sender.PublishDebugSensor("powerctl_powerwall_low_count", float64(state.powerwallLow.Current))
 
 			// Apply changes
-			changed := applyInverterChanges(data, config, sender, modeResult.Battery2Count, modeResult.Battery3Count)
+			changed := applyInverterChanges(data, config, sender, modeResult.Battery2Count)
 
 			if changed {
 				totalWatts := float64(modeResult.TotalCount()) * config.WattsPerInverter
-				log.Printf("Unified inverter enabler: watts=%.0fW, B2=%d, B3=%d\n",
-					totalWatts, modeResult.Battery2Count, modeResult.Battery3Count)
+				log.Printf("Unified inverter enabler: watts=%.0fW, B2=%d\n",
+					totalWatts, modeResult.Battery2Count)
 			}
 
 		case <-ctx.Done():
@@ -577,7 +472,6 @@ func powerhouseTransferLimit(data DisplayData, config UnifiedInverterConfig) Pow
 	return PowerLimit{Name: "PowerhouseTransfer", Watts: availableCapacity}
 }
 
-// calculateTargetPower computes target watts by taking max of all requests and applying all limits
 // maxPowerRequest returns the PowerRequest with the highest watts
 func maxPowerRequest(a, b PowerRequest) PowerRequest {
 	if a.Watts >= b.Watts {
@@ -586,6 +480,7 @@ func maxPowerRequest(a, b PowerRequest) PowerRequest {
 	return b
 }
 
+// calculateTargetPower computes target watts by taking max of all requests and applying all limits
 func calculateTargetPower(requests []PowerRequest, limits []PowerLimit) (float64, []ModeState) {
 	modes := make([]ModeState, len(requests))
 	target := 0.0
@@ -628,39 +523,28 @@ func maxInvertersForSOC(socPercent float64, hysteresis *governor.SteppedHysteres
 	return hysteresis.Update(socPercent)
 }
 
-// applyInverterChanges enables/disables inverters to match desired counts
+// applyInverterChanges enables/disables inverters to match the desired count
 func applyInverterChanges(
 	data DisplayData,
 	config UnifiedInverterConfig,
 	sender *MQTTSender,
-	battery2Count, battery3Count int,
+	battery2Count int,
 ) bool {
 	changed := false
 
-	batteries := []struct {
-		inverters []InverterInfo
-		count     int
-		name      string
-	}{
-		{config.Battery2.Inverters, battery2Count, "Battery 2"},
-		{config.Battery3.Inverters, battery3Count, "Battery 3"},
-	}
+	for i, inv := range config.Battery2.Inverters {
+		current := data.GetBoolean(inv.StateTopic)
+		desired := i < battery2Count
 
-	for _, b := range batteries {
-		for i, inv := range b.inverters {
-			current := data.GetBoolean(inv.StateTopic)
-			desired := i < b.count // Simple: enable first N inverters
-
-			if current != desired {
-				if desired {
-					log.Printf("Enabling %s (%s)\n", inv.EntityID, b.name)
-					sender.CallService("switch", "turn_on", inv.EntityID, nil)
-				} else {
-					log.Printf("Disabling %s (%s)\n", inv.EntityID, b.name)
-					sender.CallService("switch", "turn_off", inv.EntityID, nil)
-				}
-				changed = true
+		if current != desired {
+			if desired {
+				log.Printf("Enabling %s (Battery 2)\n", inv.EntityID)
+				sender.CallService("switch", "turn_on", inv.EntityID, nil)
+			} else {
+				log.Printf("Disabling %s (Battery 2)\n", inv.EntityID)
+				sender.CallService("switch", "turn_off", inv.EntityID, nil)
 			}
+			changed = true
 		}
 	}
 

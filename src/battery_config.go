@@ -84,7 +84,7 @@ func (c *BatteryConfig) SOCConfig() BatterySOCConfig {
 }
 
 // BuildUnifiedInverterConfig creates configuration for the unified inverter enabler
-func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverterConfig {
+func BuildUnifiedInverterConfig(battery2 BatteryConfig) UnifiedInverterConfig {
 	buildInverterGroup := func(b BatteryConfig, availableEnergyTopic string) BatteryInverterGroup {
 		inverters := make([]InverterInfo, len(b.InverterSwitchIDs))
 		for i, entityID := range b.InverterSwitchIDs {
@@ -118,7 +118,6 @@ func BuildUnifiedInverterConfig(battery2, battery3 BatteryConfig) UnifiedInverte
 
 	return UnifiedInverterConfig{
 		Battery2:                    buildInverterGroup(battery2, TopicBattery2Energy),
-		Battery3:                    buildInverterGroup(battery3, TopicBattery3Energy),
 		SolarForecastTopic:          "homeassistant/sensor/solcast_pv_forecast_forecast_today/state",
 		SolarForecastRemainingTopic: "homeassistant/sensor/solcast_pv_forecast_forecast_remaining_today/state",
 		DetailedForecastTopic:       "homeassistant/sensor/solcast_pv_forecast_forecast_today/detailedForecast",
@@ -156,19 +155,12 @@ func (c UnifiedInverterConfig) Topics() []string {
 		c.GridStatusTopic,
 		c.ACFrequencyTopic,
 		c.Battery2.ChargeStateTopic,
-		c.Battery3.ChargeStateTopic,
 		c.Battery2.SOCTopic,
-		c.Battery3.SOCTopic,
 		c.Battery2.BatteryVoltageTopic,
-		c.Battery3.BatteryVoltageTopic,
 		c.Battery2.AvailableEnergyTopic,
-		c.Battery3.AvailableEnergyTopic,
 	}
 
 	for _, inv := range c.Battery2.Inverters {
-		topics = append(topics, inv.StateTopic)
-	}
-	for _, inv := range c.Battery3.Inverters {
 		topics = append(topics, inv.StateTopic)
 	}
 

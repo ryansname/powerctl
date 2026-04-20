@@ -18,7 +18,6 @@ func PowerExcessTopics() []string {
 	return []string{
 		TopicBattery1Energy,
 		TopicBattery2Energy,
-		TopicBattery3Energy,
 		TopicSolar1Power,
 	}
 }
@@ -45,12 +44,6 @@ func powerExcessCalculator(
 			// Battery 2 available energy: If 5min avg above 2.5kWh -> Add 450W
 			battery2Energy := data.GetPercentile(TopicBattery2Energy, P50, Window5Min)
 			if battery2Energy > 2500 { // Wh
-				excessWatts += 450
-			}
-
-			// Battery 3 available energy: If 5min avg above 3kWh -> Add 450W
-			battery3Energy := data.GetPercentile(TopicBattery3Energy, P50, Window5Min)
-			if battery3Energy > 3000 { // Wh
 				excessWatts += 450
 			}
 

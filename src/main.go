@@ -231,6 +231,11 @@ func main() {
 			"homeassistant/sensor/powerhouse_inverter_2_switch_0_energy/state",
 			"homeassistant/sensor/powerhouse_inverter_3_switch_0_energy/state",
 			"homeassistant/sensor/powerhouse_inverter_4_switch_0_energy/state",
+			"homeassistant/sensor/powerhouse_inverter_5_switch_0_energy/state",
+			"homeassistant/sensor/powerhouse_inverter_6_switch_0_energy/state",
+			"homeassistant/sensor/powerhouse_inverter_7_switch_0_energy/state",
+			"homeassistant/sensor/powerhouse_inverter_8_switch_0_energy/state",
+			"homeassistant/sensor/powerhouse_inverter_9_switch_0_energy/state",
 		},
 		InflowPowerTopics: []string{
 			"homeassistant/sensor/solar_5_solar_power/state",
@@ -240,6 +245,11 @@ func main() {
 			"homeassistant/sensor/powerhouse_inverter_2_switch_0_power/state",
 			"homeassistant/sensor/powerhouse_inverter_3_switch_0_power/state",
 			"homeassistant/sensor/powerhouse_inverter_4_switch_0_power/state",
+			"homeassistant/sensor/powerhouse_inverter_5_switch_0_power/state",
+			"homeassistant/sensor/powerhouse_inverter_6_switch_0_power/state",
+			"homeassistant/sensor/powerhouse_inverter_7_switch_0_power/state",
+			"homeassistant/sensor/powerhouse_inverter_8_switch_0_power/state",
+			"homeassistant/sensor/powerhouse_inverter_9_switch_0_power/state",
 		},
 		ChargeStateTopic:    "homeassistant/sensor/solar_5_charge_state/state",
 		BatteryVoltageTopic: "homeassistant/sensor/solar_5_battery_voltage/state",
@@ -255,35 +265,28 @@ func main() {
 			"switch.powerhouse_inverter_2_switch_0",
 			"switch.powerhouse_inverter_3_switch_0",
 			"switch.powerhouse_inverter_4_switch_0",
+			"switch.powerhouse_inverter_5_switch_0",
+			"switch.powerhouse_inverter_6_switch_0",
+			"switch.powerhouse_inverter_7_switch_0",
+			"switch.powerhouse_inverter_8_switch_0",
+			"switch.powerhouse_inverter_9_switch_0",
 		},
 	}
 
 	battery3 := BatteryConfig{
 		Name:         "Battery 3",
-		CapacityKWh:  15.0,
+		CapacityKWh:  3 * 14.5,
 		Manufacturer: "Micromall",
 		InflowEnergyTopics: []string{
 			"homeassistant/sensor/solar_3_total_energy/state",
 			"homeassistant/sensor/solar_4_total_energy/state",
 		},
-		OutflowEnergyTopics: []string{
-			"homeassistant/sensor/powerhouse_inverter_5_switch_0_energy/state",
-			"homeassistant/sensor/powerhouse_inverter_6_switch_0_energy/state",
-			"homeassistant/sensor/powerhouse_inverter_7_switch_0_energy/state",
-			"homeassistant/sensor/powerhouse_inverter_8_switch_0_energy/state",
-			"homeassistant/sensor/powerhouse_inverter_9_switch_0_energy/state",
-		},
+		OutflowEnergyTopics: []string{},
 		InflowPowerTopics: []string{
 			"homeassistant/sensor/solar_3_solar_power/state",
 			"homeassistant/sensor/solar_4_solar_power/state",
 		},
-		OutflowPowerTopics: []string{
-			"homeassistant/sensor/powerhouse_inverter_5_switch_0_power/state",
-			"homeassistant/sensor/powerhouse_inverter_6_switch_0_power/state",
-			"homeassistant/sensor/powerhouse_inverter_7_switch_0_power/state",
-			"homeassistant/sensor/powerhouse_inverter_8_switch_0_power/state",
-			"homeassistant/sensor/powerhouse_inverter_9_switch_0_power/state",
-		},
+		OutflowPowerTopics:  []string{},
 		ChargeStateTopic:    "homeassistant/sensor/solar_3_charge_state/state",
 		BatteryVoltageTopic: "homeassistant/sensor/solar_3_battery_voltage/state",
 		CalibrationTopics: CalibrationTopics{
@@ -293,13 +296,7 @@ func main() {
 		HighVoltageThreshold: 53.6,
 		FloatChargeState:     "Float Charging",
 		ConversionLossRate:   0.05,
-		InverterSwitchIDs: []string{
-			"switch.powerhouse_inverter_5_switch_0",
-			"switch.powerhouse_inverter_6_switch_0",
-			"switch.powerhouse_inverter_7_switch_0",
-			"switch.powerhouse_inverter_8_switch_0",
-			"switch.powerhouse_inverter_9_switch_0",
-		},
+		InverterSwitchIDs:    []string{},
 	}
 
 	batteries := []BatteryConfig{battery2, battery3}
@@ -309,7 +306,7 @@ func main() {
 	topics = append(topics, PowerExcessTopics()...)
 
 	// Build unified inverter enabler config and add its topics
-	unifiedInverterConfig := BuildUnifiedInverterConfig(battery2, battery3)
+	unifiedInverterConfig := BuildUnifiedInverterConfig(battery2)
 	topics = append(topics, unifiedInverterConfig.Topics()...)
 
 	// Add miner workmode topic for dump load enabler
@@ -417,8 +414,6 @@ func main() {
 	}{
 		{"powerctl_b2_expected_solar", "B2 Expected Solar", "Wh", 0},
 		{"powerctl_b2_excess", "B2 Excess", "Wh", 0},
-		{"powerctl_b3_expected_solar", "B3 Expected Solar", "Wh", 0},
-		{"powerctl_b3_excess", "B3 Excess", "Wh", 0},
 		{"powerctl_powerwall_last", "Powerwall Last", "W", 0},
 		{"powerctl_powerwall_low_count", "Powerwall Low Count", "", 0},
 	}

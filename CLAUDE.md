@@ -11,8 +11,8 @@ When controlling devices in powerctl you can take two approaches:
 `powerctl` is a Go-based MQTT client that monitors Home Assistant sensors and tracks battery state of charge. Connects to Home Assistant MQTT broker, subscribes to sensor topics, calculates real-time statistics, and monitors battery levels with automatic HA integration.
 
 **Batteries:**
-- Battery 2: 9.5 kWh (SunnyTech) - Solar 5 inflow, Inverters 1-4 outflow
-- Battery 3: 15 kWh (Micromall) - Solar 3 & 4 inflow, Inverters 5-9 outflow
+- Battery 2: 9.5 kWh (SunnyTech) - Solar 5 inflow, Inverters 1-9 outflow
+- Battery 3: 3×14.5 kWh (Micromall) - Solar 3 & 4 inflow, Multiplus 2 48/5000/70 outflow
 
 ## Development Commands
 

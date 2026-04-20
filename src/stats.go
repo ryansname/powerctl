@@ -65,7 +65,6 @@ var requiredPercentiles = map[string][]PercentileSpec{
 
 	// Battery available energy - used by powerExcessCalculator for P50._5
 	TopicBattery2Energy: {{50, 5 * time.Minute}},
-	TopicBattery3Energy: {{50, 5 * time.Minute}},
 
 	// AC frequency - used by unifiedInverterEnabler for high frequency protection (P100._5)
 	"homeassistant/sensor/lounge_ac_frequency/state": {{100, 5 * time.Minute}},
