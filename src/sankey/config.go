@@ -15,6 +15,7 @@ func DefaultConfig() Config {
 			{Name: "powerhouse_inverter_9_switch_0_power_inverted", Type: TemplateFormula, Formula: "states('sensor.powerhouse_inverter_9_switch_0_power') | multiply(-1)"},
 			{Name: "home_sweet_home_site_power_inverted", Type: TemplateFormula, Formula: "states('sensor.home_sweet_home_site_power') | multiply(-1000)"},
 			{Name: "home_sweet_home_battery_power_2_inverted", Type: TemplateFormula, Formula: "states('sensor.home_sweet_home_battery_power_2') | multiply(-1000)"},
+			{Name: "powerhouse_inverter_10_ac_power_inverted", Type: TemplateFormula, Formula: "states('sensor.powerhouse_inverter_10_ac_power') | float(0) | multiply(-1)"},
 			{Name: "solar_2_power", Type: TemplateFormula, Formula: "states('sensor.home_sweet_home_solar_power_2') | multiply(1000) - states('sensor.powerhouse_net_power') | float"},
 			{Name: "all_lights", Type: TemplateSum, Entities: []string{"sensor.dining_room_power", "sensor.downlight_power", "sensor.outside_power", "sensor.triple_power"}},
 		},
@@ -48,8 +49,9 @@ func DefaultConfig() Config {
 				},
 			},
 			{
-				Name:    "battery_3",
-				Section: SectionPowerhouse,
+				Name:     "battery_3",
+				Section:  SectionPowerhouse,
+				Children: []string{"powerhouse_10"},
 				Other: &RemainderStrategy{
 					Key:        "battery_3",
 					Label:      "Battery 3",
@@ -84,6 +86,12 @@ func DefaultConfig() Config {
 				Section:  SectionHouseMainsIn,
 				Sensors:  []Sensor{{Name: "sensor.powerhouse_net_power", Label: "Powerhouse"}},
 				Children: []string{"house_mains", "grid_export", "powerwall_charge"},
+			},
+			{
+				Name:     "powerhouse_10",
+				Section:  SectionPowerhouseOut,
+				Sensors:  []Sensor{{Name: "sensor.powerhouse_inverter_10_ac_power_inverted", Label: "Powerhouse 10"}},
+				Children: []string{"powerhouse_net"},
 			},
 			{
 				Name:     "powerwall_discharge",

@@ -283,7 +283,7 @@ func (s *MQTTSender) CreateInverter10ACSetpointEntity() error {
 	}
 
 	config := haNumberConfig{
-		Name:          "Powerhouse Inverter 10 AC Setpoint",
+		Name:          "AC Setpoint",
 		UniqueId:      "powerhouse_inverter_10_ac_setpoint",
 		StateTopic:    TopicMultiplusSetpointRead,
 		ValueTemplate: "{{ value_json.value }}",
@@ -306,6 +306,55 @@ func (s *MQTTSender) CreateInverter10ACSetpointEntity() error {
 
 	s.Send(MQTTMessage{
 		Topic:   "homeassistant/number/powerhouse_inverter_10_ac_setpoint/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
+// CreateMultiplusACPowerEntity creates the Multiplus II AC output power sensor entity via MQTT discovery
+func (s *MQTTSender) CreateMultiplusACPowerEntity() error {
+	type haDeviceConfig struct {
+		Identifiers []string `json:"identifiers"`
+		Name        string   `json:"name"`
+		Model       string   `json:"model,omitempty"`
+	}
+
+	type haSensorConfig struct {
+		Name          string         `json:"name"`
+		UniqueId      string         `json:"unique_id"`
+		StateTopic    string         `json:"state_topic"`
+		ValueTemplate string         `json:"value_template"`
+		UnitOfMeasure string         `json:"unit_of_measurement"`
+		DeviceClass   string         `json:"device_class"`
+		StateClass    string         `json:"state_class"`
+		Device        haDeviceConfig `json:"device"`
+	}
+
+	config := haSensorConfig{
+		Name:          "AC Power",
+		UniqueId:      "powerhouse_inverter_10_ac_power",
+		StateTopic:    TopicMultiplusACPower,
+		ValueTemplate: "{{ value_json.value }}",
+		UnitOfMeasure: "W",
+		DeviceClass:   "power",
+		StateClass:    "measurement",
+		Device: haDeviceConfig{
+			Identifiers: []string{"powerhouse_inverter_10"},
+			Name:        "Powerhouse Inverter 10",
+			Model:       "Multiplus II 48/5000/70",
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/sensor/powerhouse_inverter_10_ac_power/config",
 		Payload: payload,
 		QoS:     2,
 		Retain:  true,

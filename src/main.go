@@ -424,6 +424,13 @@ func main() {
 		log.Fatalf("Failed to create inverter 10 AC setpoint entity: %v", err)
 	}
 
+	// Create inverter 10 (Multiplus) AC power sensor entity
+	err = mqttSender.CreateMultiplusACPowerEntity()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create inverter 10 AC power entity: %v", err)
+	}
+
 	// Create debug sensors for inverter control algorithms
 	debugSensors := []struct {
 		id, name, unit string
