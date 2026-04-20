@@ -188,12 +188,17 @@ func main() {
 	// Parse command line flags
 	forceEnable := flag.Bool("force-enable", false, "Bypass powerctl_enabled switch")
 	debugMode := flag.Bool("debug", false, "Enable debug introspection worker")
+	multiplusOnly := flag.Bool("multiplus-only", false, "Drop all outgoing MQTT messages whose topic is not under powerhouse_3/")
 	flag.Parse()
 
 	log.Println("Starting powerctl...")
 
 	if *forceEnable {
 		log.Println("WARNING: --force-enable active, ignoring powerctl_enabled switch")
+	}
+
+	if *multiplusOnly {
+		log.Println("WARNING: --multiplus-only active, only powerhouse_3/ outgoing messages will be sent")
 	}
 
 	// Load .env file
@@ -301,43 +306,48 @@ func main() {
 
 	batteries := []BatteryConfig{battery2, battery3}
 
-	// Build topics list from battery configs and power excess calculator
-	topics := buildTopicsList(batteries)
-	topics = append(topics, PowerExcessTopics()...)
+	// Build HA statestream topic list from battery configs and power excess calculator
+	haTopics := buildTopicsList(batteries)
+	haTopics = append(haTopics, PowerExcessTopics()...)
 
 	// Build unified inverter enabler config and add its topics
 	unifiedInverterConfig := BuildUnifiedInverterConfig(battery2)
-	topics = append(topics, unifiedInverterConfig.Topics()...)
+	haTopics = append(haTopics, unifiedInverterConfig.Topics()...)
 
 	// Add miner workmode topic for dump load enabler
-	topics = append(topics, TopicMinerWorkmode)
+	haTopics = append(haTopics, TopicMinerWorkmode)
 
 	// Add powerctl enabled state topic
-	topics = append(topics, TopicPowerctlEnabledState)
+	haTopics = append(haTopics, TopicPowerctlEnabledState)
 
 	// Add powerhouse inverters enabled state topic
-	topics = append(topics, TopicPowerhouseInvertersEnabledState)
+	haTopics = append(haTopics, TopicPowerhouseInvertersEnabledState)
 
 	// Add PW2 discharge, operation mode, and expecting power cuts state topics
-	topics = append(topics, TopicPW2DischargeState)
-	topics = append(topics, TopicPW2OperationMode)
-	topics = append(topics, TopicPW2BackupReserve)
-	topics = append(topics, TopicExpectingPowerCutsState)
-	topics = append(topics, TopicHotWaterCylinderState)
+	haTopics = append(haTopics, TopicPW2DischargeState)
+	haTopics = append(haTopics, TopicPW2OperationMode)
+	haTopics = append(haTopics, TopicPW2BackupReserve)
+	haTopics = append(haTopics, TopicExpectingPowerCutsState)
+	haTopics = append(haTopics, TopicHotWaterCylinderState)
 
 	// Add lounge AC, temperature, and sun topics for tile color worker
-	topics = append(topics, TopicLoungeACAction)
-	topics = append(topics, TopicLoungeACState)
-	topics = append(topics, TopicTemperatureInside)
-	topics = append(topics, TopicSunState)
+	haTopics = append(haTopics, TopicLoungeACAction)
+	haTopics = append(haTopics, TopicLoungeACState)
+	haTopics = append(haTopics, TopicTemperatureInside)
+	haTopics = append(haTopics, TopicSunState)
+
+	// Add inverter 10 (Multiplus) setpoint command topic
+	haTopics = append(haTopics, TopicInverter10SetpointCmd)
 
 	// Add powerhouse cooling topics
-	topics = append(topics, TopicPowerhouseBlowerTemp)
-	topics = append(topics, TopicPowerhouseBlowerSwitch0State)
+	haTopics = append(haTopics, TopicPowerhouseBlowerTemp)
+	haTopics = append(haTopics, TopicPowerhouseBlowerSwitch0State)
 
-	// Sort and dedupe topics list
-	slices.Sort(topics)
-	topics = slices.Compact(topics)
+	// Sort and dedupe HA topics list
+	slices.Sort(haTopics)
+	haTopics = slices.Compact(haTopics)
+
+	// No separate Victron route needed: HA reads Cerbo N/ topics directly from the broker.
 
 	// Create channels for communication between workers
 	msgChan := make(chan SensorMessage, 10)
@@ -349,7 +359,7 @@ func main() {
 
 	// Launch MQTT sender worker (receives client updates via channel)
 	SafeGo(ctx, cancel, "mqtt-sender-worker", func(ctx context.Context) {
-		mqttSenderWorker(ctx, mqttOutgoingChan, mqttClientChan, senderDataChan, *forceEnable)
+		mqttSenderWorker(ctx, mqttOutgoingChan, mqttClientChan, senderDataChan, *forceEnable, *multiplusOnly)
 	})
 	log.Println("MQTT sender worker started")
 
@@ -407,6 +417,13 @@ func main() {
 		log.Fatalf("Failed to create expecting power cuts switch: %v", err)
 	}
 
+	// Create inverter 10 (Multiplus) AC setpoint number entity
+	err = mqttSender.CreateInverter10ACSetpointEntity()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create inverter 10 AC setpoint entity: %v", err)
+	}
+
 	// Create debug sensors for inverter control algorithms
 	debugSensors := []struct {
 		id, name, unit string
@@ -440,9 +457,13 @@ func main() {
 		log.Println("Sankey configurations published")
 	})
 
+	// Pre-seed command topics so statsWorker doesn't block on first startup.
+	// Real broker values override these on connection.
+	msgChan <- SensorMessage{Topic: TopicInverter10SetpointCmd, Value: "0"}
+
 	// Launch stats worker (produces statistics)
 	SafeGo(ctx, cancel, "stats-worker", func(ctx context.Context) {
-		statsWorker(ctx, msgChan, statsChan, topics)
+		statsWorker(ctx, msgChan, statsChan, haTopics)
 	})
 	log.Println("Stats worker started")
 
@@ -540,6 +561,18 @@ func main() {
 		powerhouseCoolingWorker(ctx, coolingChan, mqttSender)
 	})
 
+	// Launch Cerbo keepalive worker (outbound only)
+	SafeGo(ctx, cancel, "cerbo-keepalive", func(ctx context.Context) {
+		cerboKeepaliveWorker(ctx, mqttSender)
+	})
+
+	// Launch inverter 10 setpoint worker
+	inverter10Chan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, inverter10Chan)
+	SafeGo(ctx, cancel, "inverter10-setpoint", func(ctx context.Context) {
+		inverter10SetpointWorker(ctx, inverter10Chan, mqttSender)
+	})
+
 	// Add senderDataChan to downstream channels for mqttSenderWorker to receive enabled state
 	downstreamChans = append(downstreamChans, senderDataChan)
 
@@ -560,7 +593,9 @@ func main() {
 
 	// Launch MQTT worker
 	SafeGo(ctx, cancel, "mqtt-worker", func(ctx context.Context) {
-		mqttWorker(ctx, "homeassistant.lan", topics, mqttUsername, mqttPassword, mqttClientID, msgChan, mqttClientChan)
+		mqttWorker(ctx, "homeassistant.lan", []TopicRoute{
+			{Topics: haTopics, Channel: msgChan},
+		}, mqttUsername, mqttPassword, mqttClientID, mqttClientChan)
 	})
 	log.Println("MQTT worker started")
 

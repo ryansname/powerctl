@@ -9,13 +9,20 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-// mqttWorker manages MQTT connection and forwards messages to a channel
+// TopicRoute binds a set of subscribed topics to a destination channel.
+// mqttWorker subscribes to every topic in Topics and forwards each incoming
+// message on that topic to Channel.
+type TopicRoute struct {
+	Topics  []string
+	Channel chan<- SensorMessage
+}
+
+// mqttWorker manages MQTT connection and forwards messages to routed channels.
 func mqttWorker(
 	ctx context.Context,
 	broker string,
-	topics []string,
+	routes []TopicRoute,
 	username, password, clientID string,
-	msgChan chan<- SensorMessage,
 	clientChan chan<- mqtt.Client,
 ) {
 	// Connect to MQTT broker
@@ -44,33 +51,35 @@ func mqttWorker(
 			return
 		}
 
-		// Subscribe to all topics
-		for _, topic := range topics {
-			token := client.Subscribe(topic, 0, func(client mqtt.Client, msg mqtt.Message) {
-				value := string(msg.Payload())
+		// Subscribe to all routed topics
+		for _, route := range routes {
+			ch := route.Channel
+			for _, topic := range route.Topics {
+				token := client.Subscribe(topic, 0, func(client mqtt.Client, msg mqtt.Message) {
+					value := string(msg.Payload())
 
-				// Skip invalid values from HA - sensor has dropped out
-				// TODO: Track how long sensors have been invalid and send notification
-				if value == "Undefined" || value == "unavailable" || value == "unknown" {
-					return
-				}
+					// Skip invalid values from HA - sensor has dropped out
+					// TODO: Track how long sensors have been invalid and send notification
+					if value == "Undefined" || value == "unavailable" || value == "unknown" {
+						return
+					}
 
-				// Forward message to stats worker via channel
-				sensorMsg := SensorMessage{
-					Topic: msg.Topic(),
-					Value: value,
-				}
-				select {
-				case msgChan <- sensorMsg:
-				case <-ctx.Done():
-					return
-				}
-			})
+					sensorMsg := SensorMessage{
+						Topic: msg.Topic(),
+						Value: value,
+					}
+					select {
+					case ch <- sensorMsg:
+					case <-ctx.Done():
+						return
+					}
+				})
 
-			if token.Wait() && token.Error() != nil {
-				log.Printf("Failed to subscribe to topic %s: %v\n", topic, token.Error())
-			} else {
-				log.Printf("Subscribed to topic: %s\n", topic)
+				if token.Wait() && token.Error() != nil {
+					log.Printf("Failed to subscribe to topic %s: %v\n", topic, token.Error())
+				} else {
+					log.Printf("Subscribed to topic: %s\n", topic)
+				}
 			}
 		}
 	})

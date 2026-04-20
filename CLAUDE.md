@@ -67,6 +67,10 @@ Goroutine-based with message passing via channels. All source code in `src/`.
 
 14. **sankeyWorker** (src/main.go) - Generates Sankey chart configs at startup via `src/sankey` package
 
+15. **cerboKeepaliveWorker** (src/powerhouse3.go) - Sends Victron GX keepalive every 50s so Cerbo keeps publishing N/ topics
+
+16. **inverter10SetpointWorker** (src/powerhouse3.go) - Reads `TopicInverter10SetpointCmd` from DisplayData, publishes `{"value": N}` to Cerbo every 5s
+
 ### Data Structures
 
 **DisplayData** (broadcast to all workers):

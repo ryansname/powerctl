@@ -261,6 +261,59 @@ func (s *MQTTSender) CreateExpectingPowerCutsSwitch() error {
 	return s.createSwitch("powerctl_expecting_power_cuts", "Expecting Power Cuts", "mdi:transmission-tower-off", TopicExpectingPowerCutsState)
 }
 
+// CreateInverter10ACSetpointEntity creates the Multiplus II AC setpoint number entity via MQTT discovery
+func (s *MQTTSender) CreateInverter10ACSetpointEntity() error {
+	type haDeviceConfig struct {
+		Identifiers []string `json:"identifiers"`
+		Name        string   `json:"name"`
+		Model       string   `json:"model,omitempty"`
+	}
+
+	type haNumberConfig struct {
+		Name          string         `json:"name"`
+		UniqueId      string         `json:"unique_id"`
+		StateTopic    string         `json:"state_topic"`
+		ValueTemplate string         `json:"value_template"`
+		CommandTopic  string         `json:"command_topic"`
+		UnitOfMeasure string         `json:"unit_of_measurement"`
+		Min           float64        `json:"min"`
+		Max           float64        `json:"max"`
+		Step          float64        `json:"step"`
+		Device        haDeviceConfig `json:"device"`
+	}
+
+	config := haNumberConfig{
+		Name:          "Powerhouse Inverter 10 AC Setpoint",
+		UniqueId:      "powerhouse_inverter_10_ac_setpoint",
+		StateTopic:    TopicMultiplusSetpointRead,
+		ValueTemplate: "{{ value_json.value }}",
+		CommandTopic:  TopicInverter10SetpointCmd,
+		UnitOfMeasure: "W",
+		Min:           -3000,
+		Max:           2000,
+		Step:          100,
+		Device: haDeviceConfig{
+			Identifiers: []string{"powerhouse_inverter_10"},
+			Name:        "Powerhouse Inverter 10",
+			Model:       "Multiplus II 48/5000/70",
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/number/powerhouse_inverter_10_ac_setpoint/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
 // isDiscoveryTopic checks if a topic is an MQTT discovery config topic
 func isDiscoveryTopic(topic string) bool {
 	return strings.HasSuffix(topic, "/config")
@@ -281,6 +334,7 @@ func mqttSenderWorker(
 	clientChan <-chan mqtt.Client,
 	dataChan <-chan DisplayData,
 	forceEnable bool,
+	multiplusOnly bool,
 ) {
 	log.Println("MQTT sender worker started")
 
@@ -324,6 +378,12 @@ func mqttSenderWorker(
 			}
 
 		case msg := <-outgoingChan:
+			// Multiplus-only isolation: drop everything outside the Cerbo namespace,
+			// except discovery config topics which register HA entities.
+			if multiplusOnly && !strings.HasPrefix(msg.Topic, "powerhouse_3/") && !isDiscoveryTopic(msg.Topic) {
+				continue
+			}
+
 			// Check if message should be published
 			isEnabled := forceEnable || enabled || isDiscoveryTopic(msg.Topic)
 			if !isEnabled {
@@ -332,8 +392,10 @@ func mqttSenderWorker(
 			}
 
 			// Change detection: skip if payload unchanged and recently sent.
-			// Service calls are commands that must always be forwarded.
-			if msg.Topic != "nodered/proxy/call_service" {
+			// Service calls and Victron read/write topics are commands that must always be forwarded.
+			if msg.Topic != "nodered/proxy/call_service" &&
+				!strings.HasPrefix(msg.Topic, "powerhouse_3/W/") &&
+				!strings.HasPrefix(msg.Topic, "powerhouse_3/R/") {
 				if last, ok := lastSent[msg.Topic]; ok {
 					if bytes.Equal(last.payload, msg.Payload) && time.Since(last.sentAt) < resendInterval {
 						continue
