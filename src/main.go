@@ -302,6 +302,7 @@ func main() {
 		FloatChargeState:     "Float Charging",
 		ConversionLossRate:   0.05,
 		InverterSwitchIDs:    []string{},
+		CerboSOCTopic:        TopicCerboBatterySOC,
 	}
 
 	batteries := []BatteryConfig{battery2, battery3}
@@ -370,16 +371,24 @@ func main() {
 	log.Println("Creating Home Assistant entities...")
 
 	for _, b := range batteries {
-		err := mqttSender.CreateBatteryEntity(
-			b.Name, b.CapacityKWh, b.Manufacturer,
-			"State of Charge", "battery", "%", "percentage", 1,
-		)
-		if err != nil {
-			cancel()
-			log.Fatalf("Failed to create %s State of Charge entity: %v", b.Name, err)
+		if b.CerboSOCTopic != "" {
+			err := mqttSender.CreateBatterySOCEntityFromCerbo(b.Name, b.CapacityKWh, b.Manufacturer, b.CerboSOCTopic)
+			if err != nil {
+				cancel()
+				log.Fatalf("Failed to create %s State of Charge entity: %v", b.Name, err)
+			}
+		} else {
+			err := mqttSender.CreateBatteryEntity(
+				b.Name, b.CapacityKWh, b.Manufacturer,
+				"State of Charge", "battery", "%", "percentage", 1,
+			)
+			if err != nil {
+				cancel()
+				log.Fatalf("Failed to create %s State of Charge entity: %v", b.Name, err)
+			}
 		}
 
-		err = mqttSender.CreateBatteryEntity(
+		err := mqttSender.CreateBatteryEntity(
 			b.Name, b.CapacityKWh, b.Manufacturer,
 			"Available Energy", "energy", "Wh", "available_wh", 0,
 		)

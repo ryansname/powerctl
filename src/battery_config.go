@@ -20,6 +20,7 @@ type BatteryConfig struct {
 	FloatChargeState     string
 	ConversionLossRate   float64
 	InverterSwitchIDs    []string
+	CerboSOCTopic        string // If set, SOC entity reads from this Cerbo MQTT topic instead of powerctl state
 }
 
 // CalibrationTopics holds statestream topic paths for calibration data

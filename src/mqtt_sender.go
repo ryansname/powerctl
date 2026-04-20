@@ -132,6 +132,69 @@ func (s *MQTTSender) CreateBatteryEntity(
 	return nil
 }
 
+// CreateBatterySOCEntityFromCerbo creates a battery SOC entity that reads directly
+// from a Cerbo GX MQTT topic ({"value": N} format) instead of powerctl state.
+func (s *MQTTSender) CreateBatterySOCEntityFromCerbo(
+	batteryName string,
+	capacityKWh float64,
+	manufacturer string,
+	cerboSOCTopic string,
+) error {
+	type haDeviceConfig struct {
+		Identifiers  []string `json:"identifiers"`
+		Name         string   `json:"name"`
+		Manufacturer string   `json:"manufacturer,omitempty"`
+		Model        string   `json:"model,omitempty"`
+	}
+
+	type haEntityConfig struct {
+		Name             string         `json:"name,omitempty"`
+		DeviceClass      string         `json:"device_class"`
+		StateTopic       string         `json:"state_topic"`
+		UnitOfMeasure    string         `json:"unit_of_measurement,omitempty"`
+		ValueTemplate    string         `json:"value_template"`
+		UniqueId         string         `json:"unique_id"`
+		ExpireAfter      uint           `json:"expire_after,omitempty"`
+		StateClass       string         `json:"state_class,omitempty"`
+		DisplayPrecision int            `json:"suggested_display_precision,omitempty"`
+		Device           haDeviceConfig `json:"device"`
+	}
+
+	deviceId := strings.ReplaceAll(strings.ToLower(batteryName), " ", "_")
+
+	config := haEntityConfig{
+		Name:             "State of Charge",
+		DeviceClass:      "battery",
+		StateTopic:       cerboSOCTopic,
+		UnitOfMeasure:    "%",
+		ValueTemplate:    "{{ value_json.value }}",
+		UniqueId:         deviceId + "_percentage",
+		ExpireAfter:      60 * 30,
+		StateClass:       "measurement",
+		DisplayPrecision: 1,
+		Device: haDeviceConfig{
+			Identifiers:  []string{deviceId},
+			Name:         batteryName,
+			Manufacturer: manufacturer,
+			Model:        fmt.Sprintf("%.0f kWh", capacityKWh),
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/sensor/" + deviceId + "_percentage/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
 // CreateDebugSensor creates a simple debug sensor via MQTT discovery
 func (s *MQTTSender) CreateDebugSensor(sensorID, name, unit string, precision int) error {
 	type haDeviceConfig struct {
