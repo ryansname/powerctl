@@ -260,6 +260,15 @@ func clonePercentiles(percentiles map[PercentileKey]float64) map[PercentileKey]f
 	return clone
 }
 
+func allExpectedTopicsReceived(topicData map[string]any, expectedTopics []string) bool {
+	for _, topic := range expectedTopics {
+		if _, ok := topicData[topic]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // Topics that should be initialized to 0.0 if not received within timeout
 // These are self-published topics that won't exist on first startup
 var selfPublishedFloatTopics = []string{
@@ -358,7 +367,7 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 			}
 
 			// Check if we've received all expected topics
-			if !allTopicsReceived && len(topicData) == len(expectedTopics) {
+			if !allTopicsReceived && allExpectedTopicsReceived(topicData, expectedTopics) {
 				allTopicsReceived = true
 				startupCheckTicker.Stop()
 				log.Printf("Stats worker ready: received data for all %d topics\n", len(expectedTopics))
