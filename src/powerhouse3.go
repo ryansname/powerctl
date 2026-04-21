@@ -72,6 +72,9 @@ func inverter10SetpointWorker(ctx context.Context, statsChan <-chan DisplayData,
 		case data = <-statsChan:
 			setpoint = data.GetFloat(TopicInverter10SetpointCmd).Current
 		case <-ticker.C:
+			if setpoint == 0 {
+				continue
+			}
 			payload, _ := json.Marshal(map[string]float64{"value": setpoint})
 			sender.Send(MQTTMessage{Topic: TopicMultiplusSetpointWrite, Payload: payload, QoS: 0})
 		}
