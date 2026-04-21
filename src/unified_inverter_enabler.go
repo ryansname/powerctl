@@ -100,6 +100,10 @@ type InverterEnablerState struct {
 	// Battery 2 rolling minimum voltage for low voltage safety (1-hour window)
 	battery2VoltageMin governor.RollingMinMax
 
+	// Overflow state for Battery 2 (decrease-only to prevent flapping)
+	lastOverflow2Watts float64
+	overflow2InFloat   bool
+
 	// Stepped hysteresis controllers
 	powerwallLow   *governor.SteppedHysteresis // Powerwall Low mode (9 inverters)
 	overflow2      *governor.SteppedHysteresis // Overflow mode for Battery 2
@@ -139,18 +143,41 @@ type DebugModeInfo struct {
 }
 
 // checkBatteryOverflow returns inverter count for overflow mode using SOC-based hysteresis.
+// Requires Float Charging + 100% SOC to enter. Once entered, stays active while in Float
+// (even as SOC drops). Watts can only decrease to prevent inverter flapping.
 func checkBatteryOverflow(
 	data DisplayData,
 	battery BatteryInverterGroup,
 	config UnifiedInverterConfig,
-	hysteresis *governor.SteppedHysteresis,
+	state *InverterEnablerState,
 ) PowerRequest {
 	name := "Overflow (" + battery.ShortName + ")"
 
+	chargeState := data.GetString(battery.ChargeStateTopic)
+	inFloat := chargeState == "Float Charging"
 	soc := data.GetFloat(battery.SOCTopic).Current
-	count := hysteresis.Update(soc)
 
-	return PowerRequest{Name: name, Watts: float64(count) * config.WattsPerInverter}
+	if !inFloat {
+		state.overflow2InFloat = false
+		return PowerRequest{Name: name, Watts: 0}
+	}
+
+	if !state.overflow2InFloat && soc < 100 {
+		return PowerRequest{Name: name, Watts: 0}
+	}
+
+	count := state.overflow2.Update(soc)
+	watts := float64(count) * config.WattsPerInverter
+
+	if !state.overflow2InFloat {
+		state.overflow2InFloat = true
+		state.lastOverflow2Watts = watts
+	} else {
+		watts = min(watts, state.lastOverflow2Watts)
+		state.lastOverflow2Watts = watts
+	}
+
+	return PowerRequest{Name: name, Watts: watts}
 }
 
 // selectMode calculates per-battery overflow/forecast excess and global targets, applying limits,
@@ -187,7 +214,7 @@ func selectMode(
 	}
 
 	// 1. Per-battery overflow (SOC-based hysteresis)
-	overflow2 := checkBatteryOverflow(data, config.Battery2, config, state.overflow2)
+	overflow2 := checkBatteryOverflow(data, config.Battery2, config, state)
 
 	// 2. Per-battery forecast excess (already capped at max inverter power)
 	forecastExcess2 := forecastExcessRequest(data, config, config.Battery2, &state.forecastExcess2)
@@ -449,7 +476,7 @@ func forecastExcessRequest(
 func powerwallLastRequest(state *InverterEnablerState) PowerRequest {
 	return PowerRequest{
 		Name:  "PowerwallLast",
-		Watts: state.loadWindow.Min() - state.solarWindow.Max(),
+		Watts: min(state.loadWindow.Min()-state.solarWindow.Max(), 500),
 	}
 }
 
