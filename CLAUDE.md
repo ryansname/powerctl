@@ -51,8 +51,9 @@ Goroutine-based with message passing via channels. All source code in `src/`.
    - **Baseline**: 7-day P2 of hourly house-load minimums minus solar (capped at 500W)
    - **Safety**: High frequency (>52.75Hz) or grid off + Powerwall >90% disables all
    - **SOC limits**: Battery 2 hysteresis (ON: 15%→25%, OFF: 12.5%→22.5%)
+   - **Low voltage**: Graduated hysteresis on 15m min voltage (ON: 50.75→52V, OFF: 50.75→51V)
    - **Limit**: 5000W - solar_1_power 15min P90 (skipped when Battery 3 SOC < 85%)
-   - Selection: `max(overflow, forecast_excess, baseline)` then apply safety/SOC limits
+   - Selection: `max(overflow, forecast_excess, baseline)` then apply safety/SOC/voltage limits
 
 9. **dynamicInverterControl** (src/dynamic_inverter_control.go) - Actively controls Multiplus II (Battery 3) setpoint every 5s. Range: -3000W to +3500W.
    - **Auto mode** (`powerctl_dynamic_auto` switch on): calculates setpoint, writes to HA entity for visibility

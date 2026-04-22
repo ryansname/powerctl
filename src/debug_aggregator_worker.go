@@ -30,7 +30,7 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 			leftRows = append(leftRows, [2]string{m.Name, fmt.Sprintf("%.0f", m.Watts)})
 		}
 		if baseline.Battery2LowVoltage {
-			leftRows = append(leftRows, [2]string{"Low Voltage", fmt.Sprintf("%.2fV", baseline.Battery2VoltageMin)})
+			leftRows = append(leftRows, [2]string{"Low Voltage", fmt.Sprintf("%d @ %.2fV", baseline.Battery2VoltageMaxInv, baseline.Battery2VoltageMin)})
 		}
 	}
 

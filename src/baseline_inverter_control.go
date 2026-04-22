@@ -16,12 +16,14 @@ type BaselineInverterConfig struct {
 	MaxTransferPower float64
 	MaxBaselineWatts float64
 
-	OverflowSOCTurnOffStart  float64
-	OverflowSOCTurnOffEnd    float64
-	OverflowSOCTurnOnStart   float64
-	OverflowSOCTurnOnEnd     float64
-	LowVoltageTripThreshold  float64
-	LowVoltageResetThreshold float64
+	OverflowSOCTurnOffStart float64
+	OverflowSOCTurnOffEnd   float64
+	OverflowSOCTurnOnStart  float64
+	OverflowSOCTurnOnEnd    float64
+	LowVoltageTurnOnStart   float64
+	LowVoltageTurnOnEnd     float64
+	LowVoltageTurnOffStart  float64
+	LowVoltageTurnOffEnd    float64
 }
 
 // BaselineInverterState holds runtime state for the baseline inverter controller.
@@ -48,8 +50,9 @@ type BaselineDebugInfo struct {
 	ACFreqP100    float64
 	PowerwallSOC  float64
 
-	Battery2LowVoltage bool
-	Battery2VoltageMin float64
+	Battery2LowVoltage   bool
+	Battery2VoltageMin   float64
+	Battery2VoltageMaxInv int
 
 	BaselineTarget float64
 	BaselineUsed   float64
@@ -191,39 +194,34 @@ func baselineInverterControl(
 		houseLoadHourly:    governor.NewRollingMinMaxHours(168),
 		targetMinusSolar:   governor.NewRollingMinMax(60),
 		socLimit2:          governor.NewSteppedHysteresis(b2Count, true, 15, 25, 12.5, 22.5),
-		powerCutAllow2:     governor.NewSteppedHysteresis(1, true, 53, 53, 47, 47),
+		powerCutAllow2: governor.NewSteppedHysteresis(1, true, 53, 53, 47, 47),
 		lowVoltage2: governor.NewSteppedHysteresis(
-			1, false,
-			config.LowVoltageTripThreshold, config.LowVoltageTripThreshold,
-			config.LowVoltageResetThreshold, config.LowVoltageResetThreshold,
+			b2Count, true,
+			config.LowVoltageTurnOnStart, config.LowVoltageTurnOnEnd,
+			config.LowVoltageTurnOffStart, config.LowVoltageTurnOffEnd,
 		),
 	}
 	state.socLimit2.Current = b2Count
+	state.lowVoltage2.Current = b2Count
 
 	for {
 		select {
 		case input := <-inputChan:
 			desiredCount, debugInfo := selectBaselineMode(input, config, state)
 
-			// Low voltage latch using 15-minute rolling minimum
+			// Low voltage limit using 15-minute rolling minimum
 			state.battery2VoltageMin.Update(input.Battery2Voltage)
 			b2VoltMin := state.battery2VoltageMin.Min()
-			prevLatched := state.lowVoltage2.Current > 0
-			b2LowVoltage := state.lowVoltage2.Update(b2VoltMin) > 0
-			if b2LowVoltage != prevLatched {
-				if b2LowVoltage {
-					log.Printf("Battery 2: LOW VOLTAGE TRIP (15m min %.2fV < %.2fV) - forcing inverters off\n",
-						b2VoltMin, config.LowVoltageTripThreshold)
-				} else {
-					log.Printf("Battery 2: low voltage cleared (15m min %.2fV >= %.2fV)\n",
-						b2VoltMin, config.LowVoltageResetThreshold)
-				}
+			prevMaxInv := state.lowVoltage2.Current
+			maxByVoltage := state.lowVoltage2.Update(b2VoltMin)
+			if maxByVoltage != prevMaxInv {
+				log.Printf("Battery 2: voltage limit changed %d→%d (15m min %.2fV)\n",
+					prevMaxInv, maxByVoltage, b2VoltMin)
 			}
-			if b2LowVoltage {
-				desiredCount = 0
-			}
-			debugInfo.Battery2LowVoltage = b2LowVoltage
+			desiredCount = min(desiredCount, maxByVoltage)
+			debugInfo.Battery2LowVoltage = maxByVoltage < b2Count
 			debugInfo.Battery2VoltageMin = b2VoltMin
+			debugInfo.Battery2VoltageMaxInv = maxByVoltage
 
 			// Expecting power cuts: conserve around 50% SOC, grid-on only
 			if input.ExpectingPowerCuts && input.GridAvailable {

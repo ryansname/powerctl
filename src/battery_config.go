@@ -149,8 +149,10 @@ func BuildBaselineInverterConfig(battery2, battery3 BatteryConfig) BaselineInver
 		OverflowSOCTurnOffEnd:    95.0,
 		OverflowSOCTurnOnStart:   95.75,
 		OverflowSOCTurnOnEnd:     99.5,
-		LowVoltageTripThreshold:  50.75,
-		LowVoltageResetThreshold: 52.00,
+		LowVoltageTurnOnStart:  52.0,
+		LowVoltageTurnOnEnd:    53.0,
+		LowVoltageTurnOffStart: 50.75,
+		LowVoltageTurnOffEnd:   52.0,
 	}
 }
 

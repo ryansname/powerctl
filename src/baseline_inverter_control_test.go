@@ -32,8 +32,10 @@ func makeTestBaselineConfig() BaselineInverterConfig {
 		OverflowSOCTurnOffEnd:    95.0,
 		OverflowSOCTurnOnStart:   95.75,
 		OverflowSOCTurnOnEnd:     99.5,
-		LowVoltageTripThreshold:  50.75,
-		LowVoltageResetThreshold: 52.0,
+		LowVoltageTurnOnStart:  52.0,
+		LowVoltageTurnOnEnd:    53.0,
+		LowVoltageTurnOffStart: 50.75,
+		LowVoltageTurnOffEnd:   52.0,
 	}
 }
 
@@ -54,12 +56,13 @@ func makeBlankBaselineState(config BaselineInverterConfig) *BaselineInverterStat
 		socLimit2:          governor.NewSteppedHysteresis(b2Count, true, 15, 25, 12.5, 22.5),
 		powerCutAllow2:     governor.NewSteppedHysteresis(1, true, 53, 53, 47, 47),
 		lowVoltage2: governor.NewSteppedHysteresis(
-			1, false,
-			config.LowVoltageTripThreshold, config.LowVoltageTripThreshold,
-			config.LowVoltageResetThreshold, config.LowVoltageResetThreshold,
+			b2Count, true,
+			config.LowVoltageTurnOnStart, config.LowVoltageTurnOnEnd,
+			config.LowVoltageTurnOffStart, config.LowVoltageTurnOffEnd,
 		),
 	}
 	state.socLimit2.Current = b2Count
+	state.lowVoltage2.Current = b2Count
 	return state
 }
 
