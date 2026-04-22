@@ -56,8 +56,8 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 
 	n := max(len(leftRows), len(rightRows))
 	var sb strings.Builder
-	sb.WriteString("| B2 Mode | Watts |   | ‖ | B3 Mode | Value |\n")
-	sb.WriteString("|---------|------:|---|:-:|---------|------:|\n")
+	sb.WriteString("| B2 Mode | Watts |   |   | B3 Mode | Value |\n")
+	sb.WriteString("|---------|------:|---|---|---------|------:|\n")
 	for i := range n {
 		var l [3]string
 		var r [2]string
@@ -67,7 +67,7 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 		if i < len(rightRows) {
 			r = rightRows[i]
 		}
-		fmt.Fprintf(&sb, "| %s | %s | %s | │ | %s | %s |\n", l[0], l[1], l[2], r[0], r[1])
+		fmt.Fprintf(&sb, "| %s | %s | %s |   | %s | %s |\n", l[0], l[1], l[2], r[0], r[1])
 	}
 	return sb.String()
 }

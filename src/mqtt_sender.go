@@ -361,7 +361,7 @@ func (s *MQTTSender) CreateInverter10ACSetpointEntity() error {
 		UnitOfMeasure: "W",
 		Min:           -3000,
 		Max:           3500,
-		Step:          100,
+		Step:          10,
 		Device: haDeviceConfig{
 			Identifiers: []string{"powerhouse_inverter_10"},
 			Name:        "Powerhouse Inverter 10",
