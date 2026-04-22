@@ -119,7 +119,7 @@ func TestCalculateDynamic_DefaultSupply_NoGeneration(t *testing.T) {
 	input.HouseLoad = 2000 // 2kW needed, no generation
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.Equal(t, "Default Supply", debug.Priority)
+	assert.Equal(t, "Supply", debug.Priority)
 	// target = 2000 - 0 = 2000, desired = -2000, headroom = 4500 → setpoint = -2000
 	assert.InDelta(t, -2000.0, setpoint, 0.001)
 }
@@ -134,7 +134,7 @@ func TestCalculateDynamic_DefaultSupply_CappedByHeadroom(t *testing.T) {
 	input.Solar2Power = 0
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.Equal(t, "Default Supply", debug.Priority)
+	assert.Equal(t, "Supply", debug.Priority)
 	assert.InDelta(t, -500.0, setpoint, 0.001)
 }
 
@@ -144,7 +144,7 @@ func TestCalculateDynamic_DefaultSupply_CappedAt3000(t *testing.T) {
 	input.HouseLoad = 5000 // large load, no generation → discharge cap at 3000W
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.Equal(t, "Default Supply", debug.Priority)
+	assert.Equal(t, "Supply", debug.Priority)
 	assert.InDelta(t, -3000.0, setpoint, 0.001)
 }
 
@@ -155,12 +155,25 @@ func TestCalculateDynamic_ChargeFromSurplus(t *testing.T) {
 	input.Solar1Power = 1000
 	input.Solar2Power = 500
 	input.Inverter1to9Power = 1000
-	// target = 500 - (1000+500+1000) = -2000 → P3
-	// desired = min(1000+1000, 3500) = 2000, headroom = 4500-1000-1000 = 2500 → setpoint = 2000
+	// target = 500 - (1000+500+1000) = -2000 → surplus = 2000W → charge 2000W
+	// headroom = 4500-1000-1000 = 2500 → setpoint = 2000
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.Equal(t, "Charge from Surplus", debug.Priority)
+	assert.Equal(t, "Charge", debug.Priority)
 	assert.InDelta(t, 2000.0, setpoint, 0.001)
+}
+
+func TestCalculateDynamic_ChargeFromSurplus_SmallSurplus(t *testing.T) {
+	// Solar barely exceeds house load — should charge only the 100W surplus, not all solar
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 1000
+	input.Solar1Power = 1100
+	// target = 1000 - 1100 = -100 → surplus = 100W → charge 100W
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.Equal(t, "Charge", debug.Priority)
+	assert.InDelta(t, 100.0, setpoint, 0.001)
 }
 
 func TestCalculateDynamic_ChargeFromSurplus_ForcedChargeByTransferLimit(t *testing.T) {
@@ -172,7 +185,7 @@ func TestCalculateDynamic_ChargeFromSurplus_ForcedChargeByTransferLimit(t *testi
 	// P3: desired = min(2000+4000, 3500) = 3500, but headroom < 0 → force charge 1500W
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.Equal(t, "Charge from Surplus", debug.Priority)
+	assert.Equal(t, "Charge", debug.Priority)
 	assert.InDelta(t, 1500.0, setpoint, 0.001)
 }
 
@@ -187,7 +200,7 @@ func TestCalculateDynamic_ChargeFromSurplus_CapAt3500(t *testing.T) {
 	// desired = 3500 (charge), 3500 > 0 so no clamping needed, just cap at 3500
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.Equal(t, "Charge from Surplus", debug.Priority)
+	assert.Equal(t, "Charge", debug.Priority)
 	assert.InDelta(t, 3500.0, setpoint, 0.001)
 }
 

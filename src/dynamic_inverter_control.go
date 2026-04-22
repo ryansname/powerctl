@@ -81,11 +81,11 @@ func calculateDynamicSetpoint(
 	var priority string
 	if target > 0 {
 		desired = -target
-		priority = "Default Supply"
+		priority = "Supply"
 	} else {
-		// Priority 3: Charge from Surplus — absorb available powerhouse-side generation
-		desired = min(input.Solar1Power+input.Inverter1to9Power, dynamicMaxChargeW)
-		priority = "Charge from Surplus"
+		// Priority 3: Charge from Surplus — absorb only the surplus, not all generation
+		desired = min(-target, dynamicMaxChargeW)
+		priority = "Charge"
 	}
 
 	setpoint := applyTransferLimit(desired, input.Solar1Power, input.Inverter1to9Power)

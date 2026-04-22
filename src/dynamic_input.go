@@ -54,7 +54,7 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		HouseLoad:            data.GetFloat(config.HouseLoadTopic).Current,
 		Solar1Power:          data.GetFloat(config.Solar1PowerTopic).Current,
 		Solar2Power:          data.GetFloat(config.Solar2PowerTopic).Current,
-		Inverter1to9Power:    data.SumTopics(config.Inverter1to9PowerTopics),
+		Inverter1to9Power:    -data.SumTopics(config.Inverter1to9PowerTopics),
 		MultiplusACPower:     data.GetFloat(config.MultiplusACPowerTopic).Current,
 		Battery3SOC:          data.GetFloat(config.Battery3SOCTopic).Current,
 		GridAvailable:        data.GetBoolean(config.GridStatusTopic),
