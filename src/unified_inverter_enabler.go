@@ -12,6 +12,8 @@ import (
 	"github.com/ryansname/powerctl/src/governor"
 )
 
+const floatChargingState = "Float Charging"
+
 // PowerRequest represents a power request from a rule
 type PowerRequest struct {
 	Name  string
@@ -83,6 +85,13 @@ type UnifiedInverterConfig struct {
 	LowVoltageResetThreshold float64 // e.g. 52.00V - release once 15-min P1 recovers above this
 }
 
+// BatteryOverflowState holds per-battery runtime state for overflow mode.
+type BatteryOverflowState struct {
+	LastWatts  float64
+	InFloat    bool
+	Hysteresis *governor.SteppedHysteresis
+}
+
 // InverterEnablerState holds runtime state for the unified inverter enabler
 type InverterEnablerState struct {
 	// Last published debug output for change detection
@@ -100,13 +109,11 @@ type InverterEnablerState struct {
 	// Battery 2 rolling minimum voltage for low voltage safety (1-hour window)
 	battery2VoltageMin governor.RollingMinMax
 
-	// Overflow state for Battery 2 (decrease-only to prevent flapping)
-	lastOverflow2Watts float64
-	overflow2InFloat   bool
+	// Overflow state for Battery 2
+	overflow2State BatteryOverflowState
 
 	// Stepped hysteresis controllers
 	powerwallLow   *governor.SteppedHysteresis // Powerwall Low mode (9 inverters)
-	overflow2      *governor.SteppedHysteresis // Overflow mode for Battery 2
 	socLimit2      *governor.SteppedHysteresis // SOC-based inverter limit for Battery 2
 	powerCutAllow2 *governor.SteppedHysteresis // Expecting power cuts: allow inverters above ~50% SOC
 	lowVoltage2    *governor.SteppedHysteresis // Low voltage safety latch for Battery 2
@@ -146,35 +153,33 @@ type DebugModeInfo struct {
 // Requires Float Charging + 100% SOC to enter. Once entered, stays active while in Float
 // (even as SOC drops). Watts can only decrease to prevent inverter flapping.
 func checkBatteryOverflow(
-	data DisplayData,
-	battery BatteryInverterGroup,
-	config UnifiedInverterConfig,
-	state *InverterEnablerState,
+	chargeState string,
+	soc float64,
+	shortName string,
+	wattsPerInverter float64,
+	state *BatteryOverflowState,
 ) PowerRequest {
-	name := "Overflow (" + battery.ShortName + ")"
-
-	chargeState := data.GetString(battery.ChargeStateTopic)
-	inFloat := chargeState == "Float Charging"
-	soc := data.GetFloat(battery.SOCTopic).Current
+	name := "Overflow (" + shortName + ")"
+	inFloat := chargeState == floatChargingState
 
 	if !inFloat {
-		state.overflow2InFloat = false
+		state.InFloat = false
 		return PowerRequest{Name: name, Watts: 0}
 	}
 
-	if !state.overflow2InFloat && soc < 100 {
+	if !state.InFloat && soc < 100 {
 		return PowerRequest{Name: name, Watts: 0}
 	}
 
-	count := state.overflow2.Update(soc)
-	watts := float64(count) * config.WattsPerInverter
+	count := state.Hysteresis.Update(soc)
+	watts := float64(count) * wattsPerInverter
 
-	if !state.overflow2InFloat {
-		state.overflow2InFloat = true
-		state.lastOverflow2Watts = watts
+	if !state.InFloat {
+		state.InFloat = true
+		state.LastWatts = watts
 	} else {
-		watts = min(watts, state.lastOverflow2Watts)
-		state.lastOverflow2Watts = watts
+		watts = min(watts, state.LastWatts)
+		state.LastWatts = watts
 	}
 
 	return PowerRequest{Name: name, Watts: watts}
@@ -214,10 +219,25 @@ func selectMode(
 	}
 
 	// 1. Per-battery overflow (SOC-based hysteresis)
-	overflow2 := checkBatteryOverflow(data, config.Battery2, config, state)
+	overflow2 := checkBatteryOverflow(
+		data.GetString(config.Battery2.ChargeStateTopic),
+		data.GetFloat(config.Battery2.SOCTopic).Current,
+		config.Battery2.ShortName,
+		config.WattsPerInverter,
+		&state.overflow2State,
+	)
 
 	// 2. Per-battery forecast excess (already capped at max inverter power)
-	forecastExcess2 := forecastExcessRequest(data, config, config.Battery2, &state.forecastExcess2)
+	var forecast2 governor.ForecastPeriods
+	data.GetJSON(config.DetailedForecastTopic, &forecast2)
+	forecastExcess2 := forecastExcessRequest(
+		data.GetFloat(config.SolarForecastRemainingTopic).Current,
+		forecast2,
+		data.GetFloat(config.Battery2.AvailableEnergyTopic).Current,
+		config.WattsPerInverter,
+		config.Battery2,
+		&state.forecastExcess2,
+	)
 
 	// Grid off: disable per-battery modes only when solar is high (>= 3kW max over 1hr).
 	// When solar is low, allow overflow/forecast excess to prevent wasting energy on borderline days.
@@ -242,7 +262,7 @@ func selectMode(
 	perBattery2Count = min(perBattery2Count, maxB2)
 
 	// 4. Apply global limit (PowerhouseTransfer limit)
-	limit := powerhouseTransferLimit(data, config)
+	limit := powerhouseTransferLimit(data.GetPercentile(config.Solar1PowerTopic, P90, Window15Min), config.MaxTransferPower)
 	limitedB2 := min(perBattery2Count, int(limit.Watts/config.WattsPerInverter))
 	if limitedB2 < 0 {
 		limitedB2 = 0
@@ -349,11 +369,13 @@ func unifiedInverterEnabler(
 			config.PowerwallLowSOCTurnOffStart, config.PowerwallLowSOCTurnOffEnd,
 		),
 		// Overflow: ascending (SOC↑ → inverters↑)
-		overflow2: governor.NewSteppedHysteresis(
-			b2Inverters, true,
-			config.OverflowSOCTurnOnStart, config.OverflowSOCTurnOnEnd,
-			config.OverflowSOCTurnOffStart, config.OverflowSOCTurnOffEnd,
-		),
+		overflow2State: BatteryOverflowState{
+			Hysteresis: governor.NewSteppedHysteresis(
+				b2Inverters, true,
+				config.OverflowSOCTurnOnStart, config.OverflowSOCTurnOnEnd,
+				config.OverflowSOCTurnOffStart, config.OverflowSOCTurnOffEnd,
+			),
+		},
 		// SOC Limits: ascending (SOC↑ → limit↑), steps = inverter count
 		// Enter thresholds: 15% → 25% (ascending)
 		// Exit thresholds: 12.5% → 22.5% (ascending)
@@ -433,7 +455,11 @@ func unifiedInverterEnabler(
 			sender.PublishDebugSensor("powerctl_powerwall_low_count", float64(state.powerwallLow.Current))
 
 			// Apply changes
-			changed := applyInverterChanges(data, config, sender, modeResult.Battery2Count)
+			inverterStates := make([]bool, len(config.Battery2.Inverters))
+			for i, inv := range config.Battery2.Inverters {
+				inverterStates[i] = data.GetBoolean(inv.StateTopic)
+			}
+			changed := applyInverterChanges(inverterStates, config.Battery2.Inverters, sender, modeResult.Battery2Count)
 
 			if changed {
 				totalWatts := float64(modeResult.TotalCount()) * config.WattsPerInverter
@@ -449,24 +475,25 @@ func unifiedInverterEnabler(
 }
 
 // forecastExcessRequest calculates forecast excess inverter power for a single battery.
-// Extracts data from DisplayData and delegates to governor.ForecastExcessRequestCore.
 func forecastExcessRequest(
-	data DisplayData,
-	config UnifiedInverterConfig,
+	forecastRemainingWh float64,
+	forecast governor.ForecastPeriods,
+	availableWh float64,
+	wattsPerInverter float64,
 	battery BatteryInverterGroup,
 	state *governor.ForecastExcessState,
 ) PowerRequest {
 	input := governor.ForecastExcessInput{
 		Now:                 time.Now(),
-		ForecastRemainingWh: data.GetFloat(config.SolarForecastRemainingTopic).Current,
-		AvailableWh:         data.GetFloat(battery.AvailableEnergyTopic).Current,
+		ForecastRemainingWh: forecastRemainingWh,
+		Forecast:            forecast,
+		AvailableWh:         availableWh,
 		InverterCount:       len(battery.Inverters),
-		WattsPerInverter:    config.WattsPerInverter,
+		WattsPerInverter:    wattsPerInverter,
 		SolarMultiplier:     battery.SolarMultiplier,
 		CapacityWh:          battery.CapacityWh,
 		ShortName:           battery.ShortName,
 	}
-	data.GetJSON(config.DetailedForecastTopic, &input.Forecast)
 	result := governor.ForecastExcessRequestCore(input, state)
 	return PowerRequest{Name: result.Name, Watts: result.Watts}
 }
@@ -493,10 +520,8 @@ func checkPowerwallLow(
 }
 
 // powerhouseTransferLimit returns the available capacity after accounting for solar generation
-func powerhouseTransferLimit(data DisplayData, config UnifiedInverterConfig) PowerLimit {
-	solar1Power15MinP90 := data.GetPercentile(config.Solar1PowerTopic, P90, Window15Min)
-	availableCapacity := config.MaxTransferPower - solar1Power15MinP90
-	return PowerLimit{Name: "PowerhouseTransfer", Watts: availableCapacity}
+func powerhouseTransferLimit(solar1P90_15Min float64, maxTransferPower float64) PowerLimit {
+	return PowerLimit{Name: "PowerhouseTransfer", Watts: maxTransferPower - solar1P90_15Min}
 }
 
 // maxPowerRequest returns the PowerRequest with the highest watts
@@ -550,25 +575,26 @@ func maxInvertersForSOC(socPercent float64, hysteresis *governor.SteppedHysteres
 	return hysteresis.Update(socPercent)
 }
 
-// applyInverterChanges enables/disables inverters to match the desired count
+// applyInverterChanges enables/disables inverters to match the desired count.
+// currentStates must be indexed parallel to inverters.
 func applyInverterChanges(
-	data DisplayData,
-	config UnifiedInverterConfig,
+	currentStates []bool,
+	inverters []InverterInfo,
 	sender *MQTTSender,
-	battery2Count int,
+	desiredCount int,
 ) bool {
 	changed := false
 
-	for i, inv := range config.Battery2.Inverters {
-		current := data.GetBoolean(inv.StateTopic)
-		desired := i < battery2Count
+	for i, inv := range inverters {
+		current := i < len(currentStates) && currentStates[i]
+		desired := i < desiredCount
 
 		if current != desired {
 			if desired {
-				log.Printf("Enabling %s (Battery 2)\n", inv.EntityID)
+				log.Printf("Enabling %s\n", inv.EntityID)
 				sender.CallService("switch", "turn_on", inv.EntityID, nil)
 			} else {
-				log.Printf("Disabling %s (Battery 2)\n", inv.EntityID)
+				log.Printf("Disabling %s\n", inv.EntityID)
 				sender.CallService("switch", "turn_off", inv.EntityID, nil)
 			}
 			changed = true
