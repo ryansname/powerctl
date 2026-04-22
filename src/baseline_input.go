@@ -28,6 +28,7 @@ type BaselineInput struct {
 	Battery2Voltage     float64
 	Battery2EnergyWh    float64
 	Solar1Power         float64
+	Solar1P90_15Min     float64
 	Solar2Power         float64
 	HouseLoad           float64
 	GridAvailable       bool
@@ -57,6 +58,7 @@ func ExtractBaselineInput(data DisplayData, config BaselineInputConfig) Baseline
 		Battery2Voltage:     data.GetFloat(config.Battery2VoltageTopic).Current,
 		Battery2EnergyWh:    data.GetFloat(config.Battery2EnergyTopic).Current,
 		Solar1Power:         data.GetFloat(config.Solar1PowerTopic).Current,
+		Solar1P90_15Min:     data.GetPercentile(config.Solar1PowerTopic, P90, Window15Min),
 		Solar2Power:         data.GetFloat(config.Solar2PowerTopic).Current,
 		HouseLoad:           data.GetFloat(config.HouseLoadTopic).Current,
 		GridAvailable:       data.GetBoolean(config.GridStatusTopic),

@@ -34,28 +34,30 @@ func makeBaselineDisplayData() (DisplayData, BaselineInputConfig) {
 	}
 
 	freqKey := PercentileKey{Topic: freqTopic, Percentile: P100, Window: Window5Min}
+	solar1P90Key := PercentileKey{Topic: config.Solar1PowerTopic, Percentile: P90, Window: Window15Min}
 	data := DisplayData{
 		TopicData: map[string]any{
-			"b2soc":     makeFloatTopic(87.5),
-			"b2charge":  makeStringTopic("Float Charging"),
-			"b2volt":    makeFloatTopic(52.1),
-			"b2energy":  makeFloatTopic(8500),
-			"solar1":    makeFloatTopic(1200),
-			"solar2":    makeFloatTopic(800),
-			"load":      makeFloatTopic(1500),
-			"grid":      makeBoolTopic(true, "on"),
-			freqTopic:   makeFloatTopic(50.02),
+			"b2soc":      makeFloatTopic(87.5),
+			"b2charge":   makeStringTopic("Float Charging"),
+			"b2volt":     makeFloatTopic(52.1),
+			"b2energy":   makeFloatTopic(8500),
+			"solar1":     makeFloatTopic(1200),
+			"solar2":     makeFloatTopic(800),
+			"load":       makeFloatTopic(1500),
+			"grid":       makeBoolTopic(true, "on"),
+			freqTopic:    makeFloatTopic(50.02),
 			"forecastwh": makeFloatTopic(12000),
-			"forecast":  makeStringTopic("[]"),
-			"inv1":      makeBoolTopic(true, "on"),
-			"inv2":      makeBoolTopic(false, "off"),
-			"inv3":      makeBoolTopic(true, "on"),
-			"b3soc":     makeFloatTopic(72.0),
-			"pwsoc":     makeFloatTopic(45.0),
-			"powercuts": makeBoolTopic(false, "off"),
+			"forecast":   makeStringTopic("[]"),
+			"inv1":       makeBoolTopic(true, "on"),
+			"inv2":       makeBoolTopic(false, "off"),
+			"inv3":       makeBoolTopic(true, "on"),
+			"b3soc":      makeFloatTopic(72.0),
+			"pwsoc":      makeFloatTopic(45.0),
+			"powercuts":  makeBoolTopic(false, "off"),
 		},
 		Percentiles: map[PercentileKey]float64{
-			freqKey: 50.15,
+			freqKey:     50.15,
+			solar1P90Key: 900.0,
 		},
 	}
 	return data, config
@@ -70,6 +72,7 @@ func TestExtractBaselineInput(t *testing.T) {
 	assert.InDelta(t, 52.1, input.Battery2Voltage, 0.001)
 	assert.InDelta(t, 8500.0, input.Battery2EnergyWh, 0.001)
 	assert.InDelta(t, 1200.0, input.Solar1Power, 0.001)
+	assert.InDelta(t, 900.0, input.Solar1P90_15Min, 0.001)
 	assert.InDelta(t, 800.0, input.Solar2Power, 0.001)
 	assert.InDelta(t, 1500.0, input.HouseLoad, 0.001)
 	assert.True(t, input.GridAvailable)
