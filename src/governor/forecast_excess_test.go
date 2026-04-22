@@ -41,13 +41,13 @@ func TestForecastExcessRequestCore_NoExcessEnergy(t *testing.T) {
 		WattsPerInverter:    250,
 		SolarMultiplier:     1.0,
 		CapacityWh:          10000,
-		ShortName:           "Test",
+
 	}
 
 	state := &ForecastExcessState{}
 	result := ForecastExcessRequestCore(input, state)
 
-	assert.Equal(t, "Forecast Excess (Test)", result.Name)
+	assert.Equal(t, "Forecast Excess", result.Name)
 	assert.Equal(t, 0.0, result.Watts, "Should return 0 watts when no excess energy")
 }
 
@@ -64,13 +64,13 @@ func TestForecastExcessRequestCore_HasExcessEnergy(t *testing.T) {
 		WattsPerInverter:    250,
 		SolarMultiplier:     1.0,
 		CapacityWh:          10000,
-		ShortName:           "Test",
+
 	}
 
 	state := &ForecastExcessState{}
 	result := ForecastExcessRequestCore(input, state)
 
-	assert.Equal(t, "Forecast Excess (Test)", result.Name)
+	assert.Equal(t, "Forecast Excess", result.Name)
 	assert.InDelta(t, 875.0, result.Watts, 0.001, "Should return 875W (1000W optimal - 125W half-inverter offset)")
 }
 
@@ -128,12 +128,12 @@ func TestForecastExcessRequestCore_SolarEndAtThreshold(t *testing.T) {
 				WattsPerInverter:    250,
 				SolarMultiplier:     1.0,
 				CapacityWh:          10000,
-				ShortName:           "Test",
+		
 			}
 
 			result := ForecastExcessRequestCore(input, state)
 
-			assert.Equal(t, "Forecast Excess (Test)", result.Name)
+			assert.Equal(t, "Forecast Excess", result.Name)
 			assert.InDelta(t, tt.expectedWatts, result.Watts, 0.001, "Watts mismatch")
 		})
 	}

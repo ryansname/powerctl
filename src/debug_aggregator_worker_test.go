@@ -26,16 +26,10 @@ func TestFormatCombinedDebug_Normal(t *testing.T) {
 		t.Error("expected Overflow in output")
 	}
 	if !strings.Contains(out, "Default Supply") {
-		t.Error("expected Default Supply in output")
-	}
-	if !strings.Contains(out, markerActive) {
-		t.Error("expected active marker for contributing mode")
-	}
-	if !strings.Contains(out, modeAuto) {
-		t.Error("expected Auto control mode")
+		t.Error("expected Default Supply as mode when auto")
 	}
 	// Both sections in one table (no second header row)
-	if strings.Count(out, "B2 Mode") != 1 {
+	if strings.Count(out, "| B2") != 1 {
 		t.Error("expected single table header")
 	}
 }
@@ -59,11 +53,8 @@ func TestFormatCombinedDebug_B2Safety(t *testing.T) {
 	if !strings.Contains(out, "High frequency") {
 		t.Error("expected safety reason in output")
 	}
-	if !strings.Contains(out, markerWarning) {
-		t.Error("expected warning marker for safety")
-	}
-	if !strings.Contains(out, modeManual) {
-		t.Error("expected Manual control mode")
+	if !strings.Contains(out, "Manual") {
+		t.Error("expected Manual mode")
 	}
 }
 

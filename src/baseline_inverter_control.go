@@ -104,7 +104,6 @@ func selectBaselineMode(
 	overflow2 := checkBatteryOverflow(
 		input.Battery2ChargeState,
 		input.Battery2SOC,
-		config.Battery2.ShortName,
 		config.WattsPerInverter,
 		&state.overflow2,
 	)

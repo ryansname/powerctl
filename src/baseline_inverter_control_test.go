@@ -15,7 +15,6 @@ func makeTestBaselineConfig() BaselineInverterConfig {
 	}
 	group := BatteryInverterGroup{
 		Name:                 "Battery 2",
-		ShortName:            "B2",
 		Inverters:            inverters,
 		ChargeStateTopic:     "b2charge",
 		SOCTopic:             "b2soc",
@@ -188,7 +187,7 @@ func TestSelectBaselineMode_OverflowWins(t *testing.T) {
 	// Overflow at 100% SOC → all 3 inverters = 765W
 	assert.Equal(t, 3, count)
 
-	overflowMode := findMode(debug.Modes, "Overflow (B2)")
+	overflowMode := findMode(debug.Modes, "Overflow")
 	assert.NotNil(t, overflowMode)
 	assert.True(t, overflowMode.Contributing)
 

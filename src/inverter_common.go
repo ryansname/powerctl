@@ -31,7 +31,6 @@ type InverterInfo struct {
 // BatteryInverterGroup holds inverters for a single battery.
 type BatteryInverterGroup struct {
 	Name                 string
-	ShortName            string // Short name for display (e.g., "B2")
 	Inverters            []InverterInfo
 	ChargeStateTopic     string
 	SOCTopic             string
@@ -61,11 +60,10 @@ type ModeState struct {
 func checkBatteryOverflow(
 	chargeState string,
 	soc float64,
-	shortName string,
 	wattsPerInverter float64,
 	state *BatteryOverflowState,
 ) PowerRequest {
-	name := "Overflow (" + shortName + ")"
+	name := "Overflow"
 	inFloat := chargeState == floatChargingState
 
 	if !inFloat {
@@ -109,7 +107,6 @@ func forecastExcessRequest(
 		WattsPerInverter:    wattsPerInverter,
 		SolarMultiplier:     battery.SolarMultiplier,
 		CapacityWh:          battery.CapacityWh,
-		ShortName:           battery.ShortName,
 	}
 	result := governor.ForecastExcessRequestCore(input, state)
 	return PowerRequest{Name: result.Name, Watts: result.Watts}

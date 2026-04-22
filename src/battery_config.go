@@ -96,10 +96,8 @@ func buildInverterGroup(b BatteryConfig, availableEnergyTopic string) BatteryInv
 		inverters[i] = InverterInfo{EntityID: entityID, StateTopic: stateTopic}
 	}
 	deviceID := strings.ReplaceAll(strings.ToLower(b.Name), " ", "_")
-	shortName := strings.ReplaceAll(b.Name, "Battery ", "B")
 	return BatteryInverterGroup{
 		Name:                 b.Name,
-		ShortName:            shortName,
 		Inverters:            inverters,
 		ChargeStateTopic:     b.ChargeStateTopic,
 		SOCTopic:             "homeassistant/sensor/" + deviceID + "_state_of_charge/state",

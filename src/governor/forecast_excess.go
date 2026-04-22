@@ -79,14 +79,13 @@ type ForecastExcessInput struct {
 	WattsPerInverter    float64
 	SolarMultiplier     float64
 	CapacityWh          float64
-	ShortName           string
 }
 
 // ForecastExcessRequestCore calculates forecast excess inverter power for a single battery.
 // Returns target watts based on excess energy divided by hours until solar ends.
 // Target can only decrease during the day unless a daily reset occurs.
 func ForecastExcessRequestCore(input ForecastExcessInput, state *ForecastExcessState) ForecastExcessResult {
-	name := "Forecast Excess (" + input.ShortName + ")"
+	name := "Forecast Excess"
 
 	// Cache key is intentionally only ForecastRemainingWh (not AvailableWh).
 	// Solcast updates every 15-30 min; between updates, recalculating with stale forecast
