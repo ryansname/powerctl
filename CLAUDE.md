@@ -41,35 +41,40 @@ Goroutine-based with message passing via channels. All source code in `src/`.
 
 5. **batterySOCWorker** (src/battery_soc_worker.go) - Calculates SOC from calibration references with 10% conversion loss on outflows
 
-6. **lowVoltageWorker** (src/low_voltage_worker.go) - Monitors 15-min minimum voltage, turns off inverters at 50.75V threshold
+6. **powerExcessCalculator** (src/power_excess_calculator.go) - Calculates excess power for dump loads based on battery levels and solar
 
-7. **powerExcessCalculator** (src/power_excess_calculator.go) - Calculates excess power for dump loads based on battery levels and solar
+7. **dumpLoadEnabler** (src/dump_load_enabler.go) - Controls miner workmode (Super/Standard/Eco/Sleep) based on excess power
 
-8. **dumpLoadEnabler** (src/dump_load_enabler.go) - Controls miner workmode (Super/Standard/Eco/Sleep) based on excess power
-
-9. **unifiedInverterEnabler** (src/unified_inverter_enabler.go) - Manages all 9 inverters with multiple modes:
+8. **baselineInverterControl** (src/baseline_inverter_control.go) - Manages Battery 2 inverters (1-9) with multiple modes:
+   - **Overflow**: Float Charging + SOC hysteresis (ON: 95.75%→99.5%, OFF: 98.5%→95%)
    - **Forecast Excess**: Targets 100% battery by solar end using `excess_wh / hours_until_solar_end`
-   - **Powerwall Low**: SOC-based hysteresis (ON: 41%→25%, OFF: 28%→44%)
-   - **Powerwall Last**: min(load, 1hr) - max(solar, 1hr) using 60-bucket rolling windows
-   - **Overflow**: Per-battery SOC hysteresis (OFF: 98.5%→95%, ON: 95.75%→99.5%)
+   - **Baseline**: 7-day P2 of hourly house-load minimums minus solar (capped at 500W)
    - **Safety**: High frequency (>52.75Hz) or grid off + Powerwall >90% disables all
-   - **Selection**: max(overflow, forecast_excess) per battery, then global modes, round-robin allocation
-   - **Limit**: 5000W - solar_1_power 15min P90
-   - **SOC limits**: Per-battery hysteresis with steps = inverter count (ON: 15%→25%, OFF: 12.5%→22.5%)
+   - **SOC limits**: Battery 2 hysteresis (ON: 15%→25%, OFF: 12.5%→22.5%)
+   - **Limit**: 5000W - solar_1_power 15min P90 (skipped when Battery 3 SOC < 85%)
+   - Selection: `max(overflow, forecast_excess, baseline)` then apply safety/SOC limits
 
-10. **mqttSenderWorker** (src/mqtt_sender.go) - Outgoing MQTT with 100-msg buffer, filters based on `powerctl_enabled` switch
+9. **dynamicInverterControl** (src/dynamic_inverter_control.go) - Actively controls Multiplus II (Battery 3) setpoint every 5s. Range: -3000W to +3500W.
+   - **Auto mode** (`powerctl_dynamic_auto` switch on): calculates setpoint, writes to HA entity for visibility
+   - **Manual mode** (switch off): reads user-set HA number entity, passes through to Cerbo
+   - **Priority 2 – Default Supply**: discharge to fill gap between house load max and total generation
+   - **Priority 3 – Charge from Surplus**: charge from powerhouse-side excess
+   - **4.5kW hard transfer limit**: `solar_1 + inverter_1_9 + multiplus_discharge ≤ 4500W`; forces charge when exceeded
+   - **Safety**: high frequency or grid off + Powerwall >90% suppresses discharge
 
-11. **mqttInterceptorWorker** (src/mqtt_interceptor.go) - Filters inverter messages via `powerctl_inverter_enabled` switch
+10. **debugAggregatorWorker** (src/debug_aggregator_worker.go) - Receives `BaselineDebugInfo` and `DynamicDebugInfo`, renders a combined side-by-side GFM markdown table, publishes to `input_text.powerhouse_control_debug` on change only.
 
-12. **mqttWorker** (src/mqtt_worker.go) - Connects to MQTT broker, subscribes to topics, forwards to statsWorker
+11. **mqttSenderWorker** (src/mqtt_sender.go) - Outgoing MQTT with 100-msg buffer, filters based on `powerctl_enabled` switch
 
-13. **debugWorker** (src/debug_worker.go) - Interactive introspection via `--debug` flag. Commands: list, watch, unwatch, help
+12. **mqttInterceptorWorker** (src/mqtt_interceptor.go) - Filters inverter messages via `powerctl_inverter_enabled` switch
 
-14. **sankeyWorker** (src/main.go) - Generates Sankey chart configs at startup via `src/sankey` package
+13. **mqttWorker** (src/mqtt_worker.go) - Connects to MQTT broker, subscribes to topics, forwards to statsWorker
 
-15. **cerboKeepaliveWorker** (src/powerhouse3.go) - Sends Victron GX keepalive every 50s so Cerbo keeps publishing N/ topics
+14. **debugWorker** (src/debug_worker.go) - Interactive introspection via `--debug` flag. Commands: list, watch, unwatch, help
 
-16. **inverter10SetpointWorker** (src/powerhouse3.go) - Reads `TopicInverter10SetpointCmd` from DisplayData, publishes `{"value": N}` to Cerbo every 5s
+15. **sankeyWorker** (src/main.go) - Generates Sankey chart configs at startup via `src/sankey` package
+
+16. **cerboKeepaliveWorker** (src/powerhouse3.go) - Sends Victron GX keepalive every 50s so Cerbo keeps publishing N/ topics
 
 ### Data Structures
 
@@ -84,17 +89,19 @@ Goroutine-based with message passing via channels. All source code in `src/`.
 - `CallService(domain, service, entityID, data)` - HA service via Node-RED proxy
 - `CreateBatteryEntity(...)` - HA entity via MQTT discovery
 
-**BatteryConfig** (src/battery_config.go): Shared config with inflow/outflow topics, calibration settings. Helpers: `CalibConfig()`, `SOCConfig()`, `LowVoltageProtectionConfig(threshold)`
+**BatteryConfig** (src/battery_config.go): Shared config with inflow/outflow topics, calibration settings. Helpers: `CalibConfig()`, `SOCConfig()`, `BuildBaselineInverterConfig(battery2, battery3)`, `BuildDynamicInverterConfig(battery2, battery3)`
+
+**Inverter types** (src/inverter_common.go): `PowerRequest`, `PowerLimit`, `InverterInfo`, `BatteryInverterGroup`, `BatteryOverflowState`, `ModeState`. Shared helpers: `checkBatteryOverflow`, `forecastExcessRequest`, `applyInverterChanges`, etc.
 
 **Governor Package** (src/governor/):
 - **SteppedHysteresis**: Converts continuous values to discrete steps with separate enter/exit thresholds. Constructor: `NewSteppedHysteresis(steps, ascending, increaseStart, increaseEnd, decreaseStart, decreaseEnd)`. Call `Update(value)` to get current step.
   - Ascending mode (value↑ → step↑): Overflow, SOC Limits
-  - Descending mode (value↓ → step↑): Powerwall Low
   - Thresholds linearly interpolated from start→end for steps 1 through N
+- **RollingMinMax**: `NewRollingMinMax(minutes)`, `NewRollingMinMaxSeconds(seconds)`, `NewRollingMinMaxHours(hours)`. `BucketMinPercentile(p)` returns p-th percentile of per-bucket minimums (used by 7-day baseline).
 
 ### Statistics Algorithm
 
-Time-weighted percentiles: weight = duration until next reading. P50 = median, P66 = typical high, P1/P99 = filter outliers. Last known value preserved if no messages.
+Time-weighted percentiles: weight = duration until next reading. P50 = median, P90 = high, P100 = max. Last known value preserved if no messages.
 
 **Percentile Registry** (src/stats.go): Add to `requiredPercentiles` map when worker needs new percentile/window combination. `GetPercentile` panics if unregistered.
 
@@ -104,16 +111,21 @@ Time-weighted percentiles: weight = duration until next reading. P50 = median, P
 MQTT → mqttWorker → statsWorker → broadcastWorker → downstream workers
                                                   → batteryCalibWorker (×2)
                                                   → batterySOCWorker (×2)
-                                                  → lowVoltageWorker (×2)
-                                                  → unifiedInverterEnabler
+                                                  → baseline-input-bridge → baselineInverterControl → baselineDebugChan ─┐
+                                                  → dynamic-input-bridge  → dynamicInverterControl  → dynamicDebugChan  ─┤→ debugAggregatorWorker → HA
                                                   → powerExcessCalculator → dumpLoadEnabler
                                                   → debugWorker (if --debug)
 
 Outgoing: workers → MQTTMessage → mqttOutgoingChan → mqttSenderWorker → MQTT
-Inverters: unifiedInverterEnabler → inverterOutgoingChan → mqttInterceptorWorker → mqttOutgoingChan
+Inverters: baselineInverterControl → inverterOutgoingChan → mqttInterceptorWorker → mqttOutgoingChan
+Dynamic: dynamicInverterControl → mqttOutgoingChan (direct, bypasses interceptor)
 ```
 
 **Calibration loop**: calibWorker → MQTT attributes → HA statestream → MQTT → statsWorker → SOCWorker
+
+### Input Extraction Pattern
+
+The baseline and dynamic controllers take typed input channels (`<-chan BaselineInput`, `<-chan DynamicInput`) for testability. In main.go, a bridge goroutine reads DisplayData, calls `ExtractBaselineInput(data, config.Input)` or `ExtractDynamicInput(data, config.Input)`, and forwards to the controller's input channel.
 
 ### Concurrency
 

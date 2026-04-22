@@ -324,6 +324,13 @@ func (s *MQTTSender) CreateExpectingPowerCutsSwitch() error {
 	return s.createSwitch("powerctl_expecting_power_cuts", "Expecting Power Cuts", "mdi:transmission-tower-off", TopicExpectingPowerCutsState)
 }
 
+// CreateDynamicAutoSwitch creates the powerctl_dynamic_auto switch via MQTT discovery.
+// When on, the dynamic controller calculates the setpoint automatically.
+// When off, the user controls the setpoint via the HA number entity.
+func (s *MQTTSender) CreateDynamicAutoSwitch() error {
+	return s.createSwitch("powerctl_dynamic_auto", "Dynamic Auto", "mdi:robot", TopicDynamicAutoState)
+}
+
 // CreateInverter10ACSetpointEntity creates the Multiplus II AC setpoint number entity via MQTT discovery
 func (s *MQTTSender) CreateInverter10ACSetpointEntity() error {
 	type haDeviceConfig struct {
@@ -353,7 +360,7 @@ func (s *MQTTSender) CreateInverter10ACSetpointEntity() error {
 		CommandTopic:  TopicInverter10SetpointCmd,
 		UnitOfMeasure: "W",
 		Min:           -3000,
-		Max:           2000,
+		Max:           3500,
 		Step:          100,
 		Device: haDeviceConfig{
 			Identifiers: []string{"powerhouse_inverter_10"},

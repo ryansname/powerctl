@@ -84,86 +84,93 @@ func (c *BatteryConfig) SOCConfig() BatterySOCConfig {
 	}
 }
 
-// BuildUnifiedInverterConfig creates configuration for the unified inverter enabler
-func BuildUnifiedInverterConfig(battery2 BatteryConfig) UnifiedInverterConfig {
-	buildInverterGroup := func(b BatteryConfig, availableEnergyTopic string) BatteryInverterGroup {
-		inverters := make([]InverterInfo, len(b.InverterSwitchIDs))
-		for i, entityID := range b.InverterSwitchIDs {
-			// Convert entity ID to state topic
-			// e.g., "switch.powerhouse_inverter_1_switch_0" -> "homeassistant/switch/powerhouse_inverter_1_switch_0/state"
-			parts := strings.SplitN(entityID, ".", 2)
-			stateTopic := ""
-			if len(parts) == 2 {
-				stateTopic = "homeassistant/" + parts[0] + "/" + parts[1] + "/state"
-			}
-			inverters[i] = InverterInfo{
-				EntityID:   entityID,
-				StateTopic: stateTopic,
-			}
+// buildInverterGroup converts a BatteryConfig to a BatteryInverterGroup.
+func buildInverterGroup(b BatteryConfig, availableEnergyTopic string) BatteryInverterGroup {
+	inverters := make([]InverterInfo, len(b.InverterSwitchIDs))
+	for i, entityID := range b.InverterSwitchIDs {
+		parts := strings.SplitN(entityID, ".", 2)
+		stateTopic := ""
+		if len(parts) == 2 {
+			stateTopic = "homeassistant/" + parts[0] + "/" + parts[1] + "/state"
 		}
-
-		deviceID := strings.ReplaceAll(strings.ToLower(b.Name), " ", "_")
-		shortName := strings.ReplaceAll(b.Name, "Battery ", "B")
-		return BatteryInverterGroup{
-			Name:                 b.Name,
-			ShortName:            shortName,
-			Inverters:            inverters,
-			ChargeStateTopic:     b.ChargeStateTopic,
-			SOCTopic:             "homeassistant/sensor/" + deviceID + "_state_of_charge/state",
-			BatteryVoltageTopic:  b.BatteryVoltageTopic,
-			CapacityWh:           b.CapacityKWh * 1000,
-			SolarMultiplier:      3.9, // Solar array size relative to Solcast 1kW reference
-			AvailableEnergyTopic: availableEnergyTopic,
-		}
+		inverters[i] = InverterInfo{EntityID: entityID, StateTopic: stateTopic}
 	}
-
-	return UnifiedInverterConfig{
-		Battery2:                    buildInverterGroup(battery2, TopicBattery2Energy),
-		SolarForecastTopic:          "homeassistant/sensor/solcast_pv_forecast_forecast_today/state",
-		SolarForecastRemainingTopic: "homeassistant/sensor/solcast_pv_forecast_forecast_remaining_today/state",
-		DetailedForecastTopic:       "homeassistant/sensor/solcast_pv_forecast_forecast_today/detailedForecast",
-		Solar1PowerTopic:            TopicSolar1Power,
-		Solar2PowerTopic:            "homeassistant/sensor/primo_5_0_ac_power/state",
-		LoadPowerTopic:              "homeassistant/sensor/home_sweet_home_load_power_2/state",
-		PowerwallSOCTopic:           "homeassistant/sensor/home_sweet_home_charge/state",
-		GridStatusTopic:             "homeassistant/binary_sensor/home_sweet_home_grid_status_2/state",
-		ACFrequencyTopic:            "homeassistant/sensor/lounge_ac_frequency/state",
-		WattsPerInverter:            255.0,
-		MaxTransferPower:            5000.0,
-		PowerwallLowSOCTurnOnStart:  41.0,
-		PowerwallLowSOCTurnOnEnd:    25.0,
-		PowerwallLowSOCTurnOffStart: 28.0,
-		PowerwallLowSOCTurnOffEnd:   44.0,
-		OverflowSOCTurnOffStart:     98.5,
-		OverflowSOCTurnOffEnd:       95.0,
-		OverflowSOCTurnOnStart:      95.75,
-		OverflowSOCTurnOnEnd:        99.5,
-		LowVoltageTripThreshold:     50.75,
-		LowVoltageResetThreshold:    52.00,
+	deviceID := strings.ReplaceAll(strings.ToLower(b.Name), " ", "_")
+	shortName := strings.ReplaceAll(b.Name, "Battery ", "B")
+	return BatteryInverterGroup{
+		Name:                 b.Name,
+		ShortName:            shortName,
+		Inverters:            inverters,
+		ChargeStateTopic:     b.ChargeStateTopic,
+		SOCTopic:             "homeassistant/sensor/" + deviceID + "_state_of_charge/state",
+		BatteryVoltageTopic:  b.BatteryVoltageTopic,
+		CapacityWh:           b.CapacityKWh * 1000,
+		SolarMultiplier:      3.9,
+		AvailableEnergyTopic: availableEnergyTopic,
 	}
 }
 
-// Topics returns all MQTT topics needed by the unified inverter enabler
-func (c UnifiedInverterConfig) Topics() []string {
-	topics := []string{
-		c.SolarForecastTopic,
-		c.SolarForecastRemainingTopic,
-		c.DetailedForecastTopic,
-		c.Solar1PowerTopic,
-		c.Solar2PowerTopic,
-		c.LoadPowerTopic,
-		c.PowerwallSOCTopic,
-		c.GridStatusTopic,
-		c.ACFrequencyTopic,
-		c.Battery2.ChargeStateTopic,
-		c.Battery2.SOCTopic,
-		c.Battery2.BatteryVoltageTopic,
-		c.Battery2.AvailableEnergyTopic,
+// BuildBaselineInverterConfig creates configuration for the baseline inverter controller.
+func BuildBaselineInverterConfig(battery2, battery3 BatteryConfig) BaselineInverterConfig {
+	group := buildInverterGroup(battery2, TopicBattery2Energy)
+	deviceID2 := strings.ReplaceAll(strings.ToLower(battery2.Name), " ", "_")
+
+	inverterStateTopics := make([]string, len(battery2.InverterSwitchIDs))
+	for i, entityID := range battery2.InverterSwitchIDs {
+		parts := strings.SplitN(entityID, ".", 2)
+		if len(parts) == 2 {
+			inverterStateTopics[i] = "homeassistant/" + parts[0] + "/" + parts[1] + "/state"
+		}
 	}
 
-	for _, inv := range c.Battery2.Inverters {
-		topics = append(topics, inv.StateTopic)
+	input := BaselineInputConfig{
+		Battery2SOCTopic:         "homeassistant/sensor/" + deviceID2 + "_state_of_charge/state",
+		Battery2ChargeStateTopic: battery2.ChargeStateTopic,
+		Battery2VoltageTopic:     battery2.BatteryVoltageTopic,
+		Battery2EnergyTopic:      TopicBattery2Energy,
+		Solar1PowerTopic:         TopicSolar1Power,
+		Solar2PowerTopic:         "homeassistant/sensor/primo_5_0_ac_power/state",
+		HouseLoadTopic:           "homeassistant/sensor/home_sweet_home_load_power_2/state",
+		GridStatusTopic:          "homeassistant/binary_sensor/home_sweet_home_grid_status_2/state",
+		ACFrequencyTopic:         "homeassistant/sensor/lounge_ac_frequency/state",
+		ForecastRemainingTopic:   "homeassistant/sensor/solcast_pv_forecast_forecast_remaining_today/state",
+		DetailedForecastTopic:    "homeassistant/sensor/solcast_pv_forecast_forecast_today/detailedForecast",
+		InverterStateTopics:      inverterStateTopics,
+		Battery3SOCTopic:         battery3.CerboSOCTopic,
+		PowerwallSOCTopic:        "homeassistant/sensor/home_sweet_home_charge/state",
+		ExpectingPowerCutsTopic:  TopicExpectingPowerCutsState,
 	}
 
-	return topics
+	return BaselineInverterConfig{
+		Input:                    input,
+		Battery2:                 group,
+		WattsPerInverter:         255.0,
+		MaxTransferPower:         5000.0,
+		MaxBaselineWatts:         500.0,
+		OverflowSOCTurnOffStart:  98.5,
+		OverflowSOCTurnOffEnd:    95.0,
+		OverflowSOCTurnOnStart:   95.75,
+		OverflowSOCTurnOnEnd:     99.5,
+		LowVoltageTripThreshold:  50.75,
+		LowVoltageResetThreshold: 52.00,
+	}
+}
+
+// BuildDynamicInverterConfig creates configuration for the dynamic (Multiplus) inverter controller.
+func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverterConfig {
+	return DynamicInverterConfig{
+		Input: DynamicInputConfig{
+			HouseLoadTopic:            "homeassistant/sensor/home_sweet_home_load_power_2/state",
+			Solar1PowerTopic:          TopicSolar1Power,
+			Solar2PowerTopic:          "homeassistant/sensor/primo_5_0_ac_power/state",
+			Inverter1to9PowerTopics:   battery2.OutflowPowerTopics,
+			MultiplusACPowerTopic:     TopicMultiplusACPower,
+			Battery3SOCTopic:          battery3.CerboSOCTopic,
+			GridStatusTopic:           "homeassistant/binary_sensor/home_sweet_home_grid_status_2/state",
+			ACFrequencyTopic:          "homeassistant/sensor/lounge_ac_frequency/state",
+			PowerwallSOCTopic:         "homeassistant/sensor/home_sweet_home_charge/state",
+			DynamicAutoTopic:          TopicDynamicAutoState,
+			MultiplusSetpointCmdTopic: TopicInverter10SetpointCmd,
+		},
+	}
 }

@@ -48,13 +48,7 @@ type PercentileSpec struct {
 // Topics not in this map will only have their Current value tracked (no percentile calculations).
 // This dramatically reduces computation by only calculating what's actually used.
 var requiredPercentiles = map[string][]PercentileSpec{
-	// Load power - used by unifiedInverterEnabler Powerwall Last mode for P66._15, P99._15
-	"homeassistant/sensor/home_sweet_home_load_power_2/state": {
-		{66, 15 * time.Minute},
-		{99, 15 * time.Minute},
-	},
-
-	// Solar 1 power - used by power_excess_calculator for P50._5, unifiedInverterEnabler for P90._15
+	// Solar 1 power - P50 used by power_excess_calculator; P90 used by baseline_inverter_control
 	TopicSolar1Power: {
 		{50, 5 * time.Minute},
 		{90, 15 * time.Minute},
@@ -66,7 +60,7 @@ var requiredPercentiles = map[string][]PercentileSpec{
 	// Battery available energy - used by powerExcessCalculator for P50._5
 	TopicBattery2Energy: {{50, 5 * time.Minute}},
 
-	// AC frequency - used by unifiedInverterEnabler for high frequency protection (P100._5)
+	// AC frequency - used by baseline/dynamic controllers for high frequency protection (P100._5)
 	"homeassistant/sensor/lounge_ac_frequency/state": {{100, 5 * time.Minute}},
 }
 
@@ -278,6 +272,8 @@ var selfPublishedFloatTopics = []string{
 	"homeassistant/sensor/battery_3_state_of_charge/state",
 	// Solar 2 inverter goes unavailable at night; default to 0 so startup isn't blocked
 	"homeassistant/sensor/primo_5_0_ac_power/state",
+	// Cerbo GX SOC topic — may not arrive until Cerbo keepalive is acknowledged
+	TopicCerboBatterySOC,
 }
 
 // String topics that should be initialized to a default if not received within timeout
@@ -291,6 +287,7 @@ var selfPublishedBoolTopics = []string{
 	TopicPowerhouseInvertersEnabledState,
 	TopicPW2DischargeState,
 	TopicExpectingPowerCutsState,
+	TopicDynamicAutoState,
 }
 
 // statsWorker receives messages, maintains statistics, and sends to output channel

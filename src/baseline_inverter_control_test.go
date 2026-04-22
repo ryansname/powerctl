@@ -7,13 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// Reference worker and format function so the unused linter doesn't flag them
-// before they're wired into main.go in Step 6.
-var (
-	_ = baselineInverterControl
-	_ = formatBaselineDebug
-)
-
 func makeTestBaselineConfig() BaselineInverterConfig {
 	inverters := []InverterInfo{
 		{EntityID: "switch.inv1", StateTopic: "ha/switch/inv1/state"},

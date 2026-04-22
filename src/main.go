@@ -311,9 +311,11 @@ func main() {
 	haTopics := buildTopicsList(batteries)
 	haTopics = append(haTopics, PowerExcessTopics()...)
 
-	// Build unified inverter enabler config and add its topics
-	unifiedInverterConfig := BuildUnifiedInverterConfig(battery2)
-	haTopics = append(haTopics, unifiedInverterConfig.Topics()...)
+	// Build inverter controller configs and add their topics
+	baselineConfig := BuildBaselineInverterConfig(battery2, battery3)
+	dynamicConfig := BuildDynamicInverterConfig(battery2, battery3)
+	haTopics = append(haTopics, baselineConfig.Input.Topics()...)
+	haTopics = append(haTopics, dynamicConfig.Input.Topics()...)
 
 	// Add miner workmode topic for dump load enabler
 	haTopics = append(haTopics, TopicMinerWorkmode)
@@ -440,21 +442,11 @@ func main() {
 		log.Fatalf("Failed to create inverter 10 AC power entity: %v", err)
 	}
 
-	// Create debug sensors for inverter control algorithms
-	debugSensors := []struct {
-		id, name, unit string
-		precision      int
-	}{
-		{"powerctl_b2_expected_solar", "B2 Expected Solar", "Wh", 0},
-		{"powerctl_b2_excess", "B2 Excess", "Wh", 0},
-		{"powerctl_powerwall_last", "Powerwall Last", "W", 0},
-		{"powerctl_powerwall_low_count", "Powerwall Low Count", "", 0},
-	}
-	for _, s := range debugSensors {
-		if err := mqttSender.CreateDebugSensor(s.id, s.name, s.unit, s.precision); err != nil {
-			cancel()
-			log.Fatalf("Failed to create debug sensor %s: %v", s.id, err)
-		}
+	// Create dynamic auto switch (controls auto vs manual Multiplus setpoint)
+	err = mqttSender.CreateDynamicAutoSwitch()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create dynamic auto switch: %v", err)
 	}
 
 	log.Println("Home Assistant entities created")
@@ -484,7 +476,6 @@ func main() {
 	log.Println("Stats worker started")
 
 	// Launch battery workers and collect downstream channels.
-	// Low voltage protection lives inside unifiedInverterEnabler (per-battery safety gate).
 	var downstreamChans []chan<- DisplayData
 	for _, b := range batteries {
 		calibChan := make(chan DisplayData, 10)
@@ -520,15 +511,13 @@ func main() {
 		dumpLoadEnabler(ctx, excessValueChan, dumpLoadDataChan, mqttSender)
 	})
 
-	// Launch unified inverter enabler with interceptor
-	unifiedInverterChan := make(chan DisplayData, 10)
-	interceptorDataChan := make(chan DisplayData, 10)
-	downstreamChans = append(downstreamChans, unifiedInverterChan, interceptorDataChan)
-
 	// Create inverterSender that sends to inverterOutgoingChan (filtered by interceptor)
 	inverterSender := NewMQTTSender(inverterOutgoingChan)
 
 	// Launch interceptor to filter inverter messages based on powerctl_inverter_enabled switch
+	interceptorDataChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, interceptorDataChan)
+
 	SafeGo(ctx, cancel, "inverter-interceptor", func(ctx context.Context) {
 		mqttInterceptorWorker(
 			ctx,
@@ -541,8 +530,57 @@ func main() {
 		)
 	})
 
-	SafeGo(ctx, cancel, "unified-inverter-enabler", func(ctx context.Context) {
-		unifiedInverterEnabler(ctx, unifiedInverterChan, unifiedInverterConfig, inverterSender)
+	// Launch baseline inverter controller (Battery 2 inverters)
+	baselineDisplayChan := make(chan DisplayData, 10)
+	baselineInputChan := make(chan BaselineInput, 10)
+	baselineDebugChan := make(chan BaselineDebugInfo, 10)
+	downstreamChans = append(downstreamChans, baselineDisplayChan)
+
+	SafeGo(ctx, cancel, "baseline-input-bridge", func(ctx context.Context) {
+		for {
+			select {
+			case data := <-baselineDisplayChan:
+				select {
+				case baselineInputChan <- ExtractBaselineInput(data, baselineConfig.Input):
+				default:
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
+
+	SafeGo(ctx, cancel, "baseline-inverter-control", func(ctx context.Context) {
+		baselineInverterControl(ctx, baselineInputChan, baselineConfig, inverterSender, baselineDebugChan)
+	})
+
+	// Launch dynamic inverter controller (Multiplus II, Battery 3)
+	dynamicDisplayChan := make(chan DisplayData, 10)
+	dynamicInputChan := make(chan DynamicInput, 10)
+	dynamicDebugChan := make(chan DynamicDebugInfo, 10)
+	downstreamChans = append(downstreamChans, dynamicDisplayChan)
+
+	SafeGo(ctx, cancel, "dynamic-input-bridge", func(ctx context.Context) {
+		for {
+			select {
+			case data := <-dynamicDisplayChan:
+				select {
+				case dynamicInputChan <- ExtractDynamicInput(data, dynamicConfig.Input):
+				default:
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
+
+	SafeGo(ctx, cancel, "dynamic-inverter-control", func(ctx context.Context) {
+		dynamicInverterControl(ctx, dynamicInputChan, mqttSender, dynamicDebugChan)
+	})
+
+	// Launch debug aggregator (combines baseline + dynamic debug info for HA display)
+	SafeGo(ctx, cancel, "debug-aggregator", func(ctx context.Context) {
+		debugAggregatorWorker(ctx, baselineDebugChan, dynamicDebugChan, mqttSender)
 	})
 
 	// Launch Powerwall 2 discharge worker
@@ -580,13 +618,6 @@ func main() {
 	// Launch Cerbo keepalive worker (outbound only)
 	SafeGo(ctx, cancel, "cerbo-keepalive", func(ctx context.Context) {
 		cerboKeepaliveWorker(ctx, mqttSender)
-	})
-
-	// Launch inverter 10 setpoint worker
-	inverter10Chan := make(chan DisplayData, 10)
-	downstreamChans = append(downstreamChans, inverter10Chan)
-	SafeGo(ctx, cancel, "inverter10-setpoint", func(ctx context.Context) {
-		inverter10SetpointWorker(ctx, inverter10Chan, mqttSender)
 	})
 
 	// Add senderDataChan to downstream channels for mqttSenderWorker to receive enabled state

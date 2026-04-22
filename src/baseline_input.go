@@ -42,6 +42,28 @@ type BaselineInput struct {
 	ExpectingPowerCuts  bool
 }
 
+// Topics returns all MQTT topics needed by the baseline controller.
+func (c BaselineInputConfig) Topics() []string {
+	topics := []string{
+		c.Battery2SOCTopic,
+		c.Battery2ChargeStateTopic,
+		c.Battery2VoltageTopic,
+		c.Battery2EnergyTopic,
+		c.Solar1PowerTopic,
+		c.Solar2PowerTopic,
+		c.HouseLoadTopic,
+		c.GridStatusTopic,
+		c.ACFrequencyTopic,
+		c.ForecastRemainingTopic,
+		c.DetailedForecastTopic,
+		c.Battery3SOCTopic,
+		c.PowerwallSOCTopic,
+		c.ExpectingPowerCutsTopic,
+	}
+	topics = append(topics, c.InverterStateTopics...)
+	return topics
+}
+
 // ExtractBaselineInput extracts values from DisplayData for the baseline controller.
 func ExtractBaselineInput(data DisplayData, config BaselineInputConfig) BaselineInput {
 	var forecast governor.ForecastPeriods

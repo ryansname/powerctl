@@ -7,13 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// Reference worker and format function so unused linter doesn't flag them
-// before they're wired into main.go in Step 6.
-var (
-	_ = dynamicInverterControl
-	_ = formatDynamicDebug
-)
-
 func makeTestDynamicState() *DynamicInverterState {
 	return &DynamicInverterState{
 		houseLoadMax:        governor.NewRollingMinMaxSeconds(60),

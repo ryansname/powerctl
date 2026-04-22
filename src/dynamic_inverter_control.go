@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/ryansname/powerctl/src/governor"
@@ -111,23 +109,6 @@ func calculateDynamicSetpoint(
 	}
 }
 
-// formatDynamicDebug formats dynamic debug info as a GFM table for HA display.
-func formatDynamicDebug(debug DynamicDebugInfo) string {
-	var sb strings.Builder
-	control := "Manual"
-	if debug.Auto {
-		control = "Auto"
-	}
-	sb.WriteString("## Dynamic (B3)\n")
-	sb.WriteString("| Mode | Value |\n")
-	sb.WriteString("|------|------:|\n")
-	fmt.Fprintf(&sb, "| Control | %s |\n", control)
-	fmt.Fprintf(&sb, "| Priority | %s |\n", debug.Priority)
-	fmt.Fprintf(&sb, "| Setpoint | %.0fW |\n", debug.Setpoint)
-	fmt.Fprintf(&sb, "| Headroom | %.0fW |\n", debug.Headroom)
-	return sb.String()
-}
-
 // dynamicInverterControl actively manages the Multiplus II setpoint.
 // In auto mode it calculates the setpoint; in manual mode it passes through the HA value.
 // Always publishes to Cerbo every 5 seconds (no zero-setpoint exception).
@@ -182,32 +163,5 @@ func dynamicInverterControl(
 			log.Println("Dynamic inverter control stopped")
 			return
 		}
-	}
-}
-
-// BuildDynamicInverterConfig creates the configuration for the dynamic inverter controller.
-func BuildDynamicInverterConfig(
-	houseLoadTopic string,
-	solar1Topic string,
-	solar2Topic string,
-	inverter1to9Topics []string,
-	acFreqTopic string,
-	powerwallSOCTopic string,
-	gridStatusTopic string,
-) DynamicInverterConfig {
-	return DynamicInverterConfig{
-		Input: DynamicInputConfig{
-			HouseLoadTopic:            houseLoadTopic,
-			Solar1PowerTopic:          solar1Topic,
-			Solar2PowerTopic:          solar2Topic,
-			Inverter1to9PowerTopics:   inverter1to9Topics,
-			MultiplusACPowerTopic:     TopicMultiplusACPower,
-			Battery3SOCTopic:          TopicCerboBatterySOC,
-			GridStatusTopic:           gridStatusTopic,
-			ACFrequencyTopic:          acFreqTopic,
-			PowerwallSOCTopic:         powerwallSOCTopic,
-			DynamicAutoTopic:          TopicDynamicAutoState,
-			MultiplusSetpointCmdTopic: TopicInverter10SetpointCmd,
-		},
 	}
 }

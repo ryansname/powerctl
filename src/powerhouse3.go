@@ -48,35 +48,3 @@ func cerboKeepaliveWorker(ctx context.Context, sender *MQTTSender) {
 	}
 }
 
-func inverter10SetpointWorker(ctx context.Context, statsChan <-chan DisplayData, sender *MQTTSender) {
-	log.Println("Inverter 10 setpoint worker started")
-
-	var setpoint float64
-	var data DisplayData
-
-	select {
-	case <-ctx.Done():
-		return
-	case data = <-statsChan:
-		setpoint = data.GetFloat(TopicInverter10SetpointCmd).Current
-	}
-
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("Inverter 10 setpoint worker stopped")
-			return
-		case data = <-statsChan:
-			setpoint = data.GetFloat(TopicInverter10SetpointCmd).Current
-		case <-ticker.C:
-			if setpoint == 0 {
-				continue
-			}
-			payload, _ := json.Marshal(map[string]float64{"value": setpoint})
-			sender.Send(MQTTMessage{Topic: TopicMultiplusSetpointWrite, Payload: payload, QoS: 0})
-		}
-	}
-}

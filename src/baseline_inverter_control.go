@@ -2,19 +2,14 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"sort"
-	"strings"
 
 	"github.com/ryansname/powerctl/src/governor"
 )
 
-const maxBaselineWatts = 500.0
-
 // BaselineInverterConfig holds configuration for the baseline inverter controller.
-// Topic strings live in BaselineInputConfig; this holds control parameters only.
 type BaselineInverterConfig struct {
+	Input    BaselineInputConfig
 	Battery2 BatteryInverterGroup
 
 	WattsPerInverter float64
@@ -172,44 +167,6 @@ func selectBaselineMode(
 	return selectedCount, debug
 }
 
-// formatBaselineDebug formats baseline debug info as a GFM table for HA display.
-func formatBaselineDebug(debug BaselineDebugInfo) string {
-	var sb strings.Builder
-
-	if debug.SafetyReason != "" {
-		sb.WriteString("| Safety | Value |\n")
-		sb.WriteString("|--------|------:|\n")
-		fmt.Fprintf(&sb, "| Reason | %s |\n", debug.SafetyReason)
-		fmt.Fprintf(&sb, "| Freq (now) | %.2f Hz |\n", debug.ACFreqCurrent)
-		fmt.Fprintf(&sb, "| Freq (5m max) | %.2f Hz |\n", debug.ACFreqP100)
-		fmt.Fprintf(&sb, "| Powerwall SOC | %.1f%% |\n", debug.PowerwallSOC)
-		return sb.String()
-	}
-
-	modes := make([]ModeState, len(debug.Modes))
-	copy(modes, debug.Modes)
-	sort.Slice(modes, func(i, j int) bool {
-		return modes[i].Watts > modes[j].Watts
-	})
-
-	sb.WriteString("## Baseline (B2)\n")
-	sb.WriteString("| Mode | Watts |  |\n")
-	sb.WriteString("|------|------:|--|\n")
-	for _, m := range modes {
-		marker := ""
-		if m.Contributing && m.Watts > 0 {
-			marker = "✓"
-		}
-		fmt.Fprintf(&sb, "| %s | %.0f | %s |\n", m.Name, m.Watts, marker)
-	}
-
-	if debug.Battery2LowVoltage {
-		fmt.Fprintf(&sb, "| Low Voltage (B2) | %.2fV | ⚠ |\n", debug.Battery2VoltageMin)
-	}
-
-	return sb.String()
-}
-
 // baselineInverterControl manages Battery 2 inverters using baseline + overflow/forecast strategy.
 func baselineInverterControl(
 	ctx context.Context,
@@ -297,43 +254,5 @@ func baselineInverterControl(
 			log.Println("Baseline inverter control stopped")
 			return
 		}
-	}
-}
-
-// BuildBaselineInverterConfig creates the control configuration for the baseline inverter controller.
-func BuildBaselineInverterConfig(battery2 BatteryConfig) BaselineInverterConfig {
-	inverters := make([]InverterInfo, len(battery2.InverterSwitchIDs))
-	for i, entityID := range battery2.InverterSwitchIDs {
-		parts := strings.SplitN(entityID, ".", 2)
-		stateTopic := ""
-		if len(parts) == 2 {
-			stateTopic = "homeassistant/" + parts[0] + "/" + parts[1] + "/state"
-		}
-		inverters[i] = InverterInfo{EntityID: entityID, StateTopic: stateTopic}
-	}
-	deviceID := strings.ReplaceAll(strings.ToLower(battery2.Name), " ", "_")
-	shortName := strings.ReplaceAll(battery2.Name, "Battery ", "B")
-	group := BatteryInverterGroup{
-		Name:                 battery2.Name,
-		ShortName:            shortName,
-		Inverters:            inverters,
-		ChargeStateTopic:     battery2.ChargeStateTopic,
-		SOCTopic:             "homeassistant/sensor/" + deviceID + "_state_of_charge/state",
-		BatteryVoltageTopic:  battery2.BatteryVoltageTopic,
-		CapacityWh:           battery2.CapacityKWh * 1000,
-		SolarMultiplier:      3.9,
-		AvailableEnergyTopic: TopicBattery2Energy,
-	}
-	return BaselineInverterConfig{
-		Battery2:                 group,
-		WattsPerInverter:         255.0,
-		MaxTransferPower:         5000.0,
-		MaxBaselineWatts:         maxBaselineWatts,
-		OverflowSOCTurnOffStart:  98.5,
-		OverflowSOCTurnOffEnd:    95.0,
-		OverflowSOCTurnOnStart:   95.75,
-		OverflowSOCTurnOnEnd:     99.5,
-		LowVoltageTripThreshold:  50.75,
-		LowVoltageResetThreshold: 52.00,
 	}
 }

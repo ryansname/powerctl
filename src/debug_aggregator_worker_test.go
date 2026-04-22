@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// Suppress unused-function linter errors until Step 6 wires up the aggregator.
-var _ = debugAggregatorWorker
-
 func TestFormatCombinedDebug_Normal(t *testing.T) {
 	baseline := BaselineDebugInfo{
 		Modes: []ModeState{

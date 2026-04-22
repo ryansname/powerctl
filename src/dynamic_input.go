@@ -30,6 +30,24 @@ type DynamicInput struct {
 	MultiplusSetpointCmd   float64
 }
 
+// Topics returns all MQTT topics needed by the dynamic controller.
+func (c DynamicInputConfig) Topics() []string {
+	topics := []string{
+		c.HouseLoadTopic,
+		c.Solar1PowerTopic,
+		c.Solar2PowerTopic,
+		c.MultiplusACPowerTopic,
+		c.Battery3SOCTopic,
+		c.GridStatusTopic,
+		c.ACFrequencyTopic,
+		c.PowerwallSOCTopic,
+		c.DynamicAutoTopic,
+		c.MultiplusSetpointCmdTopic,
+	}
+	topics = append(topics, c.Inverter1to9PowerTopics...)
+	return topics
+}
+
 // ExtractDynamicInput extracts values from DisplayData for the dynamic controller.
 func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInput {
 	return DynamicInput{
