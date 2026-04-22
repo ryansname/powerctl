@@ -43,7 +43,6 @@ type BaselineInverterState struct {
 	powerCutAllow2 *governor.SteppedHysteresis
 	lowVoltage2    *governor.SteppedHysteresis
 
-	lastDebugOutput string
 }
 
 // BaselineDebugInfo contains mode states for the baseline controller debug output.
@@ -279,12 +278,6 @@ func baselineInverterControl(
 						debugInfo.SafetyReason = "Expecting power cuts (battery < 50%)"
 					}
 				}
-			}
-
-			debugOutput := formatBaselineDebug(debugInfo)
-			if debugOutput != state.lastDebugOutput {
-				sender.CallService("input_text", "set_value", "input_text.powerhouse_control_debug", map[string]any{"value": debugOutput})
-				state.lastDebugOutput = debugOutput
 			}
 
 			if debugChan != nil {

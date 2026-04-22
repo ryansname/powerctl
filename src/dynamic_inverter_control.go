@@ -145,7 +145,6 @@ func dynamicInverterControl(
 	}
 
 	var lastSetpoint float64
-	var lastDebugOutput string
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -167,11 +166,6 @@ func dynamicInverterControl(
 				lastSetpoint = input.MultiplusSetpointCmd
 				debug.Priority = "Manual"
 				debug.Setpoint = lastSetpoint
-			}
-
-			debugOutput := formatDynamicDebug(debug)
-			if debugOutput != lastDebugOutput {
-				lastDebugOutput = debugOutput
 			}
 
 			if debugChan != nil {
