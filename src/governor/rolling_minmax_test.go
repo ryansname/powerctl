@@ -78,3 +78,99 @@ func TestRollingMinMax_ShortWindowExpiry(t *testing.T) {
 	assert.Equal(t, 75.0, r.Min())
 	assert.Equal(t, 100.0, r.Max())
 }
+
+func TestRollingMinMaxSeconds_BasicResolution(t *testing.T) {
+	r := NewRollingMinMaxSeconds(60)
+	r.updateAt(10, 0)
+	r.updateAt(20, 1)
+	r.updateAt(5, 2)
+	assert.Equal(t, 5.0, r.Min())
+	assert.Equal(t, 20.0, r.Max())
+}
+
+func TestRollingMinMaxSeconds_WindowExpiry(t *testing.T) {
+	r := NewRollingMinMaxSeconds(10)
+	r.updateAt(100, 0)
+	r.updateAt(50, 5)
+	// Advance past window; tick 0 expires
+	r.updateAt(75, 10)
+	assert.Equal(t, 50.0, r.Min())
+	assert.Equal(t, 75.0, r.Max())
+}
+
+func TestRollingMinMaxHours_BasicResolution(t *testing.T) {
+	r := NewRollingMinMaxHours(168) // 7-day window
+	r.updateAt(1000, 0)
+	r.updateAt(500, 1)
+	r.updateAt(2000, 2)
+	assert.Equal(t, 500.0, r.Min())
+	assert.Equal(t, 2000.0, r.Max())
+}
+
+func TestRollingMinMaxHours_WindowExpiry(t *testing.T) {
+	r := NewRollingMinMaxHours(24)
+	r.updateAt(100, 0)
+	r.updateAt(200, 12)
+	// Advance past 24h window; tick 0 expires
+	r.updateAt(150, 24)
+	assert.Equal(t, 150.0, r.Min())
+	assert.Equal(t, 200.0, r.Max())
+}
+
+func TestBucketMinPercentile_Empty(t *testing.T) {
+	r := NewRollingMinMaxHours(168)
+	assert.Equal(t, 0.0, r.BucketMinPercentile(2))
+}
+
+func TestBucketMinPercentile_SingleBucket(t *testing.T) {
+	r := NewRollingMinMaxHours(168)
+	r.updateAt(500, 0)
+	assert.Equal(t, 500.0, r.BucketMinPercentile(2))
+	assert.Equal(t, 500.0, r.BucketMinPercentile(50))
+	assert.Equal(t, 500.0, r.BucketMinPercentile(98))
+}
+
+func TestBucketMinPercentile_PartialFill(t *testing.T) {
+	r := NewRollingMinMaxHours(168)
+	// Fill 10 of 168 buckets with known values
+	for i := int64(0); i < 10; i++ {
+		r.updateAt(float64(i+1)*100, i) // 100, 200, ..., 1000
+	}
+	// P0 should be the minimum (100)
+	assert.Equal(t, 100.0, r.BucketMinPercentile(0))
+	// P100 should be the maximum (1000)
+	assert.Equal(t, 1000.0, r.BucketMinPercentile(100))
+	// P50 should be median of [100,200,...,1000] = between 500 and 600
+	p50 := r.BucketMinPercentile(50)
+	assert.True(t, p50 >= 500 && p50 <= 600, "P50 should be ~550, got %v", p50)
+}
+
+func TestBucketMinPercentile_FullFill(t *testing.T) {
+	r := NewRollingMinMaxHours(10)
+	// Each bucket: min is tick*100, with multiple updates per bucket
+	for i := int64(0); i < 10; i++ {
+		r.updateAt(float64(i+1)*100, i)
+		r.updateAt(float64(i+1)*200, i) // max, shouldn't affect BucketMinPercentile
+	}
+	// bucket mins: 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000
+	assert.Equal(t, 100.0, r.BucketMinPercentile(0))
+	assert.Equal(t, 1000.0, r.BucketMinPercentile(100))
+	// P2 of 10 values: idx = 0.02*9 = 0.18 → interpolate 100..200 → 118
+	assert.InDelta(t, 118.0, r.BucketMinPercentile(2), 1.0)
+}
+
+func TestBucketMinPercentile_MultipleValuesPerBucket(t *testing.T) {
+	r := NewRollingMinMaxHours(5)
+	// Bucket 0: updates 500, 100, 300 → min=100
+	r.updateAt(500, 0)
+	r.updateAt(100, 0)
+	r.updateAt(300, 0)
+	// Bucket 1: min=200
+	r.updateAt(200, 1)
+	r.updateAt(400, 1)
+	// Bucket 2: min=50
+	r.updateAt(50, 2)
+	// mins: [100, 200, 50] → sorted: [50, 100, 200]
+	assert.Equal(t, 50.0, r.BucketMinPercentile(0))
+	assert.Equal(t, 200.0, r.BucketMinPercentile(100))
+}
