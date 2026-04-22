@@ -136,7 +136,7 @@ func BuildBaselineInverterConfig(battery2, battery3 BatteryConfig) BaselineInver
 		ForecastRemainingTopic:   "homeassistant/sensor/solcast_pv_forecast_forecast_remaining_today/state",
 		DetailedForecastTopic:    "homeassistant/sensor/solcast_pv_forecast_forecast_today/detailedForecast",
 		InverterStateTopics:      inverterStateTopics,
-		Battery3SOCTopic:         battery3.CerboSOCTopic,
+		Battery3SOCTopic:         "homeassistant/sensor/" + strings.ReplaceAll(strings.ToLower(battery3.Name), " ", "_") + "_state_of_charge/state",
 		PowerwallSOCTopic:        "homeassistant/sensor/home_sweet_home_charge/state",
 		ExpectingPowerCutsTopic:  TopicExpectingPowerCutsState,
 	}
