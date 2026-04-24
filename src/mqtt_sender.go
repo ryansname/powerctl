@@ -349,6 +349,7 @@ func (s *MQTTSender) CreateInverter10ACSetpointEntity() error {
 		Min           float64        `json:"min"`
 		Max           float64        `json:"max"`
 		Step          float64        `json:"step"`
+		Mode          string         `json:"mode"`
 		Device        haDeviceConfig `json:"device"`
 	}
 
@@ -362,6 +363,7 @@ func (s *MQTTSender) CreateInverter10ACSetpointEntity() error {
 		Min:           -3000,
 		Max:           3500,
 		Step:          10,
+		Mode:          "slider",
 		Device: haDeviceConfig{
 			Identifiers: []string{"powerhouse_inverter_10"},
 			Name:        "Powerhouse Inverter 10",
