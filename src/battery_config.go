@@ -165,7 +165,7 @@ func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverte
 			Solar2PowerTopic:          "homeassistant/sensor/primo_5_0_ac_power/state",
 			Inverter1to9PowerTopics:   battery2.OutflowPowerTopics,
 			MultiplusACPowerTopic:     TopicMultiplusACPower,
-			Battery3SOCTopic:          battery3.CerboSOCTopic,
+			Battery3SOCTopic:          "homeassistant/sensor/" + strings.ReplaceAll(strings.ToLower(battery3.Name), " ", "_") + "_state_of_charge/state",
 			GridStatusTopic:           "homeassistant/binary_sensor/home_sweet_home_grid_status_2/state",
 			ACFrequencyTopic:          "homeassistant/sensor/lounge_ac_frequency/state",
 			PowerwallSOCTopic:         "homeassistant/sensor/home_sweet_home_charge/state",
@@ -174,7 +174,7 @@ func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverte
 			CarChargingEnabledTopic:   TopicCarChargingEnabledState,
 			CarChargingActiveTopic:    "homeassistant/binary_sensor/plb942_charging/state",
 			CarBatterySOCTopic:        "homeassistant/sensor/plb942_battery/state",
-			CarBattery3CutoffTopic:    TopicCarChargingBattery3CutoffState,
+			CarBattery3CutoffTopic:    TopicCarChargingBattery3CutoffCmd,
 		},
 	}
 }

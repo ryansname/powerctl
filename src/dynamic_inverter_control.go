@@ -16,8 +16,9 @@ const (
 	// TopicCarChargingEnabledState is the state topic for the powerctl_car_charging switch.
 	TopicCarChargingEnabledState = "homeassistant/switch/powerctl_car_charging/state"
 
-	// TopicCarChargingBattery3CutoffState is the state topic for the Battery 3 SOC cutoff number entity.
-	TopicCarChargingBattery3CutoffState = "homeassistant/number/powerctl_car_charging_battery3_cutoff/state"
+	// TopicCarChargingBattery3CutoffCmd is the command topic for the Battery 3 SOC cutoff number entity.
+	// The entity is optimistic (no state_topic), so powerctl reads commands directly.
+	TopicCarChargingBattery3CutoffCmd = "powerctl/number/powerctl_car_charging_battery3_cutoff/set"
 
 	dynamicMaxDischargeW = 3000.0
 	dynamicMaxChargeW    = 3500.0
@@ -185,6 +186,7 @@ func dynamicInverterControl(
 			Topic:   TopicCarChargingEnabledState,
 			Payload: []byte("OFF"),
 			QoS:     1,
+			Retain:  true,
 		})
 	}
 
@@ -208,10 +210,10 @@ func dynamicInverterControl(
 					debug.Setpoint = autoSetpoint
 				}
 
-				// Auto-disable conditions.
-				if input.CarBattery3Cutoff > 0 && input.Battery3SOC < input.CarBattery3Cutoff {
+				switch {
+				case input.CarBattery3Cutoff > 0 && input.Battery3SOC < input.CarBattery3Cutoff:
 					disableCarCharging(fmt.Sprintf("Battery 3 SOC %.1f%% below cutoff %.1f%%", input.Battery3SOC, input.CarBattery3Cutoff))
-				} else if carChargingActiveSeen && prevCarChargingActive && !input.CarChargingActive {
+				case carChargingActiveSeen && prevCarChargingActive && !input.CarChargingActive:
 					disableCarCharging("car charger stopped charging")
 				}
 			}
