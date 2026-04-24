@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -12,9 +13,18 @@ import (
 const (
 	TopicDynamicAutoState = "homeassistant/switch/powerctl_dynamic_auto/state"
 
+	// TopicCarChargingEnabledState is the state topic for the powerctl_car_charging switch.
+	TopicCarChargingEnabledState = "homeassistant/switch/powerctl_car_charging/state"
+
+	// TopicCarChargingBattery3CutoffState is the state topic for the Battery 3 SOC cutoff number entity.
+	TopicCarChargingBattery3CutoffState = "homeassistant/number/powerctl_car_charging_battery3_cutoff/state"
+
 	dynamicMaxDischargeW = 3000.0
 	dynamicMaxChargeW    = 3500.0
 	dynamicTransferLimit = 4500.0
+
+	// carChargingMinHeadroom requires at least this much transfer-limit headroom to engage.
+	carChargingMinHeadroom = 1500.0
 )
 
 // DynamicInverterConfig holds configuration for the dynamic (Multiplus) inverter controller.
@@ -30,12 +40,13 @@ type DynamicInverterState struct {
 
 // DynamicDebugInfo contains mode states for the dynamic controller debug output.
 type DynamicDebugInfo struct {
-	Auto        bool
-	Priority    string
-	Setpoint    float64
-	Headroom    float64
-	Battery3SOC float64
-	Safety      bool
+	Auto         bool
+	Priority     string
+	Setpoint     float64
+	Headroom     float64
+	Battery3SOC  float64
+	Safety       bool
+	CarCharging  string // "" = disabled, "active", or gate reason (e.g. "gated: soc")
 }
 
 // applyTransferLimit clamps the desired Multiplus setpoint to enforce the 4.5kW transfer limit.
@@ -62,6 +73,26 @@ func applyTransferLimit(desired, solar1, inverter1to9 float64) float64 {
 		return dynamicMaxChargeW
 	}
 	return desired
+}
+
+// carChargingSetpoint returns the desired Multiplus setpoint for car-charging mode
+// (negative = discharge) along with a short status string. Returns 0 setpoint if any
+// gate fails. Does not evaluate safety/tariff — those are handled downstream.
+func carChargingSetpoint(input DynamicInput) (float64, string) {
+	if input.CarBattery3Cutoff > 0 && input.Battery3SOC < input.CarBattery3Cutoff {
+		return 0, "gated: b3 soc"
+	}
+	solarProducing := (input.Solar1Power + input.Solar2Power) > 200
+	if !solarProducing && (input.CarBattery3Cutoff <= 0 || input.Battery3SOC < input.CarBattery3Cutoff) {
+		return 0, "gated: no production"
+	}
+	headroom := dynamicTransferLimit - input.Solar1Power - input.Inverter1to9Power
+	if headroom < carChargingMinHeadroom {
+		return 0, "gated: headroom"
+	}
+	// Request max discharge; applyTransferLimit clamps to the 4.5kW transfer limit and
+	// the 3kW Multiplus discharge cap.
+	return applyTransferLimit(-dynamicMaxDischargeW, input.Solar1Power, input.Inverter1to9Power), "active"
 }
 
 // calculateDynamicSetpoint computes the desired Multiplus setpoint from a DynamicInput.
@@ -137,6 +168,8 @@ func dynamicInverterControl(
 	}
 
 	var lastSetpoint float64
+	var prevCarChargingActive bool
+	var carChargingActiveSeen bool
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -146,11 +179,46 @@ func dynamicInverterControl(
 		sender.Send(MQTTMessage{Topic: TopicMultiplusSetpointWrite, Payload: payload, QoS: 0})
 	}
 
+	disableCarCharging := func(reason string) {
+		log.Printf("Car charging auto-disable: %s\n", reason)
+		sender.Send(MQTTMessage{
+			Topic:   TopicCarChargingEnabledState,
+			Payload: []byte("OFF"),
+			QoS:     1,
+		})
+	}
+
 	for {
 		select {
 		case input := <-inputChan:
 			autoSetpoint, debug := calculateDynamicSetpoint(input, state)
 			debug.Auto = input.DynamicAutoEnabled
+			debug.CarCharging = ""
+
+			// Car charging mode: override auto setpoint with max safe Multiplus discharge.
+			// Only active when dynamic auto is on AND car charging toggle is on.
+			// Safety (high freq / grid-off + PW>90) takes precedence — don't override if active.
+			if input.DynamicAutoEnabled && input.CarChargingEnabled {
+				carSetpoint, reason := carChargingSetpoint(input)
+				debug.CarCharging = reason
+				if !debug.Safety && carSetpoint < autoSetpoint {
+					// More discharge than auto would pick — take it.
+					autoSetpoint = carSetpoint
+					debug.Priority = "CarCharge"
+					debug.Setpoint = autoSetpoint
+				}
+
+				// Auto-disable conditions.
+				if input.CarBattery3Cutoff > 0 && input.Battery3SOC < input.CarBattery3Cutoff {
+					disableCarCharging(fmt.Sprintf("Battery 3 SOC %.1f%% below cutoff %.1f%%", input.Battery3SOC, input.CarBattery3Cutoff))
+				} else if carChargingActiveSeen && prevCarChargingActive && !input.CarChargingActive {
+					disableCarCharging("car charger stopped charging")
+				}
+			}
+
+			// Track car charging edge (independent of toggle state).
+			prevCarChargingActive = input.CarChargingActive
+			carChargingActiveSeen = true
 
 			if input.DynamicAutoEnabled {
 				lastSetpoint = autoSetpoint

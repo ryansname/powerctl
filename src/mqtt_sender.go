@@ -331,6 +331,69 @@ func (s *MQTTSender) CreateDynamicAutoSwitch() error {
 	return s.createSwitch("powerctl_dynamic_auto", "Dynamic Auto", "mdi:robot", TopicDynamicAutoState)
 }
 
+// CreateCarChargingSwitch creates the powerctl_car_charging switch via MQTT discovery.
+// When on, the dynamic controller pushes Multiplus discharge to its safe maximum to supply
+// the car charger from Battery 3 / solar instead of grid.
+func (s *MQTTSender) CreateCarChargingSwitch() error {
+	return s.createSwitch("powerctl_car_charging", "Car Charging", "mdi:car-electric", TopicCarChargingEnabledState)
+}
+
+// CreateCarChargingBattery3CutoffEntity creates the Battery 3 SOC cutoff number entity
+// for the car-charging feature. Below this SOC, car charging is suppressed and auto-disabled.
+func (s *MQTTSender) CreateCarChargingBattery3CutoffEntity() error {
+	type haDeviceConfig struct {
+		Identifiers  []string `json:"identifiers"`
+		Name         string   `json:"name"`
+		Manufacturer string   `json:"manufacturer,omitempty"`
+	}
+
+	type haNumberConfig struct {
+		Name          string         `json:"name"`
+		UniqueId      string         `json:"unique_id"`
+		StateTopic    string         `json:"state_topic"`
+		CommandTopic  string         `json:"command_topic"`
+		UnitOfMeasure string         `json:"unit_of_measurement"`
+		Min           float64        `json:"min"`
+		Max           float64        `json:"max"`
+		Step          float64        `json:"step"`
+		Mode          string         `json:"mode"`
+		Icon          string         `json:"icon,omitempty"`
+		Device        haDeviceConfig `json:"device"`
+	}
+
+	config := haNumberConfig{
+		Name:          "Car Charging B3 Cutoff",
+		UniqueId:      "powerctl_car_charging_battery3_cutoff",
+		StateTopic:    TopicCarChargingBattery3CutoffState,
+		CommandTopic:  "powerctl/number/powerctl_car_charging_battery3_cutoff/set",
+		UnitOfMeasure: "%",
+		Min:           0,
+		Max:           100,
+		Step:          1,
+		Mode:          "slider",
+		Icon:          "mdi:battery-alert",
+		Device: haDeviceConfig{
+			Identifiers:  []string{"powerctl"},
+			Name:         "Powerctl",
+			Manufacturer: "Custom",
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/number/powerctl_car_charging_battery3_cutoff/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
 // CreateInverter10ACSetpointEntity creates the Multiplus II AC setpoint number entity via MQTT discovery
 func (s *MQTTSender) CreateInverter10ACSetpointEntity() error {
 	type haDeviceConfig struct {

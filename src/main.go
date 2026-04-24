@@ -449,6 +449,18 @@ func main() {
 		log.Fatalf("Failed to create dynamic auto switch: %v", err)
 	}
 
+	// Create car charging switch and Battery 3 SOC cutoff number entity
+	err = mqttSender.CreateCarChargingSwitch()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create car charging switch: %v", err)
+	}
+	err = mqttSender.CreateCarChargingBattery3CutoffEntity()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create car charging cutoff entity: %v", err)
+	}
+
 	log.Println("Home Assistant entities created")
 
 	// Launch sankey config worker (generates and publishes sankey configurations)
@@ -468,6 +480,12 @@ func main() {
 	// Pre-seed command topics so statsWorker doesn't block on first startup.
 	// Real broker values override these on connection.
 	msgChan <- SensorMessage{Topic: TopicInverter10SetpointCmd, Value: "0"}
+	// Car charging: default toggle OFF and cutoff at 40%. Real HA state overrides.
+	msgChan <- SensorMessage{Topic: TopicCarChargingEnabledState, Value: "OFF"}
+	msgChan <- SensorMessage{Topic: TopicCarChargingBattery3CutoffState, Value: "40"}
+	// Car sensors: seed to safe defaults in case the car isn't connected at startup.
+	msgChan <- SensorMessage{Topic: "homeassistant/binary_sensor/plb942_charging/state", Value: "OFF"}
+	msgChan <- SensorMessage{Topic: "homeassistant/sensor/plb942_battery/state", Value: "0"}
 
 	// Launch stats worker (produces statistics)
 	SafeGo(ctx, cancel, "stats-worker", func(ctx context.Context) {

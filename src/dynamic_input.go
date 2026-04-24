@@ -16,6 +16,10 @@ type DynamicInputConfig struct {
 	PowerwallSOCTopic         string
 	DynamicAutoTopic          string
 	MultiplusSetpointCmdTopic string
+	CarChargingEnabledTopic   string
+	CarChargingActiveTopic    string
+	CarBatterySOCTopic        string
+	CarBattery3CutoffTopic    string
 }
 
 // DynamicInput holds extracted values for the dynamic inverter controller.
@@ -31,6 +35,10 @@ type DynamicInput struct {
 	PowerwallSOC           float64
 	DynamicAutoEnabled     bool
 	MultiplusSetpointCmd   float64
+	CarChargingEnabled     bool
+	CarChargingActive      bool
+	CarBatterySOC          float64
+	CarBattery3Cutoff      float64
 	Tariff                 Tariff
 	Rebate                 bool
 }
@@ -103,6 +111,10 @@ func (c DynamicInputConfig) Topics() []string {
 		c.PowerwallSOCTopic,
 		c.DynamicAutoTopic,
 		c.MultiplusSetpointCmdTopic,
+		c.CarChargingEnabledTopic,
+		c.CarChargingActiveTopic,
+		c.CarBatterySOCTopic,
+		c.CarBattery3CutoffTopic,
 	}
 	topics = append(topics, c.Inverter1to9PowerTopics...)
 	return topics
@@ -122,6 +134,10 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		PowerwallSOC:         data.GetFloat(config.PowerwallSOCTopic).Current,
 		DynamicAutoEnabled:   data.GetBoolean(config.DynamicAutoTopic),
 		MultiplusSetpointCmd: data.GetFloat(config.MultiplusSetpointCmdTopic).Current,
+		CarChargingEnabled:   data.GetBoolean(config.CarChargingEnabledTopic),
+		CarChargingActive:    data.GetBoolean(config.CarChargingActiveTopic),
+		CarBatterySOC:        data.GetFloat(config.CarBatterySOCTopic).Current,
+		CarBattery3Cutoff:    data.GetFloat(config.CarBattery3CutoffTopic).Current,
 		Tariff:               CurrentTariff(time.Now()),
 		Rebate:               InRebateWindow(time.Now()),
 	}

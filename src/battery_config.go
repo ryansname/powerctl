@@ -171,6 +171,10 @@ func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverte
 			PowerwallSOCTopic:         "homeassistant/sensor/home_sweet_home_charge/state",
 			DynamicAutoTopic:          TopicDynamicAutoState,
 			MultiplusSetpointCmdTopic: TopicInverter10SetpointCmd,
+			CarChargingEnabledTopic:   TopicCarChargingEnabledState,
+			CarChargingActiveTopic:    "homeassistant/binary_sensor/plb942_charging/state",
+			CarBatterySOCTopic:        "homeassistant/sensor/plb942_battery/state",
+			CarBattery3CutoffTopic:    TopicCarChargingBattery3CutoffState,
 		},
 	}
 }

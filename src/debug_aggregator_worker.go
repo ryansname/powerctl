@@ -43,6 +43,9 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 		{"Setpoint", fmt.Sprintf("%.0fW", dynamic.Setpoint)},
 		{"Headroom", fmt.Sprintf("%.0fW", dynamic.Headroom)},
 	}
+	if dynamic.CarCharging != "" {
+		rightRows = append(rightRows, [2]string{"Car", dynamic.CarCharging})
+	}
 
 	n := max(len(leftRows), len(rightRows))
 	var sb strings.Builder
