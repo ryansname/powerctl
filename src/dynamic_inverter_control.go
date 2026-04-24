@@ -17,8 +17,11 @@ const (
 	TopicCarChargingEnabledState = "homeassistant/switch/powerctl_car_charging/state"
 
 	// TopicCarChargingBattery3CutoffCmd is the command topic for the Battery 3 SOC cutoff number entity.
-	// The entity is optimistic (no state_topic), so powerctl reads commands directly.
-	TopicCarChargingBattery3CutoffCmd = "powerctl/number/powerctl_car_charging_battery3_cutoff/set"
+	TopicCarChargingBattery3CutoffCmd = "powerctl/number/powerctl_car_charging_b3_cutoff/set"
+
+	// TopicCarChargingBattery3CutoffState is the HA statestream topic for the cutoff entity.
+	// HA publishes the optimistic entity state here on connect; powerctl reads from this.
+	TopicCarChargingBattery3CutoffState = "homeassistant/number/powerctl_car_charging_b3_cutoff/state"
 
 	dynamicMaxDischargeW = 3000.0
 	dynamicMaxChargeW    = 3500.0
