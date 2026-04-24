@@ -171,6 +171,7 @@ func dynamicInverterControl(
 	var lastSetpoint float64
 	var prevCarChargingActive bool
 	var carChargingActiveSeen bool
+	var prevCarChargingEnabled bool
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -218,8 +219,14 @@ func dynamicInverterControl(
 				}
 			}
 
-			// Track car charging edge (independent of toggle state).
+			// Press force-data-update on the car when charging is first enabled.
+			if input.CarChargingEnabled && !prevCarChargingEnabled {
+				sender.CallService("button", "press", "button.plb942_force_data_update", nil)
+			}
+
+			// Track edges (independent of toggle state).
 			prevCarChargingActive = input.CarChargingActive
+			prevCarChargingEnabled = input.CarChargingEnabled
 			carChargingActiveSeen = true
 
 			if input.DynamicAutoEnabled {
