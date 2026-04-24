@@ -88,6 +88,17 @@ func calculateDynamicSetpoint(
 		priority = "Charge"
 	}
 
+	// On-peak tariff: prefer exporting over charging. Suppress charge intent;
+	// transfer-limit safety can still force a charge if house-side generation exceeds 4.5kW.
+	if input.Tariff == TariffPeak && desired > 0 {
+		desired = 0
+		if input.Rebate {
+			priority = "Peak+"
+		} else {
+			priority = "Peak"
+		}
+	}
+
 	setpoint := applyTransferLimit(desired, input.Solar1Power, input.Inverter1to9Power)
 
 	// Safety: high frequency or grid-off with high Powerwall → no discharge (setpoint ≥ 0).

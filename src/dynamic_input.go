@@ -1,5 +1,8 @@
 package main
 
+import "time"
+
+
 // DynamicInputConfig holds the topics needed to extract DynamicInput from DisplayData.
 type DynamicInputConfig struct {
 	HouseLoadTopic            string
@@ -28,6 +31,63 @@ type DynamicInput struct {
 	PowerwallSOC           float64
 	DynamicAutoEnabled     bool
 	MultiplusSetpointCmd   float64
+	Tariff                 Tariff
+	Rebate                 bool
+}
+
+// Tariff classifies the current time-of-use band for Vector's residential plan.
+type Tariff int
+
+const (
+	TariffNight   Tariff = iota // 23:00-07:00 every day
+	TariffOffpeak               // Weekdays 11:00-17:00, 21:00-23:00; weekends 07:00-23:00
+	TariffPeak                  // Weekdays 07:00-11:00, 17:00-21:00
+)
+
+func (t Tariff) String() string {
+	switch t {
+	case TariffNight:
+		return "Night"
+	case TariffOffpeak:
+		return "Offpeak"
+	case TariffPeak:
+		return "Peak"
+	default:
+		return "?"
+	}
+}
+
+// CurrentTariff classifies t into Vector's Night/Offpeak/Peak band (local time).
+func CurrentTariff(t time.Time) Tariff {
+	t = t.Local()
+	h := t.Hour()
+	if h < 7 || h >= 23 {
+		return TariffNight
+	}
+	wd := t.Weekday()
+	if wd == time.Saturday || wd == time.Sunday {
+		return TariffOffpeak
+	}
+	if (h >= 7 && h < 11) || (h >= 17 && h < 21) {
+		return TariffPeak
+	}
+	return TariffOffpeak
+}
+
+// InRebateWindow reports whether t falls in Vector's 5.24c/kWh export rebate window:
+// mornings 07:00-11:00 in Jun/Jul/Aug, evenings 17:00-22:00 in May-Sep. Local time.
+// The rebate applies every day but is nulled by the base off-peak rate on weekends.
+func InRebateWindow(t time.Time) bool {
+	t = t.Local()
+	h := t.Hour()
+	m := t.Month()
+	if h >= 7 && h < 11 {
+		return m == time.June || m == time.July || m == time.August
+	}
+	if h >= 17 && h < 22 {
+		return m >= time.May && m <= time.September
+	}
+	return false
 }
 
 // Topics returns all MQTT topics needed by the dynamic controller.
@@ -62,5 +122,7 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		PowerwallSOC:         data.GetFloat(config.PowerwallSOCTopic).Current,
 		DynamicAutoEnabled:   data.GetBoolean(config.DynamicAutoTopic),
 		MultiplusSetpointCmd: data.GetFloat(config.MultiplusSetpointCmdTopic).Current,
+		Tariff:               CurrentTariff(time.Now()),
+		Rebate:               InRebateWindow(time.Now()),
 	}
 }
