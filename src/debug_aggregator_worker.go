@@ -27,7 +27,9 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 		copy(modes, baseline.Modes)
 		sort.Slice(modes, func(i, j int) bool { return modes[i].Watts > modes[j].Watts })
 		for _, m := range modes {
-			leftRows = append(leftRows, [2]string{m.Name, fmt.Sprintf("%.0f", m.Watts)})
+			if m.Watts != 0 {
+				leftRows = append(leftRows, [2]string{m.Name, fmt.Sprintf("%.0f", m.Watts)})
+			}
 		}
 		if baseline.Battery2LowVoltage {
 			leftRows = append(leftRows, [2]string{"Low Voltage", fmt.Sprintf("%d @ %.2fV", baseline.Battery2VoltageMaxInv, baseline.Battery2VoltageMin)})
