@@ -44,39 +44,75 @@ type DynamicInverterState struct {
 
 // DynamicDebugInfo contains mode states for the dynamic controller debug output.
 type DynamicDebugInfo struct {
-	Auto         bool
-	Priority     string
-	Setpoint     float64
-	Headroom     float64
-	Battery3SOC  float64
-	Safety       bool
-	CarCharging  string // "" = disabled, "active", or gate reason (e.g. "gated: soc")
+	Auto        bool
+	Priority    string
+	Setpoint    float64
+	Headroom    float64
+	Battery3SOC float64
+	Safety      bool
+	CarCharging string // "" = disabled, "active", or gate reason (e.g. "gated: soc")
 }
 
-// applyTransferLimit clamps the desired Multiplus setpoint to enforce the 4.5kW transfer limit.
-// Negative setpoint = discharge (Multiplus outputs to house); positive = charge.
-func applyTransferLimit(desired, solar1, inverter1to9 float64) float64 {
+// DynamicModeConstraint encodes a mode's desired setpoint and its allowed range.
+// Negative setpoint = discharge; positive = charge.
+// Constraint-only modes (TransferLimit, Safety) leave Target=0 (no preference).
+// Intent modes (Supply, Charge, CarCharging) set Target to their desired value.
+// Combine with add(); call Setpoint() to resolve.
+//
+// Invariant: at most one mode in a chain has a non-zero Target.
+// intentConstraint enforces mutual exclusivity before building the chain.
+type DynamicModeConstraint struct {
+	Target       float64 // signed desired setpoint; 0 = no preference
+	MinCharge    float64 // floor: must charge at least this much (positive; over-limit case)
+	MaxDischarge float64 // cap: max discharge allowed (positive magnitude)
+	MaxCharge    float64 // cap: max charge allowed
+}
+
+// add merges two constraints. Ranges intersect (most restrictive). Targets sum.
+// Because at most one mode has a non-zero Target, the sum equals that mode's value.
+func (a DynamicModeConstraint) add(b DynamicModeConstraint) DynamicModeConstraint {
+	return DynamicModeConstraint{
+		Target:       a.Target + b.Target,
+		MinCharge:    max(a.MinCharge, b.MinCharge),
+		MaxDischarge: min(a.MaxDischarge, b.MaxDischarge),
+		MaxCharge:    min(a.MaxCharge, b.MaxCharge),
+	}
+}
+
+// Setpoint clamps Target to [MinCharge-MaxDischarge, MaxCharge].
+// The floor formula works because MinCharge>0 implies MaxDischarge=0:
+// over-limit sets MinCharge and zeroes MaxDischarge; normal does the reverse.
+func (c DynamicModeConstraint) Setpoint() float64 {
+	return clamp(c.Target, c.MinCharge-c.MaxDischarge, c.MaxCharge)
+}
+
+func clamp(v, lo, hi float64) float64 { return max(lo, min(hi, v)) }
+
+// transferLimitConstraint returns the range constraint enforcing the 4.5kW transfer limit.
+// When over the limit, MaxDischarge=0 and MinCharge>0 (must absorb excess).
+// When under the limit, MaxDischarge is capped to available headroom.
+func transferLimitConstraint(solar1, inverter1to9 float64) DynamicModeConstraint {
 	headroom := dynamicTransferLimit - solar1 - inverter1to9
 	if headroom < 0 {
-		// Already over limit: force charging to absorb excess
-		charge := -headroom
-		if charge > dynamicMaxChargeW {
-			charge = dynamicMaxChargeW
+		return DynamicModeConstraint{
+			MinCharge:    min(-headroom, dynamicMaxChargeW),
+			MaxDischarge: 0,
+			MaxCharge:    dynamicMaxChargeW,
 		}
-		return charge
 	}
-	// Clamp discharge to available headroom; allow charging up to max
-	minSetpoint := -headroom
-	if minSetpoint < -dynamicMaxDischargeW {
-		minSetpoint = -dynamicMaxDischargeW
+	return DynamicModeConstraint{
+		MaxDischarge: min(headroom, dynamicMaxDischargeW),
+		MaxCharge:    dynamicMaxChargeW,
 	}
-	if desired < minSetpoint {
-		return minSetpoint
+}
+
+// safetyConstraint returns a range constraint that blocks discharge when active
+// (high AC frequency or grid-off with high Powerwall). Charging remains allowed.
+func safetyConstraint(active bool) DynamicModeConstraint {
+	if active {
+		return DynamicModeConstraint{MaxDischarge: 0, MaxCharge: dynamicMaxChargeW}
 	}
-	if desired > dynamicMaxChargeW {
-		return dynamicMaxChargeW
-	}
-	return desired
+	return DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
 }
 
 // carChargingSetpoint returns the desired Multiplus setpoint for car-charging mode
@@ -94,9 +130,47 @@ func carChargingSetpoint(input DynamicInput) (float64, string) {
 	if headroom < carChargingMinHeadroom {
 		return 0, "gated: headroom"
 	}
-	// Request max discharge; applyTransferLimit clamps to the 4.5kW transfer limit and
-	// the 3kW Multiplus discharge cap.
-	return applyTransferLimit(-dynamicMaxDischargeW, input.Solar1Power, input.Inverter1to9Power), "active"
+	return -dynamicMaxDischargeW, "active"
+}
+
+// intentConstraint determines the winning control intent and returns it as a DynamicModeConstraint.
+// Car charging overrides supply/charge when eligible. Peak tariff suppresses charge intent.
+// Returns the constraint, the priority label, and the car-charging status string.
+func intentConstraint(input DynamicInput, state *DynamicInverterState) (DynamicModeConstraint, string, string) {
+	target := state.houseLoadMax.Max() - (input.Solar1Power + input.Solar2Power + input.Inverter1to9Power)
+
+	var c DynamicModeConstraint
+	var priority string
+	switch {
+	case target > 0:
+		// Priority 2: Supply — discharge to fill gap
+		c = DynamicModeConstraint{Target: -target, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
+		priority = "Supply"
+	case input.Tariff == TariffPeak:
+		// On-peak: suppress charge intent; Target stays 0 (no discharge forced either)
+		c = DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
+		if input.Rebate {
+			priority = "Peak+"
+		} else {
+			priority = "Peak"
+		}
+	default:
+		// Priority 3: Charge from Surplus — absorb only the surplus, not all generation
+		c = DynamicModeConstraint{Target: min(-target, dynamicMaxChargeW), MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
+		priority = "Charge"
+	}
+
+	// Car charging overrides the default intent when eligible
+	carStatus := ""
+	if input.CarChargingEnabled {
+		_, reason := carChargingSetpoint(input)
+		carStatus = reason
+		if reason == "active" {
+			c = DynamicModeConstraint{Target: -dynamicMaxDischargeW, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
+			priority = "CarCharge"
+		}
+	}
+	return c, priority, carStatus
 }
 
 // calculateDynamicSetpoint computes the desired Multiplus setpoint from a DynamicInput.
@@ -110,48 +184,28 @@ func calculateDynamicSetpoint(
 
 	headroom := dynamicTransferLimit - input.Solar1Power - input.Inverter1to9Power
 
-	// Priority 2: Default Supply — discharge to fill gap
-	target := state.houseLoadMax.Max() - (input.Solar1Power + input.Solar2Power + input.Inverter1to9Power)
-	var desired float64
-	var priority string
-	if target > 0 {
-		desired = -target
-		priority = "Supply"
-	} else {
-		// Priority 3: Charge from Surplus — absorb only the surplus, not all generation
-		desired = min(-target, dynamicMaxChargeW)
-		priority = "Charge"
-	}
+	intent, priority, carStatus := intentConstraint(input, state)
 
-	// On-peak tariff: prefer exporting over charging. Suppress charge intent;
-	// transfer-limit safety can still force a charge if house-side generation exceeds 4.5kW.
-	if input.Tariff == TariffPeak && desired > 0 {
-		desired = 0
-		if input.Rebate {
-			priority = "Peak+"
-		} else {
-			priority = "Peak"
-		}
-	}
-
-	setpoint := applyTransferLimit(desired, input.Solar1Power, input.Inverter1to9Power)
-
-	// Safety: high frequency or grid-off with high Powerwall → no discharge (setpoint ≥ 0).
+	// Safety: high frequency or grid-off with high Powerwall → no discharge.
 	// Charging is still allowed so excess generation is absorbed rather than wasted.
-	safety := input.ACFreqP100_5Min > 52.75 || (!input.GridAvailable && input.PowerwallSOC > 90.0)
-	if safety {
-		if setpoint < 0 {
-			setpoint = 0
-		}
+	isSafety := input.ACFreqP100_5Min > 52.75 || (!input.GridAvailable && input.PowerwallSOC > 90.0)
+	tl   := transferLimitConstraint(input.Solar1Power, input.Inverter1to9Power)
+	sfty := safetyConstraint(isSafety)
+	if isSafety {
 		priority = "Safety"
 	}
+
+	// Compose: intent (single non-zero Target) → hard range constraints (Target=0).
+	// tl and sfty narrow the allowed range without changing the target sum.
+	setpoint := intent.add(sfty).add(tl).Setpoint()
 
 	return setpoint, DynamicDebugInfo{
 		Priority:    priority,
 		Setpoint:    setpoint,
 		Headroom:    headroom,
 		Battery3SOC: input.Battery3SOC,
-		Safety:      safety,
+		Safety:      isSafety,
+		CarCharging: carStatus,
 	}
 }
 
@@ -199,21 +253,9 @@ func dynamicInverterControl(
 		case input := <-inputChan:
 			autoSetpoint, debug := calculateDynamicSetpoint(input, state)
 			debug.Auto = input.DynamicAutoEnabled
-			debug.CarCharging = ""
 
-			// Car charging mode: override auto setpoint with max safe Multiplus discharge.
-			// Only active when dynamic auto is on AND car charging toggle is on.
-			// Safety (high freq / grid-off + PW>90) takes precedence — don't override if active.
+			// Car charging auto-disable state machine (setpoint logic is inside calculateDynamicSetpoint).
 			if input.DynamicAutoEnabled && input.CarChargingEnabled {
-				carSetpoint, reason := carChargingSetpoint(input)
-				debug.CarCharging = reason
-				if !debug.Safety && carSetpoint < autoSetpoint {
-					// More discharge than auto would pick — take it.
-					autoSetpoint = carSetpoint
-					debug.Priority = "CarCharge"
-					debug.Setpoint = autoSetpoint
-				}
-
 				switch {
 				case input.CarBattery3Cutoff > 0 && input.Battery3SOC < input.CarBattery3Cutoff:
 					disableCarCharging(fmt.Sprintf("Battery 3 SOC %.1f%% below cutoff %.1f%%", input.Battery3SOC, input.CarBattery3Cutoff))

@@ -29,48 +29,55 @@ func makeBaseDynamicInput() DynamicInput {
 	}
 }
 
-// --- applyTransferLimit tests ---
+// --- transferLimitConstraint + DynamicModeConstraint.Setpoint tests ---
 
-func TestApplyTransferLimit_NoGeneration(t *testing.T) {
-	// No solar/inverters: full headroom = 4500W, discharge freely up to 3000W
-	setpoint := applyTransferLimit(-1000, 0, 0)
-	assert.InDelta(t, -1000.0, setpoint, 0.001)
+func TestTransferLimit_NoGeneration_DischargePassesThrough(t *testing.T) {
+	// No generation: full headroom=4500W → MaxDischarge=3000 → -1000 passes through
+	tl := transferLimitConstraint(0, 0)
+	got := DynamicModeConstraint{Target: -1000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(tl).Setpoint()
+	assert.InDelta(t, -1000.0, got, 0.001)
 }
 
-func TestApplyTransferLimit_DischargeCapAtHeadroom(t *testing.T) {
-	// solar=1kW + i1-9=3kW = 4kW → headroom=500W → discharge capped at 500W
-	setpoint := applyTransferLimit(-2000, 1000, 3000)
-	assert.InDelta(t, -500.0, setpoint, 0.001)
+func TestTransferLimit_DischargeCapAtHeadroom(t *testing.T) {
+	// solar=1kW + i1-9=3kW → headroom=500W → discharge capped at 500W
+	tl := transferLimitConstraint(1000, 3000)
+	got := DynamicModeConstraint{Target: -2000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(tl).Setpoint()
+	assert.InDelta(t, -500.0, got, 0.001)
 }
 
-func TestApplyTransferLimit_OverLimit_ForcesCharge(t *testing.T) {
-	// solar=2kW + i1-9=3kW = 5kW → headroom=-500W → must charge 500W
-	setpoint := applyTransferLimit(0, 2000, 3000)
-	assert.InDelta(t, 500.0, setpoint, 0.001)
+func TestTransferLimit_OverLimit_FloorIsMinCharge(t *testing.T) {
+	// solar=2kW + i1-9=3kW → headroom=-500W → MinCharge=500; intent=0 → clamped up to 500
+	tl := transferLimitConstraint(2000, 3000)
+	got := DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(tl).Setpoint()
+	assert.InDelta(t, 500.0, got, 0.001)
 }
 
-func TestApplyTransferLimit_OverLimit_LargeExcess(t *testing.T) {
-	// solar=0 + i1-9=8kW → headroom=-3.5kW → force charge capped at 3500W
-	setpoint := applyTransferLimit(0, 0, 8000)
-	assert.InDelta(t, 3500.0, setpoint, 0.001)
+func TestTransferLimit_OverLimit_LargeExcess_CapsAtMaxCharge(t *testing.T) {
+	// i1-9=8kW → headroom=-3.5kW → MinCharge capped at 3500W
+	tl := transferLimitConstraint(0, 8000)
+	got := DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(tl).Setpoint()
+	assert.InDelta(t, 3500.0, got, 0.001)
 }
 
-func TestApplyTransferLimit_ChargeAllowed(t *testing.T) {
-	// Desired charge of 1000W with plenty of headroom
-	setpoint := applyTransferLimit(1000, 500, 500)
-	assert.InDelta(t, 1000.0, setpoint, 0.001)
+func TestTransferLimit_ChargeIntentPassesThrough(t *testing.T) {
+	// Desired 1000W charge, plenty of headroom
+	tl := transferLimitConstraint(500, 500)
+	got := DynamicModeConstraint{Target: 1000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(tl).Setpoint()
+	assert.InDelta(t, 1000.0, got, 0.001)
 }
 
-func TestApplyTransferLimit_DischargeCapAt3000(t *testing.T) {
-	// No generation, desired -5000W → capped at -3000W (max discharge)
-	setpoint := applyTransferLimit(-5000, 0, 0)
-	assert.InDelta(t, -3000.0, setpoint, 0.001)
+func TestTransferLimit_DischargeCapAt3000(t *testing.T) {
+	// No generation, intent -5000W → Multiplus discharge cap at 3000W
+	tl := transferLimitConstraint(0, 0)
+	got := DynamicModeConstraint{Target: -5000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(tl).Setpoint()
+	assert.InDelta(t, -3000.0, got, 0.001)
 }
 
-func TestApplyTransferLimit_ChargeCapAt3500(t *testing.T) {
-	// Desired charge way over max
-	setpoint := applyTransferLimit(5000, 0, 0)
-	assert.InDelta(t, 3500.0, setpoint, 0.001)
+func TestTransferLimit_ChargeCapAt3500(t *testing.T) {
+	// Intent way over max charge
+	tl := transferLimitConstraint(0, 0)
+	got := DynamicModeConstraint{Target: 5000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(tl).Setpoint()
+	assert.InDelta(t, 3500.0, got, 0.001)
 }
 
 // --- calculateDynamicSetpoint tests ---
@@ -101,15 +108,16 @@ func TestCalculateDynamic_Safety_GridOffHighPowerwall(t *testing.T) {
 }
 
 func TestCalculateDynamic_Safety_HighFreq_AllowsForcedCharge(t *testing.T) {
-	// High freq + over transfer limit: forced charge still applies (absorbing excess is ideal)
+	// High freq + over transfer limit: safety blocks discharge but charge intent is preserved.
+	// Surplus=(2000+3000-1000)=4000 → desired=min(4000,3500)=3500; floor=500 → 3500 wins.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 	input.ACFreqP100_5Min = 53.0
 	input.Solar1Power = 2000
-	input.Inverter1to9Power = 3000 // headroom = -500 → forced charge 500W; safety keeps it
+	input.Inverter1to9Power = 3000 // headroom=-500 → MinCharge=500
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.InDelta(t, 500.0, setpoint, 0.001)
+	assert.InDelta(t, 3500.0, setpoint, 0.001)
 	assert.True(t, debug.Safety)
 }
 
@@ -177,16 +185,17 @@ func TestCalculateDynamic_ChargeFromSurplus_SmallSurplus(t *testing.T) {
 }
 
 func TestCalculateDynamic_ChargeFromSurplus_ForcedChargeByTransferLimit(t *testing.T) {
+	// headroom=-1500 → MinCharge=1500 (floor); surplus=6000 → desired=3500.
+	// desired(3500) ≥ floor(1500) → 3500 is preserved.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 	input.HouseLoad = 0
 	input.Solar1Power = 2000
-	input.Inverter1to9Power = 4000 // total on bus = 6kW > 4500W → headroom = -1500
-	// P3: desired = min(2000+4000, 3500) = 3500, but headroom < 0 → force charge 1500W
+	input.Inverter1to9Power = 4000 // total on bus = 6kW > 4500W → headroom=-1500
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
 	assert.Equal(t, "Charge", debug.Priority)
-	assert.InDelta(t, 1500.0, setpoint, 0.001)
+	assert.InDelta(t, 3500.0, setpoint, 0.001)
 }
 
 func TestCalculateDynamic_ChargeFromSurplus_CapAt3500(t *testing.T) {
@@ -198,6 +207,31 @@ func TestCalculateDynamic_ChargeFromSurplus_CapAt3500(t *testing.T) {
 	// P3: desired = min(4000, 3500) = 3500, clamped to 500W headroom → wait no
 	// headroom = 4500 - 4000 = 500W, so max discharge is -500W (or no discharge)
 	// desired = 3500 (charge), 3500 > 0 so no clamping needed, just cap at 3500
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.Equal(t, "Charge", debug.Priority)
+	assert.InDelta(t, 3500.0, setpoint, 0.001)
+}
+
+// --- regression tests ---
+
+func TestConstraint_OverLimit_DesiredChargeTakesPrecedence(t *testing.T) {
+	// transferLimitConstraint(2000, 3000): headroom=-500 → MinCharge=500, MaxDischarge=0
+	// An intent of 3500W charge should be preserved — 3500 ≥ floor(500).
+	tl := transferLimitConstraint(2000, 3000)
+	got := DynamicModeConstraint{Target: 3500,
+		MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(tl).Setpoint()
+	assert.InDelta(t, 3500.0, got, 0.001)
+}
+
+func TestCalculateDynamic_ChargeFromSurplus_OverLimitPreservesHigherCharge(t *testing.T) {
+	// Solar1=2000, Inverter1to9=3000 → headroom=-500 → floor=500W
+	// Surplus=5000W → desired=min(5000, 3500)=3500W → should not be replaced by floor.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 0
+	input.Solar1Power = 2000
+	input.Inverter1to9Power = 3000
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
 	assert.Equal(t, "Charge", debug.Priority)
