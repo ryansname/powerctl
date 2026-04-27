@@ -278,7 +278,9 @@ var selfPublishedFloatTopics = []string{
 
 // String topics that should be initialized to a default if not received within timeout
 var selfPublishedStringTopics = map[string]string{
-	TopicMinerWorkmode: WorkmodeOff, // dump_load_enabler controls this; default to off
+	TopicMinerWorkmode:          WorkmodeOff,  // dump_load_enabler controls this; default to off
+	TopicSolarcharger278MppMode: `{"value":0}`, // default to not-throttling if Cerbo absent
+	TopicSolarcharger279MppMode: `{"value":0}`,
 }
 
 // Boolean topics that should be initialized to true if not received within timeout

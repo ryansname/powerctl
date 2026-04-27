@@ -1,25 +1,30 @@
 package main
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 
 // DynamicInputConfig holds the topics needed to extract DynamicInput from DisplayData.
 type DynamicInputConfig struct {
-	HouseLoadTopic            string
-	Solar1PowerTopic          string
-	Solar2PowerTopic          string
-	Inverter1to9PowerTopics   []string
-	MultiplusACPowerTopic     string
-	Battery3SOCTopic          string
-	GridStatusTopic           string
-	ACFrequencyTopic          string
-	PowerwallSOCTopic         string
-	DynamicAutoTopic          string
-	MultiplusSetpointCmdTopic string
-	CarChargingEnabledTopic   string
-	CarChargingActiveTopic    string
-	CarBatterySOCTopic        string
-	CarBattery3CutoffTopic    string
+	HouseLoadTopic              string
+	Solar1PowerTopic            string
+	Solar2PowerTopic            string
+	Inverter1to9PowerTopics     []string
+	MultiplusACPowerTopic       string
+	Battery3SOCTopic            string
+	GridStatusTopic             string
+	ACFrequencyTopic            string
+	PowerwallSOCTopic           string
+	DynamicAutoTopic            string
+	MultiplusSetpointCmdTopic   string
+	CarChargingEnabledTopic     string
+	CarChargingActiveTopic      string
+	CarBatterySOCTopic          string
+	CarBattery3CutoffTopic      string
+	Solarcharger278MppModeTopic string
+	Solarcharger279MppModeTopic string
 }
 
 // DynamicInput holds extracted values for the dynamic inverter controller.
@@ -41,6 +46,7 @@ type DynamicInput struct {
 	CarBattery3Cutoff      float64
 	Tariff                 Tariff
 	Rebate                 bool
+	MpptThrottling         bool // true if either MPPT solarcharger is throttling (value==1)
 }
 
 // Tariff classifies the current time-of-use band for Vector's residential plan.
@@ -115,9 +121,27 @@ func (c DynamicInputConfig) Topics() []string {
 		c.CarChargingActiveTopic,
 		c.CarBatterySOCTopic,
 		c.CarBattery3CutoffTopic,
+		c.Solarcharger278MppModeTopic,
+		c.Solarcharger279MppModeTopic,
 	}
 	topics = append(topics, c.Inverter1to9PowerTopics...)
 	return topics
+}
+
+// mpptModeThrottling returns true if the given Cerbo JSON topic reports MppOperationMode == 1 (throttling).
+// Returns false when the topic is absent or the payload cannot be parsed.
+func mpptModeThrottling(data DisplayData, topic string) bool {
+	s := data.GetString(topic)
+	if s == "" {
+		return false
+	}
+	var v struct {
+		Value int `json:"value"`
+	}
+	if err := json.Unmarshal([]byte(s), &v); err != nil {
+		return false
+	}
+	return v.Value == 1
 }
 
 // ExtractDynamicInput extracts values from DisplayData for the dynamic controller.
@@ -140,5 +164,7 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		CarBattery3Cutoff:    data.GetFloat(config.CarBattery3CutoffTopic).Current,
 		Tariff:               CurrentTariff(time.Now()),
 		Rebate:               InRebateWindow(time.Now()),
+		MpptThrottling: mpptModeThrottling(data, config.Solarcharger278MppModeTopic) ||
+			mpptModeThrottling(data, config.Solarcharger279MppModeTopic),
 	}
 }

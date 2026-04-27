@@ -250,3 +250,176 @@ func TestCalculateDynamic_Headroom(t *testing.T) {
 	assert.InDelta(t, 3000.0, debug.Headroom, 0.001)
 	assert.InDelta(t, input.Battery3SOC, debug.Battery3SOC, 0.001)
 }
+
+// --- MPPT boost tests ---
+
+func TestMpptBoost_NoThrottling_OffsetStaysZero(t *testing.T) {
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = false
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 0.0, debug.MpptBoost, 0.001)
+	assert.False(t, debug.MpptThrottling)
+}
+
+func TestMpptBoost_Throttling_RampsUpEachTick(t *testing.T) {
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = true
+
+	_, debug1 := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, mpptBoostRampW, debug1.MpptBoost, 0.001)
+
+	_, debug2 := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 2*mpptBoostRampW, debug2.MpptBoost, 0.001)
+}
+
+func TestMpptBoost_OffsetClampsAtMaxDischarge(t *testing.T) {
+	state := makeTestDynamicState()
+	state.mpptBoostOffset = dynamicMaxDischargeW - mpptBoostRampW + 1
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = true
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, dynamicMaxDischargeW, debug.MpptBoost, 0.001)
+}
+
+func TestMpptBoost_DeadbandHoldsOffsetAfterThrottleClears(t *testing.T) {
+	state := makeTestDynamicState()
+	state.mpptBoostOffset = 500
+	state.mpptDeadbandTicks = 0
+	input := makeBaseDynamicInput()
+
+	// First tick with throttling false and deadband=0: ramp down
+	input.MpptThrottling = false
+	_, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 500-mpptBoostRampW, debug.MpptBoost, 0.001)
+
+	// Now simulate throttle then clear — deadband should hold offset
+	state.mpptBoostOffset = 500
+	state.mpptDeadbandTicks = 0
+	input.MpptThrottling = true
+	calculateDynamicSetpoint(input, state) // tick: ramps up, sets deadband
+	state.mpptBoostOffset = 500            // reset for clarity
+	state.mpptDeadbandTicks = mpptBoostDeadbandTicks
+
+	input.MpptThrottling = false
+	_, debug2 := calculateDynamicSetpoint(input, state)
+	// Deadband was mpptBoostDeadbandTicks, decremented to mpptBoostDeadbandTicks-1; offset unchanged
+	assert.InDelta(t, 500.0, debug2.MpptBoost, 0.001)
+}
+
+func TestMpptBoost_RampsDownAfterDeadbandExpires(t *testing.T) {
+	state := makeTestDynamicState()
+	state.mpptBoostOffset = 300
+	state.mpptDeadbandTicks = 1
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = false
+
+	// Tick 1: deadband decrements to 0; offset holds
+	_, debug1 := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 300.0, debug1.MpptBoost, 0.001)
+	assert.Equal(t, 0, state.mpptDeadbandTicks)
+
+	// Tick 2: deadband=0 → ramp down
+	_, debug2 := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 300-mpptBoostRampW, debug2.MpptBoost, 0.001)
+}
+
+func TestMpptBoost_ChargeIntent_PushedToDischarge(t *testing.T) {
+	// Surplus (charge intent): solar > house. With MPPT boost, setpoint shifts negative.
+	state := makeTestDynamicState()
+	state.mpptBoostOffset = 500
+	state.mpptDeadbandTicks = mpptBoostDeadbandTicks // keep offset stable
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 500
+	input.Solar1Power = 1000 // 500W surplus → charge intent target=500W
+	input.MpptThrottling = false
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	// intent target = 500 (charge), minus boost 500+50(ramp stays at 500 since deadband)=500
+	// Actually: deadband>0 so offset holds at 500. intent.Target = 500 - 500 = 0.
+	// Wait, let me recalculate. deadband=12 → offset stays at 500 (no ramp).
+	// target = houseLoadMax(500) - solar(1000) = -500 → charge intent = min(500, 3500) = 500
+	// intent.Target = 500 - 500(boost) = 0 → setpoint = 0
+	assert.InDelta(t, 0.0, debug.Setpoint, 0.001)
+}
+
+func TestMpptBoost_Safety_ClampsToZero(t *testing.T) {
+	// Even with MPPT boost, safety (MaxDischarge=0) prevents discharge.
+	state := makeTestDynamicState()
+	state.mpptBoostOffset = 1000
+	state.mpptDeadbandTicks = mpptBoostDeadbandTicks
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = false
+	input.ACFreqP100_5Min = 53.0 // triggers safety
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 0.0, debug.Setpoint, 0.001)
+	assert.True(t, debug.Safety)
+}
+
+func TestMpptBoost_Safety_AntiWindup_NoRampDuringSafety(t *testing.T) {
+	// Boost must not ramp up during a safety event (anti-windup).
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = true
+	input.ACFreqP100_5Min = 53.0 // safety active
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 0.0, debug.MpptBoost, 0.001) // offset stayed 0
+}
+
+func TestMpptBoost_ZeroHeadroom_AntiWindup_NoRamp(t *testing.T) {
+	// Boost must not ramp up when headroom is 0 — can't discharge anyway.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = true
+	input.Solar1Power = 2000
+	input.Inverter1to9Power = 2500 // headroom = 4500-2000-2500 = 0
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 0.0, debug.MpptBoost, 0.001)
+}
+
+func TestMpptBoost_TransferLimitHeadroom_CapsDischarge(t *testing.T) {
+	// MPPT boost pushes for full discharge but headroom only allows 500W.
+	state := makeTestDynamicState()
+	state.mpptBoostOffset = 2000
+	state.mpptDeadbandTicks = mpptBoostDeadbandTicks
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = false
+	input.HouseLoad = 0
+	input.Solar1Power = 2000
+	input.Inverter1to9Power = 2000 // headroom = 4500-2000-2000 = 500W
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	// Charge intent: target=min(4000,3500)=3500, minus boost=2000 → -8500 but clamped to headroom
+	// After boost: intent.Target = 3500 - 2000 = 1500 (still charge) → 1500W
+	// Wait: target = houseLoadMax(0) - (solar1(2000)+solar2(0)+inv(2000)) = -4000
+	// Charge intent: target = min(4000, 3500) = 3500 (positive = charge)
+	// After boost: intent.Target = 3500 - 2000 = 1500 → charge 1500W
+	// Transfer limit headroom = 500W → MaxDischarge=500, MaxCharge=3500
+	// setpoint = clamp(1500, -500, 3500) = 1500W
+	// The transfer limit only caps discharge here, not charge
+	assert.InDelta(t, 1500.0, debug.Setpoint, 0.001)
+}
+
+func TestMpptBoost_TransferLimitHeadroom_CapsDischargeBelowBoost(t *testing.T) {
+	// House needs power, boost pushes for full discharge, but headroom limits it.
+	state := makeTestDynamicState()
+	state.mpptBoostOffset = 2000
+	state.mpptDeadbandTicks = mpptBoostDeadbandTicks
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = false
+	input.HouseLoad = 3000
+	input.Solar1Power = 2000
+	input.Inverter1to9Power = 2000 // headroom = 500W
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	// target = houseLoadMax(3000) - (2000+0+2000) = -1000 → Supply intent -(-1000) = -1000
+	// After boost: intent.Target = -1000 - 2000 = -3000
+	// headroom = 500 → MaxDischarge=500 → setpoint = -500
+	assert.InDelta(t, -500.0, debug.Setpoint, 0.001)
+}
