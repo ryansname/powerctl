@@ -442,6 +442,18 @@ func main() {
 		log.Fatalf("Failed to create inverter 10 AC power entity: %v", err)
 	}
 
+	// Create Solar 3 & 4 MPPT mode sensor entities (Cerbo solarcharger topics)
+	err = mqttSender.CreateSolarMpptModeEntity("Solar 3", TopicSolarcharger279MppMode)
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create Solar 3 MPPT mode entity: %v", err)
+	}
+	err = mqttSender.CreateSolarMpptModeEntity("Solar 4", TopicSolarcharger278MppMode)
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create Solar 4 MPPT mode entity: %v", err)
+	}
+
 	// Create Battery 3 DC power sensor entity (Cerbo system battery power)
 	err = mqttSender.CreateBattery3DCPowerEntity()
 	if err != nil {

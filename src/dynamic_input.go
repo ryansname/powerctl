@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"time"
 )
 
@@ -23,8 +22,8 @@ type DynamicInputConfig struct {
 	CarChargingActiveTopic      string
 	CarBatterySOCTopic          string
 	CarBattery3CutoffTopic      string
-	Solarcharger278MppModeTopic string
-	Solarcharger279MppModeTopic string
+	Solar3MpptModeTopic string
+	Solar4MpptModeTopic string
 	Solar34PowerTopics          []string
 	Battery3DCPowerTopic        string
 }
@@ -125,8 +124,8 @@ func (c DynamicInputConfig) Topics() []string {
 		c.CarChargingActiveTopic,
 		c.CarBatterySOCTopic,
 		c.CarBattery3CutoffTopic,
-		c.Solarcharger278MppModeTopic,
-		c.Solarcharger279MppModeTopic,
+		c.Solar3MpptModeTopic,
+		c.Solar4MpptModeTopic,
 	}
 	topics = append(topics, c.Inverter1to9PowerTopics...)
 	topics = append(topics, c.Solar34PowerTopics...)
@@ -136,20 +135,9 @@ func (c DynamicInputConfig) Topics() []string {
 	return topics
 }
 
-// mpptModeThrottling returns true if the given Cerbo JSON topic reports MppOperationMode == 1 (throttling).
-// Returns false when the topic is absent or the payload cannot be parsed.
+// mpptModeThrottling returns true if the MPPT mode topic reports 1 (throttling).
 func mpptModeThrottling(data DisplayData, topic string) bool {
-	s := data.GetString(topic)
-	if s == "" {
-		return false
-	}
-	var v struct {
-		Value int `json:"value"`
-	}
-	if err := json.Unmarshal([]byte(s), &v); err != nil {
-		return false
-	}
-	return v.Value == 1
+	return data.GetFloat(topic).Current == 1
 }
 
 // ExtractDynamicInput extracts values from DisplayData for the dynamic controller.
@@ -172,8 +160,8 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		CarBattery3Cutoff:    data.GetFloat(config.CarBattery3CutoffTopic).Current,
 		Tariff:               CurrentTariff(time.Now()),
 		Rebate:               InRebateWindow(time.Now()),
-		MpptThrottling: mpptModeThrottling(data, config.Solarcharger278MppModeTopic) ||
-			mpptModeThrottling(data, config.Solarcharger279MppModeTopic),
+		MpptThrottling: mpptModeThrottling(data, config.Solar3MpptModeTopic) ||
+			mpptModeThrottling(data, config.Solar4MpptModeTopic),
 		Solar34Power:       data.SumTopics(config.Solar34PowerTopics),
 		Battery3ChargeRate: max(0, -data.GetFloat(config.Battery3DCPowerTopic).Current),
 	}

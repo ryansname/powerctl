@@ -18,6 +18,9 @@ const (
 	TopicSolarcharger278MppMode = "powerhouse_3/N/solarcharger/278/MppOperationMode"
 	TopicSolarcharger279MppMode = "powerhouse_3/N/solarcharger/279/MppOperationMode"
 	TopicCerboBatteryDCPower    = "powerhouse_3/N/system/0/Dc/Battery/Power"
+
+	TopicSolar3MpptMode = "homeassistant/sensor/solar_3_mppt_mode/state"
+	TopicSolar4MpptMode = "homeassistant/sensor/solar_4_mppt_mode/state"
 )
 
 func cerboKeepaliveWorker(ctx context.Context, sender *MQTTSender) {
@@ -26,8 +29,6 @@ func cerboKeepaliveWorker(ctx context.Context, sender *MQTTSender) {
 		"N/system/0/Dc/Battery/Soc",
 		"N/vebus/276/Hub4/L1/AcPowerSetpoint",
 		"N/vebus/276/Ac/ActiveIn/L1/P",
-		"N/solarcharger/278/MppOperationMode",
-		"N/solarcharger/279/MppOperationMode",
 	})
 	if err != nil {
 		log.Fatalf("cerbo-keepalive: failed to marshal keepalive payload: %v", err)
