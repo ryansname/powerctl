@@ -30,13 +30,11 @@ const (
 	// carChargingMinHeadroom requires at least this much transfer-limit headroom to engage.
 	carChargingMinHeadroom = 1500.0
 
-	// mpptBoostRampW is the watts added/removed per 5s tick when MPPT is throttling/recovering.
-	// 50W/tick = 100W/10s.
-	mpptBoostRampW = 50.0
+	// mpptBoostRampW is the watts added/removed per 1s tick (3W/s).
+	mpptBoostRampW = 3.0
 
-	// mpptBoostDeadbandTicks is the number of 5s ticks to hold the offset after MPPT stops
-	// throttling before starting to ramp down. Prevents oscillation on mode flapping.
-	mpptBoostDeadbandTicks = 12 // 60s
+	// mpptBoostDeadbandTicks is the number of 1s ticks to hold the offset after throttling clears.
+	mpptBoostDeadbandTicks = 60
 )
 
 // DynamicInverterConfig holds configuration for the dynamic (Multiplus) inverter controller.
@@ -200,9 +198,9 @@ func calculateDynamicSetpoint(
 	// Charging is still allowed so excess generation is absorbed rather than wasted.
 	isSafety := input.ACFreqP100_5Min > 52.75 || (!input.GridAvailable && input.PowerwallSOC > 90.0)
 
-	// MPPT boost: ramp up a discharge bias while either solarcharger throttles.
-	// Anti-windup: only ramp up when discharge is actually possible (headroom > 0, no safety event).
-	// A deadband prevents oscillation when MPPT briefly re-enters MPP mode.
+	// MPPT boost: ramp a discharge bias at 100W/30s every 1s tick.
+	// Anti-windup: only ramp up when discharge is possible (headroom > 0, no safety event).
+	// A deadband holds the offset for 60s after throttling clears.
 	switch {
 	case input.MpptThrottling && !isSafety && headroom > 0:
 		state.mpptBoostOffset += mpptBoostRampW
