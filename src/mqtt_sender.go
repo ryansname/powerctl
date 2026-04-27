@@ -568,16 +568,16 @@ func (s *MQTTSender) CreateSolarMpptModeEntity(
 		Device        haDeviceConfig `json:"device"`
 	}
 
-	deviceId := strings.ReplaceAll(strings.ToLower(solarName), " ", "_")
+	entityId := strings.ReplaceAll(strings.ToLower(solarName), " ", "_") + "_mppt_mode"
 
 	config := haSensorConfig{
 		Name:          "MPPT Mode",
-		UniqueId:      deviceId + "_mppt_mode",
+		UniqueId:      entityId,
 		StateTopic:    cerboTopic,
 		ValueTemplate: "{{ value_json.value }}",
 		StateClass:    "measurement",
 		Device: haDeviceConfig{
-			Identifiers: []string{deviceId},
+			Identifiers: []string{solarName},
 			Name:        solarName,
 		},
 	}
@@ -588,7 +588,7 @@ func (s *MQTTSender) CreateSolarMpptModeEntity(
 	}
 
 	s.Send(MQTTMessage{
-		Topic:   "homeassistant/sensor/" + deviceId + "_mppt_mode/config",
+		Topic:   "homeassistant/sensor/" + entityId + "/config",
 		Payload: payload,
 		QoS:     2,
 		Retain:  true,
