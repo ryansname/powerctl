@@ -260,6 +260,20 @@ func stableBoost(state *DynamicInverterState, offset float64) {
 	state.mpptDeadbandTicks = mpptBoostDeadbandTicks
 }
 
+func TestMpptBoost_ThrottleEntry_NoStepChange(t *testing.T) {
+	// Charging at 3kW when throttling starts — first tick must ramp by mpptBoostRampW only,
+	// not jump to Solar34Power.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 0
+	input.Solar1Power = 0
+	input.Solar34Power = 4000 // 4kW from Solar 3+4
+	input.MpptThrottling = true
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, mpptBoostRampW, debug.MpptBoost, 0.001)
+}
+
 func TestMpptBoost_NoThrottling_OffsetStaysZero(t *testing.T) {
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
@@ -290,6 +304,20 @@ func TestMpptBoost_OffsetClampsAtMaxDischarge(t *testing.T) {
 
 	_, debug := calculateDynamicSetpoint(input, state)
 	assert.InDelta(t, dynamicMaxDischargeW, debug.MpptBoost, 0.001)
+}
+
+func TestMpptBoost_DeadbandEntry_NoStepChange(t *testing.T) {
+	// Throttling clears while offset is below Solar34Power — entering the deadband
+	// must not snap the offset up to Solar34Power.
+	state := makeTestDynamicState()
+	state.mpptBoostOffset = 300
+	state.mpptDeadbandTicks = mpptBoostDeadbandTicks
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = false
+	input.Solar34Power = 4000 // well above current offset
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 300.0, debug.MpptBoost, 0.001)
 }
 
 func TestMpptBoost_DeadbandHoldsOffsetAfterThrottleClears(t *testing.T) {
@@ -393,4 +421,50 @@ func TestMpptBoost_TransferLimitHeadroom_CapsDischargeBelowBoost(t *testing.T) {
 
 	_, debug := calculateDynamicSetpoint(input, state)
 	assert.InDelta(t, -500.0, debug.Setpoint, 0.001)
+}
+
+func TestMpptBoost_Floor_StopsRampDown(t *testing.T) {
+	// Solar34=2000, battery charging 1500 → rawFloor=500. Offset at 502 ramps to 500, not below.
+	state := makeTestDynamicState()
+	state.mpptBoostOffset = 502
+	state.mpptDeadbandTicks = 0
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = false
+	input.Solar34Power = 2000
+	input.Battery3ChargeRate = 1500
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 500.0, debug.MpptBoost, 0.001)
+
+	// Next tick: already at floor, stays there.
+	_, debug2 := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 500.0, debug2.MpptBoost, 0.001)
+}
+
+func TestMpptBoost_Floor_AboveOffset_NoJump(t *testing.T) {
+	// rawFloor (2000) is above current offset (400) — must not jump up.
+	state := makeTestDynamicState()
+	state.mpptBoostOffset = 400
+	state.mpptDeadbandTicks = 0
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = false
+	input.Solar34Power = 2000
+	input.Battery3ChargeRate = 0 // rawFloor = 2000
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 400.0, debug.MpptBoost, 0.001)
+}
+
+func TestMpptBoost_Floor_BatteryAbsorbsAll_RampsToZero(t *testing.T) {
+	// Battery absorbing more than solar → rawFloor = 0 → ramps all the way down.
+	state := makeTestDynamicState()
+	state.mpptBoostOffset = 100
+	state.mpptDeadbandTicks = 0
+	input := makeBaseDynamicInput()
+	input.MpptThrottling = false
+	input.Solar34Power = 1000
+	input.Battery3ChargeRate = 2000 // rawFloor = max(0, -1000) = 0
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 100-mpptBoostRampW, debug.MpptBoost, 0.001)
 }

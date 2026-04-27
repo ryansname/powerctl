@@ -442,6 +442,13 @@ func main() {
 		log.Fatalf("Failed to create inverter 10 AC power entity: %v", err)
 	}
 
+	// Create Battery 3 DC power sensor entity (Cerbo system battery power)
+	err = mqttSender.CreateBattery3DCPowerEntity()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create Battery 3 DC power entity: %v", err)
+	}
+
 	// Create dynamic auto switch (controls auto vs manual Multiplus setpoint)
 	err = mqttSender.CreateDynamicAutoSwitch()
 	if err != nil {

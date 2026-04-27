@@ -178,6 +178,7 @@ func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverte
 			Solarcharger278MppModeTopic: TopicSolarcharger278MppMode,
 			Solarcharger279MppModeTopic: TopicSolarcharger279MppMode,
 			Solar34PowerTopics:          battery3.InflowPowerTopics,
+			Battery3DCPowerTopic:        "homeassistant/sensor/battery_3_dc_power/state",
 		},
 	}
 }

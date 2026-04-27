@@ -201,17 +201,21 @@ func calculateDynamicSetpoint(
 	// MPPT boost: ramp a discharge bias at 3W/s every 1s tick.
 	// Anti-windup: only ramp up when discharge is possible (headroom > 0, no safety event).
 	// A deadband holds the offset for 60s after throttling clears.
-	// Ramp-down floor: Solar34Power — dropping below that would cause throttling again.
+	// Ramp-down floor: Solar34Power minus battery absorption — dropping below that would
+	// cause throttling again. effectiveFloor ≤ current offset so clamping never jumps up.
 	switch {
 	case input.MpptThrottling && !isSafety && headroom > 0:
 		state.mpptBoostOffset += mpptBoostRampW
+		state.mpptBoostOffset = clamp(state.mpptBoostOffset, 0, dynamicMaxDischargeW)
 		state.mpptDeadbandTicks = mpptBoostDeadbandTicks
 	case state.mpptDeadbandTicks > 0:
 		state.mpptDeadbandTicks--
 	default:
+		rawFloor := max(0, input.Solar34Power-input.Battery3ChargeRate)
+		effectiveFloor := min(rawFloor, state.mpptBoostOffset)
 		state.mpptBoostOffset -= mpptBoostRampW
+		state.mpptBoostOffset = clamp(state.mpptBoostOffset, effectiveFloor, dynamicMaxDischargeW)
 	}
-	state.mpptBoostOffset = clamp(state.mpptBoostOffset, input.Solar34Power, dynamicMaxDischargeW)
 
 	intent, priority, carStatus := intentConstraint(input, state)
 

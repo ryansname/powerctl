@@ -17,6 +17,7 @@ const (
 
 	TopicSolarcharger278MppMode = "powerhouse_3/N/solarcharger/278/MppOperationMode"
 	TopicSolarcharger279MppMode = "powerhouse_3/N/solarcharger/279/MppOperationMode"
+	TopicCerboBatteryDCPower    = "powerhouse_3/N/system/0/Dc/Battery/Power"
 )
 
 func cerboKeepaliveWorker(ctx context.Context, sender *MQTTSender) {

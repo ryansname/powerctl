@@ -25,7 +25,8 @@ type DynamicInputConfig struct {
 	CarBattery3CutoffTopic      string
 	Solarcharger278MppModeTopic string
 	Solarcharger279MppModeTopic string
-	Solar34PowerTopics          []string // Battery 3 inflow: Solar 3 + Solar 4
+	Solar34PowerTopics          []string
+	Battery3DCPowerTopic        string
 }
 
 // DynamicInput holds extracted values for the dynamic inverter controller.
@@ -49,6 +50,7 @@ type DynamicInput struct {
 	Rebate                 bool
 	MpptThrottling         bool    // true if either MPPT solarcharger is throttling (value==1)
 	Solar34Power           float64 // combined Solar 3 + Solar 4 generation (W)
+	Battery3ChargeRate     float64 // Battery 3 DC charge rate (W, always ≥ 0)
 }
 
 // Tariff classifies the current time-of-use band for Vector's residential plan.
@@ -128,6 +130,9 @@ func (c DynamicInputConfig) Topics() []string {
 	}
 	topics = append(topics, c.Inverter1to9PowerTopics...)
 	topics = append(topics, c.Solar34PowerTopics...)
+	if c.Battery3DCPowerTopic != "" {
+		topics = append(topics, c.Battery3DCPowerTopic)
+	}
 	return topics
 }
 
@@ -169,6 +174,7 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		Rebate:               InRebateWindow(time.Now()),
 		MpptThrottling: mpptModeThrottling(data, config.Solarcharger278MppModeTopic) ||
 			mpptModeThrottling(data, config.Solarcharger279MppModeTopic),
-		Solar34Power: data.SumTopics(config.Solar34PowerTopics),
+		Solar34Power:       data.SumTopics(config.Solar34PowerTopics),
+		Battery3ChargeRate: max(0, -data.GetFloat(config.Battery3DCPowerTopic).Current),
 	}
 }

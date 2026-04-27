@@ -500,6 +500,54 @@ func (s *MQTTSender) CreateMultiplusACPowerEntity() error {
 	return nil
 }
 
+// CreateBattery3DCPowerEntity creates a Battery 3 DC power sensor that reads from the Cerbo
+// system battery power topic via MQTT discovery.
+func (s *MQTTSender) CreateBattery3DCPowerEntity() error {
+	type haDeviceConfig struct {
+		Identifiers []string `json:"identifiers"`
+		Name        string   `json:"name"`
+	}
+
+	type haSensorConfig struct {
+		Name          string         `json:"name"`
+		UniqueId      string         `json:"unique_id"`
+		StateTopic    string         `json:"state_topic"`
+		ValueTemplate string         `json:"value_template"`
+		UnitOfMeasure string         `json:"unit_of_measurement"`
+		DeviceClass   string         `json:"device_class"`
+		StateClass    string         `json:"state_class"`
+		Device        haDeviceConfig `json:"device"`
+	}
+
+	config := haSensorConfig{
+		Name:          "DC Power",
+		UniqueId:      "battery_3_dc_power",
+		StateTopic:    TopicCerboBatteryDCPower,
+		ValueTemplate: "{{ value_json.value }}",
+		UnitOfMeasure: "W",
+		DeviceClass:   "power",
+		StateClass:    "measurement",
+		Device: haDeviceConfig{
+			Identifiers: []string{"battery_3"},
+			Name:        "Battery 3",
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/sensor/battery_3_dc_power/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
 // isDiscoveryTopic checks if a topic is an MQTT discovery config topic
 func isDiscoveryTopic(topic string) bool {
 	return strings.HasSuffix(topic, "/config")
