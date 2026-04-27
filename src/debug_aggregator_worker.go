@@ -48,7 +48,7 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 	if dynamic.CarCharging != "" {
 		rightRows = append(rightRows, [2]string{"Car", dynamic.CarCharging})
 	}
-	if dynamic.MpptThrottling || dynamic.MpptBoost > 0 {
+	if dynamic.MpptBoost > 0 {
 		rightRows = append(rightRows, [2]string{"MPPT", fmt.Sprintf("%.0fW", dynamic.MpptBoost)})
 	}
 

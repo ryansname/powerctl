@@ -177,6 +177,7 @@ func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverte
 			CarBattery3CutoffTopic:      TopicCarChargingBattery3CutoffState,
 			Solarcharger278MppModeTopic: TopicSolarcharger278MppMode,
 			Solarcharger279MppModeTopic: TopicSolarcharger279MppMode,
+			Solar34PowerTopics:          battery3.InflowPowerTopics,
 		},
 	}
 }
