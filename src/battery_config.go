@@ -188,7 +188,7 @@ func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverte
 			CarBattery3CutoffTopic:      TopicCarChargingBattery3CutoffState,
 			Solar34PowerTopics:        battery3.InflowPowerTopics,
 			Battery3DCCurrentTopic:    "homeassistant/sensor/battery_3_dc_current/state",
-			Battery3CCLTopic:          "homeassistant/sensor/battery_3_ccl/state",
+			Battery3CCLTopic:          "homeassistant/sensor/battery_3_charge_current_limit/state",
 			Battery3VoltageTopic:      "homeassistant/sensor/solar_3_battery_voltage/state",
 			Solar3BatteryCurrentTopic: "homeassistant/sensor/solar_3_battery_current/state",
 			Solar4BatteryCurrentTopic: "homeassistant/sensor/solar_4_battery_current/state",
