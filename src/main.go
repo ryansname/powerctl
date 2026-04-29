@@ -461,6 +461,18 @@ func main() {
 		log.Fatalf("Failed to create Battery 3 DC power entity: %v", err)
 	}
 
+	// Create Battery 3 DC current and CCL entities (Cerbo system battery current/limit)
+	err = mqttSender.CreateBattery3CurrentEntity()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create Battery 3 DC current entity: %v", err)
+	}
+	err = mqttSender.CreateBattery3CCLEntity()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create Battery 3 CCL entity: %v", err)
+	}
+
 	// Create dynamic auto switch (controls auto vs manual Multiplus setpoint)
 	err = mqttSender.CreateDynamicAutoSwitch()
 	if err != nil {

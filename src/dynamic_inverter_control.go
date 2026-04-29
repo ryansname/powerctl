@@ -30,11 +30,12 @@ const (
 	// carChargingMinHeadroom requires at least this much transfer-limit headroom to engage.
 	carChargingMinHeadroom = 1500.0
 
-	// mpptBoostRampW is the watts added/removed per 1s tick (3W/s).
-	mpptBoostRampW = 3.0
-
-	// mpptBoostDeadbandTicks is the number of 1s ticks to hold the offset after throttling clears.
-	mpptBoostDeadbandTicks = 60
+	throttleRampStepW     = 50.0 // W added/removed per step
+	throttleRampIntervalS = 10   // ticks (seconds) between steps
+	throttleCCLHeadroomA  = 5.0  // A below CCL as steady-state tracking target
+	mpptHardwareLimitA    = 45.0 // MPPT hardware current ceiling
+	mpptHardwareLimitBufferA = 2.0  // buffer below ceiling — mode 1 within this band is treated as hardware-limited, not BMS throttling
+	priorityCarCharge     = "CarCharge"
 )
 
 // DynamicInverterConfig holds configuration for the dynamic (Multiplus) inverter controller.
@@ -46,21 +47,22 @@ type DynamicInverterConfig struct {
 type DynamicInverterState struct {
 	houseLoadMax        governor.RollingMinMax // 1-min max of house load
 	houseSideGeneration governor.RollingMinMax // 1-min tracking of solar_1 + inverter_1_9
-	mpptBoostOffset     float64               // discharge bias (0–dynamicMaxDischargeW) when MPPTs throttle
-	mpptDeadbandTicks   int                   // countdown before ramping down after throttle clears
+	throttleRampTicks   int                   // ticks since last 50W step (0..9)
+	throttleTracking    bool                  // true: offset > 0 and throttle currently clear
+	throttleDischargeW  float64               // current discharge bias (W, >= 0)
 }
 
 // DynamicDebugInfo contains mode states for the dynamic controller debug output.
 type DynamicDebugInfo struct {
-	Auto           bool
-	Priority       string
-	Setpoint       float64
-	Headroom       float64
-	Battery3SOC    float64
-	Safety         bool
-	CarCharging    string  // "" = disabled, "active", or gate reason (e.g. "gated: soc")
-	MpptThrottling bool
-	MpptBoost      float64 // current discharge bias in watts
+	Auto              bool
+	Priority          string
+	Setpoint          float64
+	Headroom          float64
+	Battery3SOC       float64
+	Safety            bool
+	CarCharging       string  // "" = disabled, "active", or gate reason (e.g. "gated: soc")
+	ThrottleActive    bool
+	ThrottleDischargeW float64
 }
 
 // DynamicModeConstraint encodes a mode's desired setpoint and its allowed range.
@@ -177,10 +179,25 @@ func intentConstraint(input DynamicInput, state *DynamicInverterState) (DynamicM
 		carStatus = reason
 		if reason == "active" {
 			c = DynamicModeConstraint{Target: -dynamicMaxDischargeW, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
-			priority = "CarCharge"
+			priority = priorityCarCharge
 		}
 	}
 	return c, priority, carStatus
+}
+
+// mpptBmsThrottled returns true when an MPPT is being held back by the BMS (CCL or CVL),
+// as opposed to simply running at its own 45 A hardware current ceiling.
+// Victron mode 1 = "voltage or current limited"; at exactly the hardware limit that is full
+// power output, not BMS throttling.
+func mpptBmsThrottled(mode, currentA float64) bool {
+	return mode == 1 && currentA < mpptHardwareLimitA-mpptHardwareLimitBufferA
+}
+
+// isThrottling returns true when at least one MPPT is being held back by the BMS
+// (CCL or CVL), distinguishing it from MPPTs that are simply at their own hardware ceiling.
+func isThrottling(input DynamicInput) bool {
+	return mpptBmsThrottled(input.Solar3MpptMode, input.Solar3BatteryCurrent) ||
+		mpptBmsThrottled(input.Solar4MpptMode, input.Solar4BatteryCurrent)
 }
 
 // calculateDynamicSetpoint computes the desired Multiplus setpoint from a DynamicInput.
@@ -198,30 +215,40 @@ func calculateDynamicSetpoint(
 	// Charging is still allowed so excess generation is absorbed rather than wasted.
 	isSafety := input.ACFreqP100_5Min > 52.75 || (!input.GridAvailable && input.PowerwallSOC > 90.0)
 
-	// MPPT boost: ramp a discharge bias at 3W/s every 1s tick.
-	// Anti-windup: only ramp up when discharge is possible (headroom > 0, no safety event).
-	// A deadband holds the offset for 60s after throttling clears.
-	// Ramp-down floor: Solar34Power minus battery absorption — dropping below that would
-	// cause throttling again. effectiveFloor ≤ current offset so clamping never jumps up.
-	switch {
-	case input.MpptThrottling && !isSafety && headroom > 0:
-		state.mpptBoostOffset += mpptBoostRampW
-		state.mpptBoostOffset = clamp(state.mpptBoostOffset, 0, dynamicMaxDischargeW)
-		state.mpptDeadbandTicks = mpptBoostDeadbandTicks
-	case state.mpptDeadbandTicks > 0:
-		state.mpptDeadbandTicks--
-	default:
-		rawFloor := max(0, input.Solar34Power-input.Battery3ChargeRate)
-		effectiveFloor := min(rawFloor, state.mpptBoostOffset)
-		state.mpptBoostOffset -= mpptBoostRampW
-		state.mpptBoostOffset = clamp(state.mpptBoostOffset, effectiveFloor, dynamicMaxDischargeW)
-	}
-
 	intent, priority, carStatus := intentConstraint(input, state)
 
-	// Apply MPPT boost: push intent target toward discharge. Safety and transfer-limit
-	// constraints in the composition chain still clamp the result correctly.
-	intent.Target -= state.mpptBoostOffset
+	// Throttle tracking: ramp up Multiplus discharge when battery charge current exceeds CCL,
+	// then slew down to a CCL-headroom tracking target once the condition clears.
+	// Suppressed during safety events, when there is no headroom, or when car charging
+	// (which already demands max discharge).
+	throttling := isThrottling(input)
+	switch {
+	case throttling && !isSafety && headroom > 0 && priority != priorityCarCharge:
+		state.throttleTracking = false
+		state.throttleRampTicks++
+		if state.throttleRampTicks >= throttleRampIntervalS {
+			state.throttleRampTicks = 0
+			state.throttleDischargeW = clamp(state.throttleDischargeW+throttleRampStepW, 0, dynamicMaxDischargeW)
+		}
+	case state.throttleDischargeW > 0 && priority != priorityCarCharge:
+		state.throttleTracking = true
+		state.throttleRampTicks++
+		if state.throttleRampTicks >= throttleRampIntervalS {
+			state.throttleRampTicks = 0
+			excessA := input.Solar3BatteryCurrent + input.Solar4BatteryCurrent - (input.Battery3CCL - throttleCCLHeadroomA)
+			targetW := max(0, excessA*input.Battery3Voltage)
+			state.throttleDischargeW = max(targetW, state.throttleDischargeW-throttleRampStepW)
+		}
+		if state.throttleDischargeW == 0 {
+			state.throttleTracking = false
+		}
+	default:
+		state.throttleRampTicks = 0
+		state.throttleDischargeW = 0
+		state.throttleTracking = false
+	}
+
+	intent.Target -= state.throttleDischargeW
 
 	tl   := transferLimitConstraint(input.Solar1Power, input.Inverter1to9Power)
 	sfty := safetyConstraint(isSafety)
@@ -234,14 +261,14 @@ func calculateDynamicSetpoint(
 	setpoint := intent.add(sfty).add(tl).Setpoint()
 
 	return setpoint, DynamicDebugInfo{
-		Priority:       priority,
-		Setpoint:       setpoint,
-		Headroom:       headroom,
-		Battery3SOC:    input.Battery3SOC,
-		Safety:         isSafety,
-		CarCharging:    carStatus,
-		MpptThrottling: input.MpptThrottling,
-		MpptBoost:      state.mpptBoostOffset,
+		Priority:           priority,
+		Setpoint:           setpoint,
+		Headroom:           headroom,
+		Battery3SOC:        input.Battery3SOC,
+		Safety:             isSafety,
+		CarCharging:        carStatus,
+		ThrottleActive:     throttling,
+		ThrottleDischargeW: state.throttleDischargeW,
 	}
 }
 

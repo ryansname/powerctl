@@ -548,6 +548,100 @@ func (s *MQTTSender) CreateBattery3DCPowerEntity() error {
 	return nil
 }
 
+// CreateBattery3CurrentEntity creates a Battery 3 DC current sensor (positive = discharging)
+// that reads from the Cerbo system battery current topic via MQTT discovery.
+func (s *MQTTSender) CreateBattery3CurrentEntity() error {
+	type haDeviceConfig struct {
+		Identifiers []string `json:"identifiers"`
+		Name        string   `json:"name"`
+	}
+	type haSensorConfig struct {
+		Name          string         `json:"name"`
+		UniqueId      string         `json:"unique_id"`
+		StateTopic    string         `json:"state_topic"`
+		ValueTemplate string         `json:"value_template"`
+		UnitOfMeasure string         `json:"unit_of_measurement"`
+		DeviceClass   string         `json:"device_class"`
+		StateClass    string         `json:"state_class"`
+		Device        haDeviceConfig `json:"device"`
+	}
+
+	config := haSensorConfig{
+		Name:          "DC Current",
+		UniqueId:      "battery_3_dc_current",
+		StateTopic:    TopicCerboBatteryCurrent,
+		ValueTemplate: "{{ value_json.value }}",
+		UnitOfMeasure: "A",
+		DeviceClass:   "current",
+		StateClass:    "measurement",
+		Device: haDeviceConfig{
+			Identifiers: []string{"battery_3"},
+			Name:        "Battery 3",
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/sensor/battery_3_dc_current/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
+// CreateBattery3CCLEntity creates a Battery 3 charge current limit sensor
+// that reads from the Cerbo BMS MaxChargeCurrent topic via MQTT discovery.
+func (s *MQTTSender) CreateBattery3CCLEntity() error {
+	type haDeviceConfig struct {
+		Identifiers []string `json:"identifiers"`
+		Name        string   `json:"name"`
+	}
+	type haSensorConfig struct {
+		Name          string         `json:"name"`
+		UniqueId      string         `json:"unique_id"`
+		StateTopic    string         `json:"state_topic"`
+		ValueTemplate string         `json:"value_template"`
+		UnitOfMeasure string         `json:"unit_of_measurement"`
+		DeviceClass   string         `json:"device_class"`
+		StateClass    string         `json:"state_class"`
+		Device        haDeviceConfig `json:"device"`
+	}
+
+	config := haSensorConfig{
+		Name:          "Charge Current Limit",
+		UniqueId:      "battery_3_ccl",
+		StateTopic:    TopicCerboBatteryCCL,
+		ValueTemplate: "{{ value_json.value }}",
+		UnitOfMeasure: "A",
+		DeviceClass:   "current",
+		StateClass:    "measurement",
+		Device: haDeviceConfig{
+			Identifiers: []string{"battery_3"},
+			Name:        "Battery 3",
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/sensor/battery_3_ccl/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
 // CreateSolarMpptModeEntity creates an MPPT operating mode sensor for a solar charger,
 // reading from the Cerbo solarcharger topic via MQTT discovery.
 func (s *MQTTSender) CreateSolarMpptModeEntity(
