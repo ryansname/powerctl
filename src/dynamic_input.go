@@ -167,7 +167,7 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		Tariff:                CurrentTariff(time.Now()),
 		Rebate:                InRebateWindow(time.Now()),
 		Solar34Power:          data.SumTopics(config.Solar34PowerTopics),
-		Battery3ChargeCurrent: max(0, -data.GetFloat(config.Battery3DCCurrentTopic).Current),
+		Battery3ChargeCurrent: max(0, data.GetFloat(config.Battery3DCCurrentTopic).Current),
 		Battery3CCL:           data.GetFloat(config.Battery3CCLTopic).Current,
 		Battery3Voltage:       data.GetFloat(config.Battery3VoltageTopic).Current,
 		Solar3BatteryCurrent:  data.GetFloat(config.Solar3BatteryCurrentTopic).Current,

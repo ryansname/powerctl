@@ -19,7 +19,7 @@ const (
 	TopicSolarcharger279MppMode = "powerhouse_3/N/solarcharger/279/MppOperationMode"
 	TopicCerboBatteryDCPower    = "powerhouse_3/N/system/0/Dc/Battery/Power"
 	TopicCerboBatteryCurrent    = "powerhouse_3/N/system/0/Dc/Battery/Current"
-	TopicCerboBatteryCCL        = "powerhouse_3/N/system/0/Dc/Battery/MaxChargeCurrent"
+	TopicCerboBatteryCCL        = "powerhouse_3/N/battery/512/Info/MaxChargeCurrent"
 
 	TopicSolar3MpptMode = "homeassistant/sensor/solar_3_mppt_mode/state"
 	TopicSolar4MpptMode = "homeassistant/sensor/solar_4_mppt_mode/state"
@@ -30,7 +30,7 @@ func cerboKeepaliveWorker(ctx context.Context, sender *MQTTSender) {
 		"N/system/0/Dc/Battery/Power",
 		"N/system/0/Dc/Battery/Soc",
 		"N/system/0/Dc/Battery/Current",
-		"N/system/0/Dc/Battery/MaxChargeCurrent",
+		"N/battery/512/Info/MaxChargeCurrent",
 		"N/vebus/276/Hub4/L1/AcPowerSetpoint",
 		"N/vebus/276/Ac/ActiveIn/L1/P",
 	})
