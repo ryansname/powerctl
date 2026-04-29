@@ -520,12 +520,20 @@ func main() {
 		})
 		log.Printf("%s calibration worker started\n", b.Name)
 
-		// Launch SOC worker
-		socConfig := b.SOCConfig()
-		SafeGo(ctx, cancel, b.Name+"-soc", func(ctx context.Context) {
-			batterySOCWorker(ctx, socChan, socConfig, mqttSender)
-		})
-		log.Printf("%s SOC worker started\n", b.Name)
+		// Launch SOC or available-energy worker depending on SOC source
+		if b.CerboSOCTopic != "" {
+			availConfig := b.AvailableEnergyFromSOCConfig()
+			SafeGo(ctx, cancel, b.Name+"-available-energy", func(ctx context.Context) {
+				batteryAvailableEnergyFromSOCWorker(ctx, socChan, availConfig, mqttSender)
+			})
+			log.Printf("%s available energy worker started\n", b.Name)
+		} else {
+			socConfig := b.SOCConfig()
+			SafeGo(ctx, cancel, b.Name+"-soc", func(ctx context.Context) {
+				batterySOCWorker(ctx, socChan, socConfig, mqttSender)
+			})
+			log.Printf("%s SOC worker started\n", b.Name)
+		}
 	}
 
 	// Launch power excess calculator and dump load enabler

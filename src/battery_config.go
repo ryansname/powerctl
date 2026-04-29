@@ -72,6 +72,17 @@ func (c *BatteryConfig) CalibConfig() BatteryCalibConfig {
 	}
 }
 
+// AvailableEnergyFromSOCConfig creates a BatteryAvailableEnergyConfig for batteries
+// whose SOC is published by an external source (e.g. Cerbo GX via HA entity).
+func (c *BatteryConfig) AvailableEnergyFromSOCConfig() BatteryAvailableEnergyConfig {
+	deviceID := strings.ReplaceAll(strings.ToLower(c.Name), " ", "_")
+	return BatteryAvailableEnergyConfig{
+		Name:        c.Name,
+		SOCTopic:    "homeassistant/sensor/" + deviceID + "_state_of_charge/state",
+		CapacityKWh: c.CapacityKWh,
+	}
+}
+
 // SOCConfig creates a BatterySOCConfig from the shared BatteryConfig
 func (c *BatteryConfig) SOCConfig() BatterySOCConfig {
 	return BatterySOCConfig{
