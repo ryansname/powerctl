@@ -108,8 +108,8 @@ func clamp(v, lo, hi float64) float64 { return max(lo, min(hi, v)) }
 // transferLimitConstraint returns the range constraint enforcing the 4.5kW transfer limit.
 // When over the limit, MaxDischarge=0 and MinCharge>0 (must absorb excess).
 // When under the limit, MaxDischarge is capped to available headroom.
-func transferLimitConstraint(solar1, inverter1to9 float64) DynamicModeConstraint {
-	headroom := dynamicTransferLimit - solar1 - inverter1to9
+func transferLimitConstraint(powerhouseNetPower float64) DynamicModeConstraint {
+	headroom := dynamicTransferLimit - powerhouseNetPower
 	if headroom < 0 {
 		return DynamicModeConstraint{
 			MinCharge:    min(-headroom, dynamicMaxChargeW),
@@ -157,7 +157,7 @@ func carChargingSetpoint(input DynamicInput) (float64, string) {
 	if !solarProducing && (input.CarBattery3Cutoff <= 0 || input.Battery3SOC < input.CarBattery3Cutoff) {
 		return 0, "gated: no production"
 	}
-	headroom := dynamicTransferLimit - input.Solar1Power - input.Inverter1to9Power
+	headroom := dynamicTransferLimit - input.PowerhouseNetPower
 	if headroom < carChargingMinHeadroom {
 		return 0, "gated: headroom"
 	}
@@ -213,7 +213,7 @@ func calculateDynamicSetpoint(
 	state.houseLoadMax.Update(input.HouseLoad)
 	state.houseSideGeneration.Update(input.Solar1Power + input.Inverter1to9Power)
 
-	headroom := dynamicTransferLimit - input.Solar1Power - input.Inverter1to9Power
+	headroom := dynamicTransferLimit - input.PowerhouseNetPower
 
 	// Safety: high frequency or grid-off with high Powerwall → no discharge.
 	// Charging is still allowed so excess generation is absorbed rather than wasted.
@@ -221,7 +221,7 @@ func calculateDynamicSetpoint(
 
 	intent, priority, carStatus := intentConstraint(input, state)
 
-	tl    := transferLimitConstraint(input.Solar1Power, input.Inverter1to9Power)
+	tl    := transferLimitConstraint(input.PowerhouseNetPower)
 	sfty  := safetyConstraint(isSafety)
 	cclOF := cclOverflowConstraint(input.Solar3BatteryCurrent, input.Solar4BatteryCurrent, input.Battery3CCL, input.Battery3Voltage)
 	if isSafety {
