@@ -108,8 +108,10 @@ func clamp(v, lo, hi float64) float64 { return max(lo, min(hi, v)) }
 // transferLimitConstraint returns the range constraint enforcing the 4.5kW transfer limit.
 // When over the limit, MaxDischarge=0 and MinCharge>0 (must absorb excess).
 // When under the limit, MaxDischarge is capped to available headroom.
-func transferLimitConstraint(powerhouseNetPower float64) DynamicModeConstraint {
-	headroom := dynamicTransferLimit - powerhouseNetPower
+// solar1 and inverter1to9 are passed separately (not powerhouse_net_power) so that
+// the Multiplus's own output doesn't reduce the headroom available to itself.
+func transferLimitConstraint(solar1, inverter1to9 float64) DynamicModeConstraint {
+	headroom := dynamicTransferLimit - solar1 - inverter1to9
 	if headroom < 0 {
 		return DynamicModeConstraint{
 			MinCharge:    min(-headroom, dynamicMaxChargeW),
@@ -157,7 +159,7 @@ func carChargingSetpoint(input DynamicInput) (float64, string) {
 	if !solarProducing && (input.CarBattery3Cutoff <= 0 || input.Battery3SOC < input.CarBattery3Cutoff) {
 		return 0, "gated: no production"
 	}
-	headroom := dynamicTransferLimit - input.PowerhouseNetPower
+	headroom := dynamicTransferLimit - input.Solar1Power - input.Inverter1to9Power
 	if headroom < carChargingMinHeadroom {
 		return 0, "gated: headroom"
 	}
@@ -213,7 +215,7 @@ func calculateDynamicSetpoint(
 	state.houseLoadMax.Update(input.HouseLoad)
 	state.houseSideGeneration.Update(input.Solar1Power + input.Inverter1to9Power)
 
-	headroom := dynamicTransferLimit - input.PowerhouseNetPower
+	headroom := dynamicTransferLimit - input.Solar1Power - input.Inverter1to9Power
 
 	// Safety: high frequency or grid-off with high Powerwall → no discharge.
 	// Charging is still allowed so excess generation is absorbed rather than wasted.
@@ -221,7 +223,7 @@ func calculateDynamicSetpoint(
 
 	intent, priority, carStatus := intentConstraint(input, state)
 
-	tl    := transferLimitConstraint(input.PowerhouseNetPower)
+	tl    := transferLimitConstraint(input.Solar1Power, input.Inverter1to9Power)
 	sfty  := safetyConstraint(isSafety)
 	cclOF := cclOverflowConstraint(input.Solar3BatteryCurrent, input.Solar4BatteryCurrent, input.Battery3CCL, input.Battery3Voltage)
 	if isSafety {

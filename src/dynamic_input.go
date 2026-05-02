@@ -26,9 +26,8 @@ type DynamicInputConfig struct {
 	Battery3DCCurrentTopic    string
 	Battery3CCLTopic          string
 	Battery3VoltageTopic      string
-	Solar3BatteryCurrentTopic   string
-	Solar4BatteryCurrentTopic   string
-	PowerhouseNetPowerTopic     string
+	Solar3BatteryCurrentTopic string
+	Solar4BatteryCurrentTopic string
 }
 
 // DynamicInput holds extracted values for the dynamic inverter controller.
@@ -56,7 +55,6 @@ type DynamicInput struct {
 	Battery3Voltage       float64 // V
 	Solar3BatteryCurrent  float64 // A
 	Solar4BatteryCurrent  float64 // A
-	PowerhouseNetPower    float64 // W, used for transfer-limit headroom
 }
 
 // Tariff classifies the current time-of-use band for Vector's residential plan.
@@ -136,7 +134,6 @@ func (c DynamicInputConfig) Topics() []string {
 		c.Battery3VoltageTopic,
 		c.Solar3BatteryCurrentTopic,
 		c.Solar4BatteryCurrentTopic,
-		c.PowerhouseNetPowerTopic,
 	}
 	topics = append(topics, c.Inverter1to9PowerTopics...)
 	topics = append(topics, c.Solar34PowerTopics...)
@@ -169,6 +166,5 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		Battery3Voltage:       data.GetFloat(config.Battery3VoltageTopic).Current,
 		Solar3BatteryCurrent:  data.GetFloat(config.Solar3BatteryCurrentTopic).Current,
 		Solar4BatteryCurrent:  data.GetFloat(config.Solar4BatteryCurrentTopic).Current,
-		PowerhouseNetPower:    data.GetFloat(config.PowerhouseNetPowerTopic).Current,
 	}
 }
