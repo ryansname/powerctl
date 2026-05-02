@@ -109,11 +109,12 @@ func clamp(v, lo, hi float64) float64 { return max(lo, min(hi, v)) }
 // When over the limit, MaxDischarge=0 and MinCharge>0 (must absorb excess).
 // When under the limit, MaxDischarge is capped to available headroom.
 //
-// NOTE: use solar1+inverter1to9, NOT sensor.powerhouse_net_power. The net power sensor
-// includes MP2's own output, so using it makes MP2's discharge reduce the headroom
-// available to itself — a circular dependency that caps discharge too aggressively.
-func transferLimitConstraint(solar1, inverter1to9 float64) DynamicModeConstraint {
-	headroom := dynamicTransferLimit - solar1 - inverter1to9
+// busLoadExcludingMP2 = sensor.powerhouse_net_power + MultiplusACPower.
+// powerhouse_net_power is the actual cable flow (accounts for powerhouse loads), but
+// includes MP2's current output. Adding MultiplusACPower (negative when inverting)
+// strips MP2 back out so its own discharge doesn't reduce the headroom available to itself.
+func transferLimitConstraint(busLoadExcludingMP2 float64) DynamicModeConstraint {
+	headroom := dynamicTransferLimit - busLoadExcludingMP2
 	if headroom < 0 {
 		return DynamicModeConstraint{
 			MinCharge:    min(-headroom, dynamicMaxChargeW),
@@ -161,7 +162,7 @@ func carChargingSetpoint(input DynamicInput) (float64, string) {
 	if !solarProducing && (input.CarBattery3Cutoff <= 0 || input.Battery3SOC < input.CarBattery3Cutoff) {
 		return 0, "gated: no production"
 	}
-	headroom := dynamicTransferLimit - input.Solar1Power - input.Inverter1to9Power
+	headroom := dynamicTransferLimit - (input.PowerhouseNetPower + input.MultiplusACPower)
 	if headroom < carChargingMinHeadroom {
 		return 0, "gated: headroom"
 	}
@@ -217,7 +218,8 @@ func calculateDynamicSetpoint(
 	state.houseLoadMax.Update(input.HouseLoad)
 	state.houseSideGeneration.Update(input.Solar1Power + input.Inverter1to9Power)
 
-	headroom := dynamicTransferLimit - input.Solar1Power - input.Inverter1to9Power
+	busLoad := input.PowerhouseNetPower + input.MultiplusACPower
+	headroom := dynamicTransferLimit - busLoad
 
 	// Safety: high frequency or grid-off with high Powerwall → no discharge.
 	// Charging is still allowed so excess generation is absorbed rather than wasted.
@@ -225,7 +227,7 @@ func calculateDynamicSetpoint(
 
 	intent, priority, carStatus := intentConstraint(input, state)
 
-	tl    := transferLimitConstraint(input.Solar1Power, input.Inverter1to9Power)
+	tl    := transferLimitConstraint(busLoad)
 	sfty  := safetyConstraint(isSafety)
 	cclOF := cclOverflowConstraint(input.Solar3BatteryCurrent, input.Solar4BatteryCurrent, input.Battery3CCL, input.Battery3Voltage)
 	if isSafety {
