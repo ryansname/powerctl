@@ -108,8 +108,10 @@ func clamp(v, lo, hi float64) float64 { return max(lo, min(hi, v)) }
 // transferLimitConstraint returns the range constraint enforcing the 4.5kW transfer limit.
 // When over the limit, MaxDischarge=0 and MinCharge>0 (must absorb excess).
 // When under the limit, MaxDischarge is capped to available headroom.
-// solar1 and inverter1to9 are passed separately (not powerhouse_net_power) so that
-// the Multiplus's own output doesn't reduce the headroom available to itself.
+//
+// NOTE: use solar1+inverter1to9, NOT sensor.powerhouse_net_power. The net power sensor
+// includes MP2's own output, so using it makes MP2's discharge reduce the headroom
+// available to itself — a circular dependency that caps discharge too aggressively.
 func transferLimitConstraint(solar1, inverter1to9 float64) DynamicModeConstraint {
 	headroom := dynamicTransferLimit - solar1 - inverter1to9
 	if headroom < 0 {
