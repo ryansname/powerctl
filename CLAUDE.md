@@ -61,8 +61,9 @@ Goroutine-based with message passing via channels. All source code in `src/`.
    - **Priority 2 – Default Supply**: discharge to fill gap between house load max and total generation
    - **Priority 3 – Charge from Surplus**: charge from powerhouse-side excess
    - **4.5kW hard transfer limit**: `solar_1 + inverter_1_9 + multiplus_discharge ≤ 4500W`; forces charge when exceeded
+   - **CCL overflow**: when battery-side solar (Solar 3+4 amps) exceeds `CCL − 5A`, forces Multiplus to discharge the excess as watts (`overflowA × voltage`), preventing MPPT throttling. Stateless and instantaneous — no ramp. Safety and transfer-limit constraints take precedence.
    - **Car Charging** (`powerctl_car_charging` switch, auto mode only): overrides auto setpoint with max Multiplus discharge (clamped by the 4.5kW transfer / 3kW discharge limits) while gated on Battery 3 SOC ≥ `powerctl_car_charging_battery3_cutoff`, transfer headroom ≥ 1.5kW, and solar producing OR B3 above cutoff. Auto-disables when Battery 3 drops below cutoff or `binary_sensor.plb942_charging` transitions ON→OFF.
-   - **Safety**: high frequency or grid off + Powerwall >90% suppresses discharge (takes precedence over car charging)
+   - **Safety**: high frequency or grid off + Powerwall >90% suppresses discharge (takes precedence over car charging and CCL overflow)
 
 10. **debugAggregatorWorker** (src/debug_aggregator_worker.go) - Receives `BaselineDebugInfo` and `DynamicDebugInfo`, renders a combined side-by-side GFM markdown table, publishes to `input_text.powerhouse_control_debug` on change only.
 

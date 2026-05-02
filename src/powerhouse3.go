@@ -21,8 +21,6 @@ const (
 	TopicCerboBatteryCurrent    = "powerhouse_3/N/system/0/Dc/Battery/Current"
 	TopicCerboBatteryCCL        = "powerhouse_3/N/battery/512/Info/MaxChargeCurrent"
 
-	TopicSolar3MpptMode = "homeassistant/sensor/solar_3_mppt_mode/state"
-	TopicSolar4MpptMode = "homeassistant/sensor/solar_4_mppt_mode/state"
 )
 
 func cerboKeepaliveWorker(ctx context.Context, sender *MQTTSender) {

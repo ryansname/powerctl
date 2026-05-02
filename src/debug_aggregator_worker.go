@@ -48,8 +48,8 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 	if dynamic.CarCharging != "" {
 		rightRows = append(rightRows, [2]string{"Car", dynamic.CarCharging})
 	}
-	if dynamic.ThrottleDischargeW > 0 {
-		rightRows = append(rightRows, [2]string{"Throttle", fmt.Sprintf("%.0fW", dynamic.ThrottleDischargeW)})
+	if dynamic.CCLOverflowW > 0 {
+		rightRows = append(rightRows, [2]string{"CCL+", fmt.Sprintf("%.0fW", dynamic.CCLOverflowW)})
 	}
 
 	n := max(len(leftRows), len(rightRows))

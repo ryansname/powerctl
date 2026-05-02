@@ -26,16 +26,9 @@ func makeBaseDynamicInput() DynamicInput {
 		ACFreqP100_5Min:    50.0,
 		PowerwallSOC:       50.0,
 		DynamicAutoEnabled: true,
-		Battery3CCL:     150.0,
-		Battery3Voltage: 53.0,
+		Battery3CCL:        150.0,
+		Battery3Voltage:    53.0,
 	}
-}
-
-// stableThrottle pins the throttle discharge offset so it won't step on the first tick.
-func stableThrottle(state *DynamicInverterState, offsetW float64) {
-	state.throttleDischargeW = offsetW
-	state.throttleTracking = offsetW > 0
-	state.throttleRampTicks = 0
 }
 
 // --- transferLimitConstraint + DynamicModeConstraint.Setpoint tests ---
@@ -87,6 +80,72 @@ func TestTransferLimit_ChargeCapAt3500(t *testing.T) {
 	tl := transferLimitConstraint(0, 0)
 	got := DynamicModeConstraint{Target: 5000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(tl).Setpoint()
 	assert.InDelta(t, 3500.0, got, 0.001)
+}
+
+// --- cclOverflowConstraint tests ---
+
+func TestCCLOverflow_NoExcess_NoConstraint(t *testing.T) {
+	// Solar=30A, CCL=400A → no overflow → charge intent passes through unchanged
+	c := cclOverflowConstraint(15, 15, 400, 53)
+	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
+	got := DynamicModeConstraint{Target: 2000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(c).Setpoint()
+	assert.InDelta(t, 2000.0, got, 0.001)
+}
+
+func TestCCLOverflow_JustOnExcess_SwitchesChargeToDischarge(t *testing.T) {
+	// Solar=80A, CCL=80A → overflowA=5A → overflowW=5*53=265W
+	// Charge intent +500W must be overridden to -265W discharge
+	c := cclOverflowConstraint(40, 40, 80, 53)
+	assert.InDelta(t, 265.0, c.MinDischarge, 0.001)
+	got := DynamicModeConstraint{Target: 500, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(c).Setpoint()
+	assert.InDelta(t, -265.0, got, 0.001)
+}
+
+func TestCCLOverflow_HigherDemandPassesThrough(t *testing.T) {
+	// Solar=80A, CCL=80A → MinDischarge=265W (-265W floor)
+	// House supply intent -1000W is more discharge than required → passes through
+	c := cclOverflowConstraint(40, 40, 80, 53)
+	got := DynamicModeConstraint{Target: -1000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(c).Setpoint()
+	assert.InDelta(t, -1000.0, got, 0.001)
+}
+
+func TestCCLOverflow_Safety_NoForcedDischarge(t *testing.T) {
+	// Safety blocks discharge (MaxDischarge=0). CCL overflow wants discharge.
+	// Transfer limit wins: lo=0, hi=-265 → lo>hi → clamp returns lo=0 (charge, not discharge).
+	c := cclOverflowConstraint(40, 40, 80, 53) // MinDischarge=265W
+	sfty := safetyConstraint(true)              // MaxDischarge=0
+	got := DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(sfty).add(c).Setpoint()
+	assert.InDelta(t, 0.0, got, 0.001)
+}
+
+func TestCCLOverflow_TransferLimitOver_ChargeWins(t *testing.T) {
+	// Transfer limit exceeded (MinCharge=500, MaxDischarge=0) AND CCL overflow (MinDischarge=265).
+	// lo=500, hi=-265 → lo>hi → clamp returns lo=500 (charge wins, bus safety takes priority).
+	tl := transferLimitConstraint(2000, 3000) // headroom=-500 → MinCharge=500
+	c := cclOverflowConstraint(40, 40, 80, 53) // MinDischarge=265W
+	got := DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(tl).add(c).Setpoint()
+	assert.InDelta(t, 500.0, got, 0.001)
+}
+
+func TestCCLOverflow_LargeOverflow_CapsAtMaxDischarge(t *testing.T) {
+	// Solar=200A, CCL=10A → overflowA=195A → overflowW=10335W → capped at 3000W
+	c := cclOverflowConstraint(100, 100, 10, 53)
+	assert.InDelta(t, dynamicMaxDischargeW, c.MinDischarge, 0.001)
+	got := DynamicModeConstraint{Target: 0, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(c).Setpoint()
+	assert.InDelta(t, -3000.0, got, 0.001)
+}
+
+func TestCCLOverflow_ZeroVoltage_NoConstraint(t *testing.T) {
+	// Voltage not yet available (0V at startup) → overflowW=0 → no constraint
+	c := cclOverflowConstraint(40, 40, 80, 0)
+	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
+}
+
+func TestCCLOverflow_ExactlyAtTarget_NoConstraint(t *testing.T) {
+	// Solar = CCL - headroomA exactly → overflowA=0 → no constraint
+	// CCL=80A, headroom=5A → target=75A; solar3=37.5A+solar4=37.5A=75A
+	c := cclOverflowConstraint(37.5, 37.5, 80, 53)
+	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
 }
 
 // --- calculateDynamicSetpoint tests ---
@@ -222,6 +281,54 @@ func TestCalculateDynamic_ChargeFromSurplus_CapAt3500(t *testing.T) {
 	assert.InDelta(t, 3500.0, setpoint, 0.001)
 }
 
+// --- CCL overflow integration in calculateDynamicSetpoint ---
+
+func TestCalculateDynamic_CCLOverflow_SwitchesChargeToDischarge(t *testing.T) {
+	// Battery-side solar at CCL → must discharge to create headroom.
+	// Solar3=40A, Solar4=40A=80A total; CCL=80A → overflowA=5A → 265W discharge floor.
+	// House surplus intent would be +500W charge → overridden to -265W.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 500
+	input.Solar1Power = 1000 // surplus → Charge intent
+	input.Solar3BatteryCurrent = 40
+	input.Solar4BatteryCurrent = 40
+	input.Battery3CCL = 80
+	input.Battery3Voltage = 53
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, -265.0, setpoint, 0.001)
+	assert.InDelta(t, 265.0, debug.CCLOverflowW, 0.001)
+}
+
+func TestCalculateDynamic_CCLOverflow_Safety_NoForcedDischarge(t *testing.T) {
+	// Safety active + CCL overflow: safety (MaxDischarge=0) wins → setpoint=0.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.ACFreqP100_5Min = 53.0
+	input.Solar3BatteryCurrent = 40
+	input.Solar4BatteryCurrent = 40
+	input.Battery3CCL = 80
+	input.Battery3Voltage = 53
+
+	setpoint, _ := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 0.0, setpoint, 0.001)
+}
+
+func TestCalculateDynamic_CCLOverflow_HigherDemandWins(t *testing.T) {
+	// House needs 2000W, CCL overflow floor is only 265W → demand (-2000W) wins.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 2000
+	input.Solar3BatteryCurrent = 40
+	input.Solar4BatteryCurrent = 40
+	input.Battery3CCL = 80
+	input.Battery3Voltage = 53
+
+	setpoint, _ := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, -2000.0, setpoint, 0.001)
+}
+
 // --- regression tests ---
 
 func TestConstraint_OverLimit_DesiredChargeTakesPrecedence(t *testing.T) {
@@ -260,249 +367,42 @@ func TestCalculateDynamic_Headroom(t *testing.T) {
 	assert.InDelta(t, input.Battery3SOC, debug.Battery3SOC, 0.001)
 }
 
-// --- isThrottling unit tests ---
+// TestDynamicOverflowScenario is a scratch test for manual exploration.
+// Edit the values under "Scenario inputs" and run:
+//
+//	nix-shell --run 'go test ./src/... -run TestDynamicOverflowScenario -v'
+//
+// Each row shows one tick (≈1 second of real time). No ramp — the CCL overflow
+// constraint is instantaneous and stateless, so convergence happens immediately.
+func TestDynamicOverflowScenario(t *testing.T) {
+	// --- Scenario inputs ---
+	solar3CurrentA := 40.0  // A  (MPPT 3 battery-side current)
+	solar4CurrentA := 40.0  // A  (MPPT 4 battery-side current)
+	battery3CCL    := 80.0  // A  (BMS charge current limit)
+	battery3Voltage := 53.0 // V
+	houseLoad      := 500.0 // W  (house consumption)
+	solar1Power    := 1000.0 // W  (solar 1, house-side)
+	inverter1to9   := 0.0   // W  (inverters 1–9 output, house-side)
+	// ----------------------
 
-func TestIsThrottling_MpptMode2_NotThrottling(t *testing.T) {
-	// Both MPPTs in MPPT mode (mode 2) — freely tracking max power, not BMS-throttled.
-	input := makeBaseDynamicInput()
-	input.Solar3MpptMode = 2
-	input.Solar4MpptMode = 2
-	input.Solar3BatteryCurrent = 40
-	input.Solar4BatteryCurrent = 40
-	assert.False(t, isThrottling(input))
-}
-
-func TestIsThrottling_MpptAtHardwareCeiling_NotThrottling(t *testing.T) {
-	// Both MPPTs in mode 1 at 45A (and within the 2A buffer) — hardware ceiling, not BMS throttling.
-	input := makeBaseDynamicInput()
-	input.Solar3MpptMode = 1
-	input.Solar4MpptMode = 1
-	input.Solar3BatteryCurrent = 45
-	input.Solar4BatteryCurrent = 44 // within 2A buffer
-	assert.False(t, isThrottling(input))
-}
-
-func TestIsThrottling_MpptMode1BelowHardwareCeiling_Throttling(t *testing.T) {
-	// Both MPPTs in mode 1 at below 45A — BMS is holding them back.
-	input := makeBaseDynamicInput()
-	input.Solar3MpptMode = 1
-	input.Solar4MpptMode = 1
-	input.Solar3BatteryCurrent = 38
-	input.Solar4BatteryCurrent = 40
-	assert.True(t, isThrottling(input))
-}
-
-func TestIsThrottling_OneMpptThrottled_ReturnsTrue(t *testing.T) {
-	// Only one MPPT throttled (e.g. Multiplus charging pushes one over CCL limit).
-	input := makeBaseDynamicInput()
-	input.Solar3MpptMode = 1
-	input.Solar3BatteryCurrent = 38 // BMS-throttled
-	input.Solar4MpptMode = 2
-	input.Solar4BatteryCurrent = 45 // free MPPT
-	assert.True(t, isThrottling(input))
-}
-
-func TestIsThrottling_AllOff_NotThrottling(t *testing.T) {
-	// Night — both MPPTs off (mode 0).
-	input := makeBaseDynamicInput()
-	input.Solar3MpptMode = 0
-	input.Solar4MpptMode = 0
-	input.Solar3BatteryCurrent = 0
-	input.Solar4BatteryCurrent = 0
-	assert.False(t, isThrottling(input))
-}
-
-// --- throttle state machine tests ---
-
-// tickN calls calculateDynamicSetpoint n times with the given input and returns the last debug.
-func tickN(n int, input DynamicInput, state *DynamicInverterState) DynamicDebugInfo {
-	var debug DynamicDebugInfo
-	for range n {
-		_, debug = calculateDynamicSetpoint(input, state)
-	}
-	return debug
-}
-
-// throttlingInput returns a DynamicInput with both MPPTs in mode 1 below the hardware ceiling.
-func throttlingInput() DynamicInput {
-	input := makeBaseDynamicInput()
-	input.Solar3MpptMode = 1
-	input.Solar4MpptMode = 1
-	input.Solar3BatteryCurrent = 38
-	input.Solar4BatteryCurrent = 40
-	return input
-}
-
-func TestThrottle_MpptAtHardwareCeiling_NoBatteryThrottle(t *testing.T) {
-	// Bug fix: MPPTs at their own 45A ceiling (mode 1 at 45A) must NOT trigger the ramp.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
-	input.Solar3MpptMode = 1
-	input.Solar4MpptMode = 1
-	input.Solar3BatteryCurrent = 45
-	input.Solar4BatteryCurrent = 45
+	input.Solar3BatteryCurrent = solar3CurrentA
+	input.Solar4BatteryCurrent = solar4CurrentA
+	input.Battery3CCL = battery3CCL
+	input.Battery3Voltage = battery3Voltage
+	input.HouseLoad = houseLoad
+	input.Solar1Power = solar1Power
+	input.Inverter1to9Power = inverter1to9
 
-	debug := tickN(20, input, state)
-	assert.InDelta(t, 0.0, debug.ThrottleDischargeW, 0.001)
-	assert.False(t, debug.ThrottleActive)
-}
+	overflowA := (solar3CurrentA + solar4CurrentA) - (battery3CCL - cclOverflowHeadroomA)
+	overflowW := max(0, overflowA) * battery3Voltage
 
-func TestThrottle_RealThrottle_MultiplusInverting(t *testing.T) {
-	// MPPTs in mode 1 below ceiling while Multiplus inverting — offset ramps up.
-	state := makeTestDynamicState()
-	input := throttlingInput()
-	input.MultiplusACPower = -3000
+	t.Logf("Inputs: solar3=%.0fA  solar4=%.0fA  CCL=%.0fA  V=%.1fV", solar3CurrentA, solar4CurrentA, battery3CCL, battery3Voltage)
+	t.Logf("        house=%.0fW  solar1=%.0fW  inv1-9=%.0fW", houseLoad, solar1Power, inverter1to9)
+	t.Logf("overflowA=%.1fA  overflowW=%.0fW (instantaneous, no ramp)", overflowA, overflowW)
+	t.Logf("%-10s  %-10s  %-12s", "setpoint W", "cclOverflW", "priority")
 
-	debug1 := tickN(throttleRampIntervalS, input, state)
-	assert.InDelta(t, throttleRampStepW, debug1.ThrottleDischargeW, 0.001)
-	assert.True(t, debug1.ThrottleActive)
-
-	debug2 := tickN(throttleRampIntervalS, input, state)
-	assert.InDelta(t, 2*throttleRampStepW, debug2.ThrottleDischargeW, 0.001)
-}
-
-func TestThrottle_RealThrottle_MultiplusCharging(t *testing.T) {
-	// MPPTs in mode 1 below ceiling while Multiplus charging from AC — ramp still fires.
-	state := makeTestDynamicState()
-	input := throttlingInput()
-	input.MultiplusACPower = 2000
-
-	debug := tickN(throttleRampIntervalS, input, state)
-	assert.InDelta(t, throttleRampStepW, debug.ThrottleDischargeW, 0.001)
-}
-
-func TestThrottle_RampClampAtMaxDischarge(t *testing.T) {
-	state := makeTestDynamicState()
-	state.throttleDischargeW = dynamicMaxDischargeW - throttleRampStepW + 1
-	state.throttleRampTicks = throttleRampIntervalS - 1
-	input := throttlingInput()
-
-	_, debug := calculateDynamicSetpoint(input, state)
-	assert.InDelta(t, dynamicMaxDischargeW, debug.ThrottleDischargeW, 0.001)
-}
-
-func TestThrottle_TrackingPhase_SlewsToTarget(t *testing.T) {
-	// After ramping, throttle clears. Offset should slew DOWN to the CCL−5A target.
-	// excessA = 75+75 - (150-5) = 5A → targetW = 5*53 = 265W
-	// Steps to converge from 500W: 500→450→400→350→300→265 (5 steps × 10 ticks = 50 ticks)
-	state := makeTestDynamicState()
-	state.throttleDischargeW = 500
-	state.throttleRampTicks = 0
-	input := makeBaseDynamicInput()
-	input.Battery3ChargeCurrent = 130 // clear of CCL+hysteresis
-	input.Solar3BatteryCurrent = 75
-	input.Solar4BatteryCurrent = 75
-	input.Battery3Voltage = 53
-
-	// After one step interval: max(265, 500-50) = 450
-	debug := tickN(throttleRampIntervalS, input, state)
-	assert.InDelta(t, 450.0, debug.ThrottleDischargeW, 0.001)
-	assert.True(t, state.throttleTracking)
-
-	// After 4 more steps (40 more ticks): 450→400→350→300→265
-	debug = tickN(4*throttleRampIntervalS, input, state)
-	assert.InDelta(t, 265.0, debug.ThrottleDischargeW, 0.001)
-}
-
-func TestThrottle_TrackingPhase_SolarDrops_DecaysToZero(t *testing.T) {
-	// Solar drops significantly → excessA < 0 → targetW = 0 → offset decays to 0
-	state := makeTestDynamicState()
-	state.throttleDischargeW = 200
-	state.throttleRampTicks = 0
-	input := makeBaseDynamicInput()
-	input.Battery3ChargeCurrent = 80 // well clear of CCL
-	input.Solar3BatteryCurrent = 30
-	input.Solar4BatteryCurrent = 30 // excessA = 60 - 145 = -85 → targetW = 0
-
-	// After one step: max(0, 200-50) = 150
-	debug := tickN(throttleRampIntervalS, input, state)
-	assert.InDelta(t, 150.0, debug.ThrottleDischargeW, 0.001)
-
-	// After four total steps: 200→150→100→50→0
-	debug = tickN(3*throttleRampIntervalS, input, state)
-	assert.InDelta(t, 0.0, debug.ThrottleDischargeW, 0.001)
-	assert.False(t, state.throttleTracking)
-}
-
-func TestThrottle_CarCharging_SuppressesThrottle(t *testing.T) {
-	// When car charging is the priority, throttle offset must stay zero even if throttling.
-	state := makeTestDynamicState()
-	input := throttlingInput()
-	input.CarChargingEnabled = true
-	input.Battery3SOC = 90
-	input.CarBattery3Cutoff = 0 // no SOC cutoff
-	input.Solar1Power = 2000    // solarProducing=true so car charging gate passes
-
-	debug := tickN(20, input, state)
-	assert.InDelta(t, 0.0, debug.ThrottleDischargeW, 0.001)
-}
-
-func TestThrottle_Safety_AntiWindup_NoRamp(t *testing.T) {
-	// Safety (high freq) must suppress the throttle ramp even when throttling.
-	state := makeTestDynamicState()
-	input := throttlingInput()
-	input.ACFreqP100_5Min = 53.0
-
-	debug := tickN(20, input, state)
-	assert.InDelta(t, 0.0, debug.ThrottleDischargeW, 0.001)
-}
-
-func TestThrottle_ZeroHeadroom_AntiWindup_NoRamp(t *testing.T) {
-	// Zero headroom must suppress the throttle ramp.
-	state := makeTestDynamicState()
-	input := throttlingInput()
-	input.Solar1Power = 2000
-	input.Inverter1to9Power = 2500 // headroom = 0
-
-	debug := tickN(20, input, state)
-	assert.InDelta(t, 0.0, debug.ThrottleDischargeW, 0.001)
-}
-
-func TestThrottle_OffsetApplied_ReducesChargeIntent(t *testing.T) {
-	// Surplus 500W → charge intent +500W. After 200W offset: intent = 500-200 = 300W.
-	state := makeTestDynamicState()
-	stableThrottle(state, 200)
-	input := makeBaseDynamicInput()
-	input.HouseLoad = 1000
-	input.Solar1Power = 1500 // target = 1000-1500 = -500 → charge 500W
-
-	_, debug := calculateDynamicSetpoint(input, state)
-	assert.InDelta(t, 300.0, debug.Setpoint, 0.001)
-}
-
-func TestThrottle_OffsetApplied_IncreasesDischargeIntent(t *testing.T) {
-	// Supply 2000W discharge intent. After 500W offset: intent = -2000-500 = -2500W.
-	state := makeTestDynamicState()
-	stableThrottle(state, 500)
-	input := makeBaseDynamicInput()
-	input.HouseLoad = 2000
-	input.Solar1Power = 0
-
-	_, debug := calculateDynamicSetpoint(input, state)
-	assert.InDelta(t, -2500.0, debug.Setpoint, 0.001)
-}
-
-func TestThrottle_OffsetApplied_Safety_ClampsToZero(t *testing.T) {
-	// Even with throttle offset, safety (MaxDischarge=0) prevents discharge.
-	state := makeTestDynamicState()
-	stableThrottle(state, 1000)
-	input := makeBaseDynamicInput()
-	input.ACFreqP100_5Min = 53.0
-
-	_, debug := calculateDynamicSetpoint(input, state)
-	assert.InDelta(t, 0.0, debug.Setpoint, 0.001)
-	assert.True(t, debug.Safety)
-}
-
-func TestThrottle_TransferLimitStillAppliesWithOffset(t *testing.T) {
-	// stableThrottle 2000W; target=Supply(-1000); after offset=-3000; headroom=500 → setpoint=-500
-	state := makeTestDynamicState()
-	stableThrottle(state, 2000)
-	input := makeBaseDynamicInput()
-	input.HouseLoad = 3000
-	input.Solar1Power = 2000
-	input.Inverter1to9Power = 2000 // headroom = 500W
-
-	_, debug := calculateDynamicSetpoint(input, state)
-	assert.InDelta(t, -500.0, debug.Setpoint, 0.001)
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	t.Logf("%-10.0f  %-10.0f  %-12s", setpoint, debug.CCLOverflowW, debug.Priority)
 }
