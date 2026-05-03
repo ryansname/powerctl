@@ -28,7 +28,7 @@ func TestFormatCombinedDebug_Normal(t *testing.T) {
 	if !strings.Contains(out, "Default Supply") {
 		t.Error("expected Default Supply as mode when auto")
 	}
-	if !strings.Contains(out, "| B3") {
+	if !strings.Contains(out, "**B3**") {
 		t.Error("expected B3 section label in table body")
 	}
 	if strings.Count(out, "| B2") != 1 {
