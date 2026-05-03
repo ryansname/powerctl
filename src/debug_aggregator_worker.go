@@ -30,7 +30,7 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 	}
 
 	rows = append(rows, [2]string{"", ""})
-	rows = append(rows, [2]string{"B3", "value"})
+	rows = append(rows, [2]string{"**B3**", ""})
 
 	mode := modeManual
 	if dynamic.Auto {
@@ -52,7 +52,7 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 	}
 
 	var sb strings.Builder
-	sb.WriteString("| B2 | value |\n")
+	sb.WriteString("| B2 | Value |\n")
 	sb.WriteString("|---|---:|\n")
 	for _, r := range rows {
 		fmt.Fprintf(&sb, "| %s | %s |\n", r[0], r[1])
