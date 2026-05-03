@@ -340,6 +340,9 @@ func dynamicInverterControl(
 			carChargingActiveSeen = true
 
 			if input.DynamicAutoEnabled {
+				if autoSetpoint != lastSetpoint {
+					send(autoSetpoint)
+				}
 				lastSetpoint = autoSetpoint
 			} else {
 				lastSetpoint = input.MultiplusSetpointCmd
