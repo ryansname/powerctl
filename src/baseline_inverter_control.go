@@ -139,8 +139,8 @@ func selectBaselineMode(
 	maxB2 := maxInvertersForSOC(input.Battery2SOC, state.socLimit2)
 	selectedCount = min(selectedCount, maxB2)
 
-	// Powerhouse transfer limit — skipped when Battery 3 SOC < 85% so the Multiplus can absorb
-	if input.Battery3SOC >= 85.0 {
+	// Powerhouse transfer limit — skipped when Battery 3 SOC < 94% so the Multiplus can absorb
+	if input.Battery3SOC >= 94.0 {
 		limit := powerhouseTransferLimit(input.Solar1P90_15Min, config.MaxTransferPower)
 		limitCount := int(limit.Watts / config.WattsPerInverter)
 		if limitCount < 0 {
