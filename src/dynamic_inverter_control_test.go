@@ -178,8 +178,10 @@ func TestCalculateDynamic_Safety_GridOffHighPowerwall(t *testing.T) {
 func TestCalculateDynamic_Safety_HighFreq_AllowsForcedCharge(t *testing.T) {
 	// High freq + over transfer limit: safety blocks discharge but charge intent is preserved.
 	// Surplus=(2000+3000-1000)=4000 → desired=min(4000,3500)=3500; floor=500 → 3500 wins.
+	// SOC=50% (below charge limit) so the SOC limit doesn't interfere.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
+	input.Battery3SOC = 50
 	input.ACFreqP100_5Min = 53.0
 	input.Solar1Power = 2000
 	input.Inverter1to9Power = 3000
@@ -257,8 +259,10 @@ func TestCalculateDynamic_ChargeFromSurplus_SmallSurplus(t *testing.T) {
 func TestCalculateDynamic_ChargeFromSurplus_ForcedChargeByTransferLimit(t *testing.T) {
 	// headroom=-1500 → MinCharge=1500 (floor); surplus=6000 → desired=3500.
 	// desired(3500) ≥ floor(1500) → 3500 is preserved.
+	// SOC=50% (below charge limit) so the SOC limit doesn't interfere.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
+	input.Battery3SOC = 50
 	input.HouseLoad = 0
 	input.Solar1Power = 2000
 	input.Inverter1to9Power = 4000
@@ -270,8 +274,10 @@ func TestCalculateDynamic_ChargeFromSurplus_ForcedChargeByTransferLimit(t *testi
 }
 
 func TestCalculateDynamic_ChargeFromSurplus_CapAt3500(t *testing.T) {
+	// SOC=50% (below charge limit) so the 3500W cap from dynamicMaxChargeW is the active limit.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
+	input.Battery3SOC = 50
 	input.HouseLoad = 0
 	input.Solar1Power = 2000
 	input.Inverter1to9Power = 2000 // headroom = 500W
@@ -346,8 +352,10 @@ func TestConstraint_OverLimit_DesiredChargeTakesPrecedence(t *testing.T) {
 func TestCalculateDynamic_ChargeFromSurplus_OverLimitPreservesHigherCharge(t *testing.T) {
 	// Solar1=2000, Inverter1to9=3000 → headroom=-500 → floor=500W
 	// Surplus=5000W → desired=min(5000, 3500)=3500W → should not be replaced by floor.
+	// SOC=50% (below charge limit) so the SOC limit doesn't interfere.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
+	input.Battery3SOC = 50
 	input.HouseLoad = 0
 	input.Solar1Power = 2000
 	input.Inverter1to9Power = 3000
@@ -370,6 +378,105 @@ func TestCalculateDynamic_Headroom(t *testing.T) {
 	// headroom = 4500 - 1500 = 3000
 	assert.InDelta(t, 3000.0, debug.Headroom, 0.001)
 	assert.InDelta(t, input.Battery3SOC, debug.Battery3SOC, 0.001)
+}
+
+// --- b3SOCChargeLimit tests ---
+
+func TestB3SOCChargeLimit_BelowFull_NoLimit(t *testing.T) {
+	// SOC=50%: below b3ChargeLimitFullSOC (60%) → fraction=1 → full MaxCharge
+	c := b3SOCChargeLimit(50)
+	assert.InDelta(t, dynamicMaxChargeW, c.MaxCharge, 0.001)
+}
+
+func TestB3SOCChargeLimit_AtFull_NoLimit(t *testing.T) {
+	c := b3SOCChargeLimit(60)
+	assert.InDelta(t, dynamicMaxChargeW, c.MaxCharge, 0.001)
+}
+
+func TestB3SOCChargeLimit_Midpoint_HalfRate(t *testing.T) {
+	// SOC=72.5%: midpoint of 60→85 → fraction=0.5 → 1750W
+	c := b3SOCChargeLimit(72.5)
+	assert.InDelta(t, dynamicMaxChargeW*0.5, c.MaxCharge, 0.001)
+}
+
+func TestB3SOCChargeLimit_AtZero_NoCharge(t *testing.T) {
+	c := b3SOCChargeLimit(85)
+	assert.InDelta(t, 0.0, c.MaxCharge, 0.001)
+}
+
+func TestB3SOCChargeLimit_AboveZero_NoCharge(t *testing.T) {
+	c := b3SOCChargeLimit(90)
+	assert.InDelta(t, 0.0, c.MaxCharge, 0.001)
+}
+
+func TestCalculateDynamic_SOCLimit_SurplusCapped(t *testing.T) {
+	// SOC=72.5%: 50% limit (1750W). Surplus=2000W → charge intent=2000 → clamped to 1750.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.Battery3SOC = 72.5
+	input.HouseLoad = 0
+	input.Solar1Power = 2000
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.Equal(t, "Charge", debug.Priority)
+	assert.InDelta(t, 1750.0, setpoint, 0.001)
+	assert.InDelta(t, 1750.0, debug.B3ChargeMaxW, 0.001)
+}
+
+func TestCalculateDynamic_SOCLimit_Full_NoVoluntaryCharge(t *testing.T) {
+	// SOC=85%: MaxCharge=0. Surplus=2000W → charge intent blocked → 0W.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.Battery3SOC = 85
+	input.HouseLoad = 0
+	input.Solar1Power = 2000
+
+	setpoint, _ := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 0.0, setpoint, 0.001)
+}
+
+func TestCalculateDynamic_SOCLimit_Full_TransferLimitStillCharges(t *testing.T) {
+	// SOC=85% (MaxCharge=0) + over transfer limit (MinCharge=500, MaxDischarge=0).
+	// lo=MinCharge(500)-MaxDischarge(0)=500, hi=MaxCharge(0) → lo>hi → 500W charge.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.Battery3SOC = 85
+	input.HouseLoad = 0
+	input.Solar1Power = 2000
+	input.Inverter1to9Power = 3000
+	input.PowerhouseNetPower = 5000 // over 4500W limit by 500W
+
+	setpoint, _ := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 500.0, setpoint, 0.001)
+}
+
+func TestCalculateDynamic_SOCLimit_Full_SupplyUnaffected(t *testing.T) {
+	// SOC=85% but house load > generation → supply intent → discharge unaffected by MaxCharge cap.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.Battery3SOC = 85
+	input.HouseLoad = 2000
+	input.Solar1Power = 0
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.Equal(t, "Supply", debug.Priority)
+	assert.InDelta(t, -2000.0, setpoint, 0.001)
+}
+
+func TestCalculateDynamic_SOCLimit_Full_CCLOverflowUnaffected(t *testing.T) {
+	// SOC=85% + CCL overflow (MinDischarge=265W). MaxCharge=0 but discharge must still occur.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.Battery3SOC = 85
+	input.HouseLoad = 500
+	input.Solar1Power = 1000 // surplus → Charge intent (blocked by SOC limit)
+	input.Solar3BatteryCurrent = 40
+	input.Solar4BatteryCurrent = 40
+	input.Battery3CCL = 80
+	input.Battery3Voltage = 53
+
+	setpoint, _ := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, -265.0, setpoint, 0.001)
 }
 
 // TestDynamicOverflowScenario is a scratch test for manual exploration.

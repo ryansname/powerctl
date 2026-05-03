@@ -10,62 +10,52 @@ import (
 
 const modeManual = "Manual"
 
-// formatCombinedDebug renders baseline and dynamic debug info as a single side-by-side GFM table.
+// formatCombinedDebug renders baseline and dynamic debug info as a single two-column GFM table
+// with B2 rows at the top, a blank separator row, then B3 rows below.
 func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) string {
-	var leftRows [][2]string
-	var rightRows [][2]string
+	var rows [][2]string
 
 	if baseline.SafetyReason != "" {
-		leftRows = append(leftRows,
-			[2]string{"Safety", baseline.SafetyReason},
-			[2]string{"Freq", fmt.Sprintf("%.2f Hz", baseline.ACFreqCurrent)},
-			[2]string{"Freq (5m)", fmt.Sprintf("%.2f Hz", baseline.ACFreqP100)},
-			[2]string{"Powerwall", fmt.Sprintf("%.1f%%", baseline.PowerwallSOC)},
-		)
+		rows = append(rows, [2]string{"Safety", baseline.SafetyReason})
 	} else {
 		modes := make([]ModeState, len(baseline.Modes))
 		copy(modes, baseline.Modes)
 		sort.Slice(modes, func(i, j int) bool { return modes[i].Watts > modes[j].Watts })
-		for _, m := range modes {
-			if m.Watts != 0 {
-				leftRows = append(leftRows, [2]string{m.Name, fmt.Sprintf("%.0f", m.Watts)})
-			}
+		if len(modes) > 0 && modes[0].Watts != 0 {
+			rows = append(rows, [2]string{modes[0].Name, fmt.Sprintf("%.0f", modes[0].Watts)})
 		}
 		if baseline.Battery2LowVoltage {
-			leftRows = append(leftRows, [2]string{"Low Voltage", fmt.Sprintf("%d @ %.2fV", baseline.Battery2VoltageMaxInv, baseline.Battery2VoltageMin)})
+			rows = append(rows, [2]string{"Low Voltage", fmt.Sprintf("%d @ %.2fV", baseline.Battery2VoltageMaxInv, baseline.Battery2VoltageMin)})
 		}
 	}
+
+	rows = append(rows, [2]string{"", ""})
+	rows = append(rows, [2]string{"B3", "value"})
 
 	mode := modeManual
 	if dynamic.Auto {
 		mode = dynamic.Priority
 	}
-	rightRows = [][2]string{
-		{"Mode", mode},
-		{"Setpoint", fmt.Sprintf("%.0fW", dynamic.Setpoint)},
-		{"Headroom", fmt.Sprintf("%.0fW", dynamic.Headroom)},
-	}
+	rows = append(rows,
+		[2]string{"Mode", mode},
+		[2]string{"Setpoint", fmt.Sprintf("%.0fW", dynamic.Setpoint)},
+		[2]string{"Headroom", fmt.Sprintf("%.0fW", dynamic.Headroom)},
+	)
 	if dynamic.CarCharging != "" {
-		rightRows = append(rightRows, [2]string{"Car", dynamic.CarCharging})
+		rows = append(rows, [2]string{"Car", dynamic.CarCharging})
 	}
 	if dynamic.CCLOverflowW > 0 {
-		rightRows = append(rightRows, [2]string{"CCL+", fmt.Sprintf("%.0fW", dynamic.CCLOverflowW)})
+		rows = append(rows, [2]string{"CCL+", fmt.Sprintf("%.0fW", dynamic.CCLOverflowW)})
+	}
+	if dynamic.B3ChargeMaxW < dynamicMaxChargeW {
+		rows = append(rows, [2]string{"B3 Limit", fmt.Sprintf("%.0fW", dynamic.B3ChargeMaxW)})
 	}
 
-	n := max(len(leftRows), len(rightRows))
 	var sb strings.Builder
-	sb.WriteString("| B2 | Watts |   | B3 | Value |\n")
-	sb.WriteString("|---------|------:|---|---------|------:|\n")
-	for i := range n {
-		var l [2]string
-		var r [2]string
-		if i < len(leftRows) {
-			l = leftRows[i]
-		}
-		if i < len(rightRows) {
-			r = rightRows[i]
-		}
-		fmt.Fprintf(&sb, "| %s | %s |   | %s | %s |\n", l[0], l[1], r[0], r[1])
+	sb.WriteString("| B2 | value |\n")
+	sb.WriteString("|---|---:|\n")
+	for _, r := range rows {
+		fmt.Fprintf(&sb, "| %s | %s |\n", r[0], r[1])
 	}
 	return sb.String()
 }

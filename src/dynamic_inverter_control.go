@@ -30,6 +30,12 @@ const (
 	// carChargingMinHeadroom requires at least this much transfer-limit headroom to engage.
 	carChargingMinHeadroom = 1500.0
 
+	// b3ChargeLimitFullSOC / b3ChargeLimitZeroSOC define the SOC window over which voluntary
+	// B3 charging is tapered. Below Full, the Multiplus may charge at full rate. Above Zero,
+	// MaxCharge is 0 so only transfer-limit-forced absorption still occurs.
+	b3ChargeLimitFullSOC = 60.0
+	b3ChargeLimitZeroSOC = 85.0
+
 	// cclOverflowHeadroomA is the target margin below CCL (in amps) that the Multiplus
 	// maintains by discharging when solar pushes battery current above CCL - margin.
 	cclOverflowHeadroomA = 5.0
@@ -58,20 +64,24 @@ type DynamicDebugInfo struct {
 	Safety       bool
 	CarCharging  string  // "" = disabled, "active", or gate reason (e.g. "gated: soc")
 	CCLOverflowW float64 // watts the CCL-overflow constraint requires as minimum discharge
+	B3ChargeMaxW float64 // max charge W from SOC lerp (dynamicMaxChargeW when unrestricted)
 }
 
 // DynamicModeConstraint encodes a mode's desired setpoint and its allowed range.
 // Negative setpoint = discharge; positive = charge.
-// Constraint-only modes (TransferLimit, Safety, CCLOverflow) leave Target=0 (no preference).
+// Constraint-only modes (TransferLimit, Safety, CCLOverflow, SOCChargeLimit) leave Target=0.
 // Intent modes (Supply, Charge, CarCharging) set Target to their desired value.
 // Combine with add(); call Setpoint() to resolve.
 //
 // Invariant: at most one mode in a chain has a non-zero Target.
 // intentConstraint enforces mutual exclusivity before building the chain.
 //
-// When both MinCharge>0 (transfer limit) and MinDischarge>0 (CCL overflow) are present
-// after composing, lo > hi; clamp returns lo (charge wins). This is intentional: absorbing
-// excess bus power takes priority over relieving solar throttling.
+// Tie-break when lo > hi: clamp(v, lo, hi) returns lo (the lower bound) when lo > hi.
+// In Setpoint(): lo = MinCharge - MaxDischarge, hi = MaxCharge (reduced by MinDischarge).
+// When the transfer limit is over capacity it sets MinCharge=500 and MaxDischarge=0,
+// making lo=500. If the SOC limit simultaneously caps MaxCharge=0, hi=0 and lo(500) > hi(0) →
+// Setpoint returns 500W charge. Transfer-limit forced absorption always wins over MaxCharge caps,
+// which is correct: the bus needs to shed that power regardless of B3's SOC.
 type DynamicModeConstraint struct {
 	Target       float64 // signed desired setpoint; 0 = no preference
 	MinCharge    float64 // floor: must charge at least this much (positive; over-limit case)
@@ -148,6 +158,18 @@ func cclOverflowConstraint(solar3A, solar4A, ccl, voltage float64) DynamicModeCo
 		MinDischarge: min(overflowW, dynamicMaxDischargeW),
 		MaxDischarge: dynamicMaxDischargeW,
 		MaxCharge:    dynamicMaxChargeW,
+	}
+}
+
+// b3SOCChargeLimit tapers MaxCharge linearly from dynamicMaxChargeW at b3ChargeLimitFullSOC
+// to 0W at b3ChargeLimitZeroSOC. This suppresses voluntary charging as B3 approaches full
+// while leaving transfer-limit forced absorption unaffected (MinCharge beats MaxCharge via
+// the lo>hi tie-break — see DynamicModeConstraint comment).
+func b3SOCChargeLimit(soc float64) DynamicModeConstraint {
+	fraction := clamp((b3ChargeLimitZeroSOC-soc)/(b3ChargeLimitZeroSOC-b3ChargeLimitFullSOC), 0, 1)
+	return DynamicModeConstraint{
+		MaxDischarge: dynamicMaxDischargeW,
+		MaxCharge:    dynamicMaxChargeW * fraction,
 	}
 }
 
@@ -235,8 +257,10 @@ func calculateDynamicSetpoint(
 	}
 
 	// Compose: intent (single non-zero Target) → hard range constraints (Target=0).
-	// sfty and tl narrow the allowed range; cclOF enforces a minimum discharge floor.
-	setpoint := intent.add(sfty).add(tl).add(cclOF).Setpoint()
+	// sfty and tl narrow the allowed range; cclOF enforces a minimum discharge floor;
+	// socLimit tapers MaxCharge as B3 fills (transfer-limit MinCharge still wins via lo>hi).
+	socLimit := b3SOCChargeLimit(input.Battery3SOC)
+	setpoint := intent.add(sfty).add(tl).add(cclOF).add(socLimit).Setpoint()
 
 	return setpoint, DynamicDebugInfo{
 		Priority:     priority,
@@ -246,6 +270,7 @@ func calculateDynamicSetpoint(
 		Safety:       isSafety,
 		CarCharging:  carStatus,
 		CCLOverflowW: cclOF.MinDischarge,
+		B3ChargeMaxW: socLimit.MaxCharge,
 	}
 }
 

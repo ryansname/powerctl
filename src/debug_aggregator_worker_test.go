@@ -28,9 +28,11 @@ func TestFormatCombinedDebug_Normal(t *testing.T) {
 	if !strings.Contains(out, "Default Supply") {
 		t.Error("expected Default Supply as mode when auto")
 	}
-	// Both sections in one table (no second header row)
+	if !strings.Contains(out, "| B3") {
+		t.Error("expected B3 section label in table body")
+	}
 	if strings.Count(out, "| B2") != 1 {
-		t.Error("expected single table header")
+		t.Error("expected single B2 header")
 	}
 }
 
