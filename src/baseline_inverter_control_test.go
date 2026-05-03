@@ -205,7 +205,7 @@ func TestSelectBaselineMode_TransferLimitApplied(t *testing.T) {
 	input := makeBaselineInput()
 	input.Battery2ChargeState = floatChargingState
 	input.Battery2SOC = 100.0      // Overflow → 3 inverters desired
-	input.Battery3SOC = 90.0       // ≥85% → transfer limit applies
+	input.Battery3SOC = 100.0       // transfer limit applies
 	input.Solar1P90_15Min = 4500.0 // limit = 5000-4500 = 500W → int(500/255) = 1
 
 	count, _ := selectBaselineMode(input, config, state)
