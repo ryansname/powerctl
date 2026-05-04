@@ -259,8 +259,13 @@ func calculateDynamicSetpoint(
 	// Compose: intent (single non-zero Target) → hard range constraints (Target=0).
 	// sfty and tl narrow the allowed range; cclOF enforces a minimum discharge floor;
 	// socLimit tapers MaxCharge as B3 fills (transfer-limit MinCharge still wins via lo>hi).
-	socLimit := b3SOCChargeLimit(input.Battery3SOC)
-	setpoint := intent.add(sfty).add(tl).add(cclOF).add(socLimit).Setpoint()
+	// phChargeLimit prevents charging from drawing power through the cable from the house side.
+	socLimit     := b3SOCChargeLimit(input.Battery3SOC)
+	phChargeLimit := DynamicModeConstraint{
+		MaxDischarge: dynamicMaxDischargeW,
+		MaxCharge:    max(0, input.Solar1Power+input.Inverter1to9Power),
+	}
+	setpoint := intent.add(sfty).add(tl).add(cclOF).add(socLimit).add(phChargeLimit).Setpoint()
 
 	return setpoint, DynamicDebugInfo{
 		Priority:     priority,
