@@ -60,8 +60,8 @@ type ForecastExcessResult struct {
 // ForecastExcessState tracks per-battery state for forecast excess inverter mode
 type ForecastExcessState struct {
 	currentTargetWatts    float64
-	lastActiveDate        time.Time              // For daily reset (zero value triggers reset on startup)
-	lastForecastRemaining float64                // For caching (only recalculate when forecast changes)
+	lastActiveDate        time.Time // For daily reset (zero value triggers reset on startup)
+	lastForecastRemaining float64   // For caching (only recalculate when forecast changes)
 	cachedResult          ForecastExcessResult
 
 	// Debug values from last calculation (published to HA sensors)

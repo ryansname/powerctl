@@ -16,7 +16,7 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 	var rows [][2]string
 
 	if baseline.SafetyReason != "" {
-		rows = append(rows, [2]string{"Safety", baseline.SafetyReason})
+		rows = append(rows, [2]string{modeSafety, baseline.SafetyReason})
 	} else {
 		modes := make([]ModeState, len(baseline.Modes))
 		copy(modes, baseline.Modes)
@@ -77,7 +77,7 @@ func debugAggregatorWorker(
 		if output == lastOutput {
 			return
 		}
-		sender.CallService("input_text", "set_value", "input_text.powerhouse_control_debug", map[string]any{"value": output})
+		sender.CallService("input_text", "set_value", "input_text.powerhouse_control_debug", map[string]any{haServiceValueKey: output})
 		lastOutput = output
 	}
 

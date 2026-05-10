@@ -25,17 +25,23 @@ const (
 	P100 = 100
 )
 
+const (
+	topicHouseLoadPower2 = "homeassistant/sensor/home_sweet_home_load_power_2/state"
+	topicACFrequency     = "homeassistant/sensor/lounge_ac_frequency/state"
+	topicSolar2ACPower   = "homeassistant/sensor/primo_5_0_ac_power/state"
+)
+
 // Topics that report in kW or kWh and need conversion to W or Wh (multiply by 1000)
 // This centralizes unit conversion so downstream workers always see W and Wh
 var kiloToBaseUnitTopics = map[string]bool{
 	// Power sensors (kW → W)
 	"homeassistant/sensor/home_sweet_home_battery_power_2/state": true,
 	"homeassistant/sensor/home_sweet_home_site_power/state":      true,
-	"homeassistant/sensor/home_sweet_home_load_power_2/state":    true,
+	topicHouseLoadPower2: true,
 	// Energy sensors (kWh → Wh)
-	"homeassistant/sensor/home_sweet_home_tg118095000r1a_battery_remaining/state":  true,
-	"homeassistant/sensor/solcast_pv_forecast_forecast_today/state":                true,
-	"homeassistant/sensor/solcast_pv_forecast_forecast_remaining_today/state":      true,
+	"homeassistant/sensor/home_sweet_home_tg118095000r1a_battery_remaining/state": true,
+	"homeassistant/sensor/solcast_pv_forecast_forecast_today/state":               true,
+	"homeassistant/sensor/solcast_pv_forecast_forecast_remaining_today/state":     true,
 }
 
 // PercentileSpec defines a specific percentile and time window combination
@@ -61,7 +67,7 @@ var requiredPercentiles = map[string][]PercentileSpec{
 	TopicBattery2Energy: {{50, 5 * time.Minute}},
 
 	// AC frequency - used by baseline/dynamic controllers for high frequency protection (P100._5)
-	"homeassistant/sensor/lounge_ac_frequency/state": {{100, 5 * time.Minute}},
+	topicACFrequency: {{100, 5 * time.Minute}},
 }
 
 // Reading represents a timestamped sensor reading
@@ -272,14 +278,14 @@ var selfPublishedFloatTopics = []string{
 	TopicBattery3Energy,
 	"homeassistant/sensor/battery_3_state_of_charge/state",
 	// Solar 2 inverter goes unavailable at night; default to 0 so startup isn't blocked
-	"homeassistant/sensor/primo_5_0_ac_power/state",
+	topicSolar2ACPower,
 	// Cerbo GX SOC topic — may not arrive until Cerbo keepalive is acknowledged
 	TopicCerboBatterySOC,
 }
 
 // String topics that should be initialized to a default if not received within timeout
 var selfPublishedStringTopics = map[string]string{
-	TopicMinerWorkmode:          WorkmodeOff,  // dump_load_enabler controls this; default to off
+	TopicMinerWorkmode: WorkmodeOff, // dump_load_enabler controls this; default to off
 }
 
 // Boolean topics that should be initialized to true if not received within timeout

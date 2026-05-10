@@ -46,12 +46,12 @@ type BatteryCalibConfig struct {
 
 // BatterySOCConfig holds configuration for the SOC worker
 type BatterySOCConfig struct {
-	Name               string
-	CapacityKWh        float64
-	InflowEnergyTopics []string
+	Name                string
+	CapacityKWh         float64
+	InflowEnergyTopics  []string
 	OutflowEnergyTopics []string
-	CalibrationTopics  CalibrationTopics
-	ConversionLossRate float64
+	CalibrationTopics   CalibrationTopics
+	ConversionLossRate  float64
 }
 
 // CalibConfig creates a BatteryCalibConfig from the shared BatteryConfig
@@ -138,10 +138,10 @@ func BuildBaselineInverterConfig(battery2, battery3 BatteryConfig) BaselineInver
 		Battery2VoltageTopic:     battery2.BatteryVoltageTopic,
 		Battery2EnergyTopic:      TopicBattery2Energy,
 		Solar1PowerTopic:         TopicSolar1Power,
-		Solar2PowerTopic:         "homeassistant/sensor/primo_5_0_ac_power/state",
-		HouseLoadTopic:           "homeassistant/sensor/home_sweet_home_load_power_2/state",
+		Solar2PowerTopic:         topicSolar2ACPower,
+		HouseLoadTopic:           topicHouseLoadPower2,
 		GridStatusTopic:          "homeassistant/binary_sensor/home_sweet_home_grid_status_2/state",
-		ACFrequencyTopic:         "homeassistant/sensor/lounge_ac_frequency/state",
+		ACFrequencyTopic:         topicACFrequency,
 		ForecastRemainingTopic:   "homeassistant/sensor/solcast_pv_forecast_forecast_remaining_today/state",
 		DetailedForecastTopic:    "homeassistant/sensor/solcast_pv_forecast_forecast_today/detailedForecast",
 		InverterStateTopics:      inverterStateTopics,
@@ -151,19 +151,19 @@ func BuildBaselineInverterConfig(battery2, battery3 BatteryConfig) BaselineInver
 	}
 
 	return BaselineInverterConfig{
-		Input:                    input,
-		Battery2:                 group,
-		WattsPerInverter:         255.0,
-		MaxTransferPower:         5000.0,
-		MaxBaselineWatts:         500.0,
-		OverflowSOCTurnOffStart:  98.5,
-		OverflowSOCTurnOffEnd:    95.0,
-		OverflowSOCTurnOnStart:   95.75,
-		OverflowSOCTurnOnEnd:     99.5,
-		LowVoltageTurnOnStart:  52.0,
-		LowVoltageTurnOnEnd:    53.0,
-		LowVoltageTurnOffStart: 50.75,
-		LowVoltageTurnOffEnd:   52.0,
+		Input:                   input,
+		Battery2:                group,
+		WattsPerInverter:        255.0,
+		MaxTransferPower:        5000.0,
+		MaxBaselineWatts:        500.0,
+		OverflowSOCTurnOffStart: 98.5,
+		OverflowSOCTurnOffEnd:   95.0,
+		OverflowSOCTurnOnStart:  95.75,
+		OverflowSOCTurnOnEnd:    99.5,
+		LowVoltageTurnOnStart:   52.0,
+		LowVoltageTurnOnEnd:     53.0,
+		LowVoltageTurnOffStart:  50.75,
+		LowVoltageTurnOffEnd:    52.0,
 	}
 }
 
@@ -171,21 +171,21 @@ func BuildBaselineInverterConfig(battery2, battery3 BatteryConfig) BaselineInver
 func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverterConfig {
 	return DynamicInverterConfig{
 		Input: DynamicInputConfig{
-			HouseLoadTopic:            "homeassistant/sensor/home_sweet_home_load_power_2/state",
+			HouseLoadTopic:            topicHouseLoadPower2,
 			Solar1PowerTopic:          TopicSolar1Power,
-			Solar2PowerTopic:          "homeassistant/sensor/primo_5_0_ac_power/state",
+			Solar2PowerTopic:          topicSolar2ACPower,
 			Inverter1to9PowerTopics:   battery2.OutflowPowerTopics,
 			MultiplusACPowerTopic:     "homeassistant/sensor/powerhouse_inverter_10_ac_power/state",
 			Battery3SOCTopic:          "homeassistant/sensor/" + strings.ReplaceAll(strings.ToLower(battery3.Name), " ", "_") + "_state_of_charge/state",
 			GridStatusTopic:           "homeassistant/binary_sensor/home_sweet_home_grid_status_2/state",
-			ACFrequencyTopic:          "homeassistant/sensor/lounge_ac_frequency/state",
+			ACFrequencyTopic:          topicACFrequency,
 			PowerwallSOCTopic:         "homeassistant/sensor/home_sweet_home_charge/state",
 			DynamicAutoTopic:          TopicDynamicAutoState,
 			MultiplusSetpointCmdTopic: TopicInverter10SetpointCmd,
-			CarChargingEnabledTopic:     TopicCarChargingEnabledState,
-			CarChargingActiveTopic:      "homeassistant/binary_sensor/plb942_charging/state",
-			CarBatterySOCTopic:          "homeassistant/sensor/plb942_battery/state",
-			CarBattery3CutoffTopic:      TopicCarChargingBattery3CutoffState,
+			CarChargingEnabledTopic:   TopicCarChargingEnabledState,
+			CarChargingActiveTopic:    "homeassistant/binary_sensor/plb942_charging/state",
+			CarBatterySOCTopic:        "homeassistant/sensor/plb942_battery/state",
+			CarBattery3CutoffTopic:    TopicCarChargingBattery3CutoffState,
 			Solar34PowerTopics:        battery3.InflowPowerTopics,
 			Battery3DCCurrentTopic:    "homeassistant/sensor/battery_3_dc_current/state",
 			Battery3CCLTopic:          "homeassistant/sensor/battery_3_charge_current_limit/state",

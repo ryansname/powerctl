@@ -10,7 +10,7 @@ func TestFormatCombinedDebug_Normal(t *testing.T) {
 		Modes: []ModeState{
 			{Name: "Overflow", Watts: 2295, Contributing: true},
 			{Name: "Forecast Excess", Watts: 1200, Contributing: false},
-			{Name: "Baseline", Watts: 350, Contributing: false},
+			{Name: modeBaseline, Watts: 350, Contributing: false},
 		},
 	}
 	dynamic := DynamicDebugInfo{
@@ -45,7 +45,7 @@ func TestFormatCombinedDebug_B2Safety(t *testing.T) {
 	}
 	dynamic := DynamicDebugInfo{
 		Auto:     false,
-		Priority: "Safety",
+		Priority: modeSafety,
 		Setpoint: 0,
 		Headroom: -500,
 	}
@@ -62,7 +62,7 @@ func TestFormatCombinedDebug_B2Safety(t *testing.T) {
 
 func TestFormatCombinedDebug_LowVoltage(t *testing.T) {
 	baseline := BaselineDebugInfo{
-		Modes:              []ModeState{{Name: "Baseline", Watts: 300, Contributing: true}},
+		Modes:              []ModeState{{Name: modeBaseline, Watts: 300, Contributing: true}},
 		Battery2LowVoltage: true,
 		Battery2VoltageMin: 50.60,
 	}

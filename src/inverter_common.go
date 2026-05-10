@@ -10,6 +10,11 @@ import (
 
 const floatChargingState = "Float Charging"
 
+const (
+	modeBaseline = "Baseline"
+	modeSafety   = "Safety"
+)
+
 // PowerRequest represents a power request from a rule.
 type PowerRequest struct {
 	Name  string

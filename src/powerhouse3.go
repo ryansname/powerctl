@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	TopicCerboKeepalive        = "powerhouse_3/R/keepalive"
+	TopicCerboKeepalive         = "powerhouse_3/R/keepalive"
 	TopicMultiplusSetpointWrite = "powerhouse_3/W/vebus/276/Hub4/L1/AcPowerSetpoint"
 	TopicMultiplusSetpointRead  = "powerhouse_3/N/vebus/276/Hub4/L1/AcPowerSetpoint"
 	TopicMultiplusACPower       = "powerhouse_3/N/vebus/276/Ac/ActiveIn/L1/P"
@@ -20,7 +20,6 @@ const (
 	TopicCerboBatteryDCPower    = "powerhouse_3/N/system/0/Dc/Battery/Power"
 	TopicCerboBatteryCurrent    = "powerhouse_3/N/system/0/Dc/Battery/Current"
 	TopicCerboBatteryCCL        = "powerhouse_3/N/battery/512/Info/MaxChargeCurrent"
-
 )
 
 func cerboKeepaliveWorker(ctx context.Context, sender *MQTTSender) {
@@ -56,4 +55,3 @@ func cerboKeepaliveWorker(ctx context.Context, sender *MQTTSender) {
 		}
 	}
 }
-

@@ -113,7 +113,7 @@ func TestCCLOverflow_Safety_NoForcedDischarge(t *testing.T) {
 	// Safety blocks discharge (MaxDischarge=0). CCL overflow wants discharge.
 	// Transfer limit wins: lo=0, hi=-265 → lo>hi → clamp returns lo=0 (charge, not discharge).
 	c := cclOverflowConstraint(40, 40, 80, 53) // MinDischarge=265W
-	sfty := safetyConstraint(true)              // MaxDischarge=0
+	sfty := safetyConstraint(true)             // MaxDischarge=0
 	got := DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(sfty).add(c).Setpoint()
 	assert.InDelta(t, 0.0, got, 0.001)
 }
@@ -121,7 +121,7 @@ func TestCCLOverflow_Safety_NoForcedDischarge(t *testing.T) {
 func TestCCLOverflow_TransferLimitOver_ChargeWins(t *testing.T) {
 	// Transfer limit exceeded (MinCharge=500, MaxDischarge=0) AND CCL overflow (MinDischarge=265).
 	// lo=500, hi=-265 → lo>hi → clamp returns lo=500 (charge wins, bus safety takes priority).
-	tl := transferLimitConstraint(5000) // headroom=-500 → MinCharge=500
+	tl := transferLimitConstraint(5000)        // headroom=-500 → MinCharge=500
 	c := cclOverflowConstraint(40, 40, 80, 53) // MinDischarge=265W
 	got := DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(tl).add(c).Setpoint()
 	assert.InDelta(t, 500.0, got, 0.001)
@@ -159,7 +159,7 @@ func TestCalculateDynamic_Safety_HighFreq_PreventsDischarge(t *testing.T) {
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
 	assert.InDelta(t, 0.0, setpoint, 0.001)
-	assert.Equal(t, "Safety", debug.Priority)
+	assert.Equal(t, prioritySafety, debug.Priority)
 	assert.True(t, debug.Safety)
 }
 
@@ -171,7 +171,7 @@ func TestCalculateDynamic_Safety_GridOffHighPowerwall(t *testing.T) {
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
 	assert.InDelta(t, 0.0, setpoint, 0.001)
-	assert.Equal(t, "Safety", debug.Priority)
+	assert.Equal(t, prioritySafety, debug.Priority)
 	assert.True(t, debug.Safety)
 }
 
@@ -239,7 +239,7 @@ func TestCalculateDynamic_ChargeFromSurplus(t *testing.T) {
 	// headroom = 4500-1000-1000 = 2500 → setpoint = 2000
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.Equal(t, "Charge", debug.Priority)
+	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 2000.0, setpoint, 0.001)
 }
 
@@ -252,7 +252,7 @@ func TestCalculateDynamic_ChargeFromSurplus_SmallSurplus(t *testing.T) {
 	// target = 1000 - 1100 = -100 → surplus = 100W → charge 100W
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.Equal(t, "Charge", debug.Priority)
+	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 100.0, setpoint, 0.001)
 }
 
@@ -269,7 +269,7 @@ func TestCalculateDynamic_ChargeFromSurplus_ForcedChargeByTransferLimit(t *testi
 	input.PowerhouseNetPower = 6000
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.Equal(t, "Charge", debug.Priority)
+	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 3500.0, setpoint, 0.001)
 }
 
@@ -286,7 +286,7 @@ func TestCalculateDynamic_ChargeFromSurplus_CapAt3500(t *testing.T) {
 	// desired = 3500 (charge), 3500 > 0 so no clamping needed, just cap at 3500
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.Equal(t, "Charge", debug.Priority)
+	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 3500.0, setpoint, 0.001)
 }
 
@@ -362,7 +362,7 @@ func TestCalculateDynamic_ChargeFromSurplus_OverLimitPreservesHigherCharge(t *te
 	input.PowerhouseNetPower = 5000
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.Equal(t, "Charge", debug.Priority)
+	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 3500.0, setpoint, 0.001)
 }
 
@@ -418,7 +418,7 @@ func TestCalculateDynamic_SOCLimit_SurplusCapped(t *testing.T) {
 	input.Solar1Power = 2000
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.Equal(t, "Charge", debug.Priority)
+	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 1750.0, setpoint, 0.001)
 	assert.InDelta(t, 1750.0, debug.B3ChargeMaxW, 0.001)
 }
@@ -490,11 +490,11 @@ func TestDynamicOverflowScenario(t *testing.T) {
 	// --- Scenario inputs ---
 	solar3CurrentA := 40.0  // A  (MPPT 3 battery-side current)
 	solar4CurrentA := 40.0  // A  (MPPT 4 battery-side current)
-	battery3CCL    := 80.0  // A  (BMS charge current limit)
+	battery3CCL := 80.0     // A  (BMS charge current limit)
 	battery3Voltage := 53.0 // V
-	houseLoad      := 500.0 // W  (house consumption)
-	solar1Power    := 1000.0 // W  (solar 1, house-side)
-	inverter1to9   := 0.0   // W  (inverters 1–9 output, house-side)
+	houseLoad := 500.0      // W  (house consumption)
+	solar1Power := 1000.0   // W  (solar 1, house-side)
+	inverter1to9 := 0.0     // W  (inverters 1–9 output, house-side)
 	// ----------------------
 
 	state := makeTestDynamicState()

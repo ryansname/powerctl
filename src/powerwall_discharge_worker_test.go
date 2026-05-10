@@ -57,9 +57,9 @@ func octopusSellRate(t *testing.T, month, hour int) float64 {
 	if !ok {
 		t.Fatalf("missing tou_periods in season %s", seasonName)
 	}
-	band := "SUPER_OFF_PEAK"
+	band := bandSuperOffPeak
 outer:
-	for _, bandName := range []string{"ON_PEAK", "PARTIAL_PEAK", "OFF_PEAK"} {
+	for _, bandName := range []string{bandOnPeak, bandPartialPeak, bandOffPeak} {
 		bm, ok := touPeriods[bandName].(map[string]any)
 		if !ok {
 			continue
@@ -138,18 +138,18 @@ func TestOctopusSellTariff(t *testing.T) {
 		wantEvening     float64
 		wantLateEvening float64
 	}{
-		{1,  0.19,   0.14, 0.19,   0.14}, // Jan: Summer — no rebate
-		{2,  0.19,   0.14, 0.19,   0.14},
-		{3,  0.19,   0.14, 0.19,   0.14},
-		{4,  0.19,   0.14, 0.19,   0.14},
-		{5,  0.19,   0.14, 0.2424, 0.19}, // May: ShoulderMay — evening rebate; 21:00 PARTIAL_PEAK
-		{6,  0.2424, 0.14, 0.2424, 0.19}, // Jun: Winter — full rebate; 21:00 PARTIAL_PEAK
-		{7,  0.2424, 0.14, 0.2424, 0.19},
-		{8,  0.2424, 0.14, 0.2424, 0.19},
-		{9,  0.19,   0.14, 0.2424, 0.19}, // Sep: ShoulderSep — evening rebate; 21:00 PARTIAL_PEAK
-		{10, 0.19,   0.14, 0.19,   0.14}, // Oct: Summer — no rebate
-		{11, 0.19,   0.14, 0.19,   0.14},
-		{12, 0.19,   0.14, 0.19,   0.14},
+		{1, 0.19, 0.14, 0.19, 0.14}, // Jan: Summer — no rebate
+		{2, 0.19, 0.14, 0.19, 0.14},
+		{3, 0.19, 0.14, 0.19, 0.14},
+		{4, 0.19, 0.14, 0.19, 0.14},
+		{5, 0.19, 0.14, 0.2424, 0.19},   // May: ShoulderMay — evening rebate; 21:00 PARTIAL_PEAK
+		{6, 0.2424, 0.14, 0.2424, 0.19}, // Jun: Winter — full rebate; 21:00 PARTIAL_PEAK
+		{7, 0.2424, 0.14, 0.2424, 0.19},
+		{8, 0.2424, 0.14, 0.2424, 0.19},
+		{9, 0.19, 0.14, 0.2424, 0.19}, // Sep: ShoulderSep — evening rebate; 21:00 PARTIAL_PEAK
+		{10, 0.19, 0.14, 0.19, 0.14},  // Oct: Summer — no rebate
+		{11, 0.19, 0.14, 0.19, 0.14},
+		{12, 0.19, 0.14, 0.19, 0.14},
 	}
 
 	for _, tt := range tests {

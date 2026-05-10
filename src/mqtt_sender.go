@@ -20,6 +20,17 @@ type lastSentInfo struct {
 
 const resendInterval = 5 * time.Minute
 
+const (
+	deviceNamePowerctl       = "Powerctl"
+	deviceManufacturerCustom = "Custom"
+	deviceIDBattery3         = "battery_3"
+	deviceNameBattery3       = "Battery 3"
+	deviceIDPowerctl         = "powerctl"
+	stateClassMeasurement    = "measurement"
+	valueTemplateJSONValue   = "{{ value_json.value }}"
+	haServiceValueKey        = "value"
+)
+
 // MQTTMessage represents an outgoing MQTT message
 type MQTTMessage struct {
 	Topic   string
@@ -105,7 +116,7 @@ func (s *MQTTSender) CreateBatteryEntity(
 		ValueTemplate:       "{{ value_json." + jsonKey + "}}",
 		UniqueId:            deviceId + "_" + jsonKey,
 		ExpireAfter:         60 * 30, // 30 minutes
-		StateClass:          "measurement",
+		StateClass:          stateClassMeasurement,
 		DisplayPrecision:    displayPrecision,
 		Device: haDeviceConfig{
 			Identifiers:  []string{deviceId},
@@ -167,10 +178,10 @@ func (s *MQTTSender) CreateBatterySOCEntityFromCerbo(
 		DeviceClass:      "battery",
 		StateTopic:       cerboSOCTopic,
 		UnitOfMeasure:    "%",
-		ValueTemplate:    "{{ value_json.value }}",
+		ValueTemplate:    valueTemplateJSONValue,
 		UniqueId:         deviceId + "_percentage",
 		ExpireAfter:      60 * 30,
-		StateClass:       "measurement",
+		StateClass:       stateClassMeasurement,
 		DisplayPrecision: 1,
 		Device: haDeviceConfig{
 			Identifiers:  []string{deviceId},
@@ -218,11 +229,11 @@ func (s *MQTTSender) CreateDebugSensor(sensorID, name, unit string, precision in
 		StateTopic:       "powerctl/sensor/" + sensorID + "/state",
 		UnitOfMeasure:    unit,
 		UniqueId:         sensorID,
-		StateClass:       "measurement",
+		StateClass:       stateClassMeasurement,
 		DisplayPrecision: precision,
 		Device: haDeviceConfig{
-			Identifiers:  []string{"powerctl"},
-			Name:         "Powerctl",
+			Identifiers:  []string{deviceIDPowerctl},
+			Name:         deviceNamePowerctl,
 			Manufacturer: "DIY",
 		},
 	}
@@ -283,9 +294,9 @@ func (s *MQTTSender) createSwitch(uniqueID, name, icon, stateTopic string) error
 		Icon:         icon,
 		Optimistic:   true,
 		Device: haDeviceConfig{
-			Identifiers:  []string{"powerctl"},
-			Name:         "Powerctl",
-			Manufacturer: "Custom",
+			Identifiers:  []string{deviceIDPowerctl},
+			Name:         deviceNamePowerctl,
+			Manufacturer: deviceManufacturerCustom,
 		},
 	}
 
@@ -348,8 +359,8 @@ func (s *MQTTSender) CreateCarChargingBattery3CutoffEntity() error {
 	}
 
 	type haNumberConfig struct {
-		Name          string         `json:"name"`
-		UniqueId      string         `json:"unique_id"`
+		Name     string `json:"name"`
+		UniqueId string `json:"unique_id"`
 		// CommandTopic  string         `json:"command_topic"`
 		StateTopic    string         `json:"state_topic"`
 		UnitOfMeasure string         `json:"unit_of_measurement"`
@@ -363,10 +374,10 @@ func (s *MQTTSender) CreateCarChargingBattery3CutoffEntity() error {
 	}
 
 	config := haNumberConfig{
-		Name:         "Car Charging B3 Cutoff",
-		UniqueId:     "powerctl_car_charging_battery3_cutoff",
+		Name:     "Car Charging B3 Cutoff",
+		UniqueId: "powerctl_car_charging_battery3_cutoff",
 		// CommandTopic: TopicCarChargingBattery3CutoffCmd,
-		StateTopic:   TopicCarChargingBattery3CutoffState,
+		StateTopic:    TopicCarChargingBattery3CutoffState,
 		UnitOfMeasure: "%",
 		Min:           0,
 		Max:           100,
@@ -375,9 +386,9 @@ func (s *MQTTSender) CreateCarChargingBattery3CutoffEntity() error {
 		Icon:          "mdi:battery-alert",
 		Optimistic:    true,
 		Device: haDeviceConfig{
-			Identifiers:  []string{"powerctl"},
-			Name:         "Powerctl",
-			Manufacturer: "Custom",
+			Identifiers:  []string{deviceIDPowerctl},
+			Name:         deviceNamePowerctl,
+			Manufacturer: deviceManufacturerCustom,
 		},
 	}
 
@@ -422,7 +433,7 @@ func (s *MQTTSender) CreateInverter10ACSetpointEntity() error {
 		Name:          "AC Setpoint",
 		UniqueId:      "powerhouse_inverter_10_ac_setpoint",
 		StateTopic:    TopicMultiplusSetpointRead,
-		ValueTemplate: "{{ value_json.value }}",
+		ValueTemplate: valueTemplateJSONValue,
 		CommandTopic:  TopicInverter10SetpointCmd,
 		UnitOfMeasure: "W",
 		Min:           -3000,
@@ -474,10 +485,10 @@ func (s *MQTTSender) CreateMultiplusACPowerEntity() error {
 		Name:          "AC Power",
 		UniqueId:      "powerhouse_inverter_10_ac_power",
 		StateTopic:    TopicMultiplusACPower,
-		ValueTemplate: "{{ value_json.value }}",
+		ValueTemplate: valueTemplateJSONValue,
 		UnitOfMeasure: "W",
 		DeviceClass:   "power",
-		StateClass:    "measurement",
+		StateClass:    stateClassMeasurement,
 		Device: haDeviceConfig{
 			Identifiers: []string{"powerhouse_inverter_10"},
 			Name:        "Powerhouse Inverter 10",
@@ -523,13 +534,13 @@ func (s *MQTTSender) CreateBattery3DCPowerEntity() error {
 		Name:          "DC Power",
 		UniqueId:      "battery_3_dc_power",
 		StateTopic:    TopicCerboBatteryDCPower,
-		ValueTemplate: "{{ value_json.value }}",
+		ValueTemplate: valueTemplateJSONValue,
 		UnitOfMeasure: "W",
 		DeviceClass:   "power",
-		StateClass:    "measurement",
+		StateClass:    stateClassMeasurement,
 		Device: haDeviceConfig{
-			Identifiers: []string{"battery_3"},
-			Name:        "Battery 3",
+			Identifiers: []string{deviceIDBattery3},
+			Name:        deviceNameBattery3,
 		},
 	}
 
@@ -570,13 +581,13 @@ func (s *MQTTSender) CreateBattery3CurrentEntity() error {
 		Name:          "DC Current",
 		UniqueId:      "battery_3_dc_current",
 		StateTopic:    TopicCerboBatteryCurrent,
-		ValueTemplate: "{{ value_json.value }}",
+		ValueTemplate: valueTemplateJSONValue,
 		UnitOfMeasure: "A",
 		DeviceClass:   "current",
-		StateClass:    "measurement",
+		StateClass:    stateClassMeasurement,
 		Device: haDeviceConfig{
-			Identifiers: []string{"battery_3"},
-			Name:        "Battery 3",
+			Identifiers: []string{deviceIDBattery3},
+			Name:        deviceNameBattery3,
 		},
 	}
 
@@ -617,13 +628,13 @@ func (s *MQTTSender) CreateBattery3CCLEntity() error {
 		Name:          "Charge Current Limit",
 		UniqueId:      "battery_3_ccl",
 		StateTopic:    TopicCerboBatteryCCL,
-		ValueTemplate: "{{ value_json.value }}",
+		ValueTemplate: valueTemplateJSONValue,
 		UnitOfMeasure: "A",
 		DeviceClass:   "current",
-		StateClass:    "measurement",
+		StateClass:    stateClassMeasurement,
 		Device: haDeviceConfig{
-			Identifiers: []string{"battery_3"},
-			Name:        "Battery 3",
+			Identifiers: []string{deviceIDBattery3},
+			Name:        deviceNameBattery3,
 		},
 	}
 
@@ -668,8 +679,8 @@ func (s *MQTTSender) CreateSolarMpptModeEntity(
 		Name:          "MPPT Mode",
 		UniqueId:      entityId,
 		StateTopic:    cerboTopic,
-		ValueTemplate: "{{ value_json.value }}",
-		StateClass:    "measurement",
+		ValueTemplate: valueTemplateJSONValue,
+		StateClass:    stateClassMeasurement,
 		Device: haDeviceConfig{
 			Identifiers: []string{solarName},
 			Name:        solarName,

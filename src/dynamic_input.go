@@ -4,7 +4,6 @@ import (
 	"time"
 )
 
-
 // DynamicInputConfig holds the topics needed to extract DynamicInput from DisplayData.
 type DynamicInputConfig struct {
 	HouseLoadTopic            string
@@ -33,23 +32,23 @@ type DynamicInputConfig struct {
 
 // DynamicInput holds extracted values for the dynamic inverter controller.
 type DynamicInput struct {
-	HouseLoad            float64
-	Solar1Power          float64
-	Solar2Power          float64
-	Inverter1to9Power    float64
-	MultiplusACPower     float64
-	Battery3SOC          float64
-	GridAvailable        bool
-	ACFreqP100_5Min      float64
-	PowerwallSOC         float64
-	DynamicAutoEnabled   bool
-	MultiplusSetpointCmd float64
-	CarChargingEnabled   bool
-	CarChargingActive    bool
-	CarBatterySOC        float64
-	CarBattery3Cutoff    float64
-	Tariff               Tariff
-	Rebate               bool
+	HouseLoad             float64
+	Solar1Power           float64
+	Solar2Power           float64
+	Inverter1to9Power     float64
+	MultiplusACPower      float64
+	Battery3SOC           float64
+	GridAvailable         bool
+	ACFreqP100_5Min       float64
+	PowerwallSOC          float64
+	DynamicAutoEnabled    bool
+	MultiplusSetpointCmd  float64
+	CarChargingEnabled    bool
+	CarChargingActive     bool
+	CarBatterySOC         float64
+	CarBattery3Cutoff     float64
+	Tariff                Tariff
+	Rebate                bool
 	Solar34Power          float64 // combined Solar 3 + Solar 4 generation (W)
 	Battery3ChargeCurrent float64 // A, actual battery charge current (always >= 0)
 	Battery3CCL           float64 // A, BMS charge current limit

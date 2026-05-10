@@ -16,26 +16,26 @@ func makeTestBaselineConfig() BaselineInverterConfig {
 	group := BatteryInverterGroup{
 		Name:                 "Battery 2",
 		Inverters:            inverters,
-		ChargeStateTopic:     "b2charge",
-		SOCTopic:             "b2soc",
-		BatteryVoltageTopic:  "b2volt",
+		ChargeStateTopic:     testTopicB2Charge,
+		SOCTopic:             testTopicB2SOC,
+		BatteryVoltageTopic:  testTopicB2Volt,
 		CapacityWh:           9500,
 		SolarMultiplier:      3.9,
-		AvailableEnergyTopic: "b2energy",
+		AvailableEnergyTopic: testTopicB2Energy,
 	}
 	return BaselineInverterConfig{
-		Battery2:                 group,
-		WattsPerInverter:         255.0,
-		MaxTransferPower:         5000.0,
-		MaxBaselineWatts:         500.0,
-		OverflowSOCTurnOffStart:  98.5,
-		OverflowSOCTurnOffEnd:    95.0,
-		OverflowSOCTurnOnStart:   95.75,
-		OverflowSOCTurnOnEnd:     99.5,
-		LowVoltageTurnOnStart:  52.0,
-		LowVoltageTurnOnEnd:    53.0,
-		LowVoltageTurnOffStart: 50.75,
-		LowVoltageTurnOffEnd:   52.0,
+		Battery2:                group,
+		WattsPerInverter:        255.0,
+		MaxTransferPower:        5000.0,
+		MaxBaselineWatts:        500.0,
+		OverflowSOCTurnOffStart: 98.5,
+		OverflowSOCTurnOffEnd:   95.0,
+		OverflowSOCTurnOnStart:  95.75,
+		OverflowSOCTurnOnEnd:    99.5,
+		LowVoltageTurnOnStart:   52.0,
+		LowVoltageTurnOnEnd:     53.0,
+		LowVoltageTurnOffStart:  50.75,
+		LowVoltageTurnOffEnd:    52.0,
 	}
 }
 
@@ -107,7 +107,7 @@ func TestCalculateBaseline_ZeroHouseLoad(t *testing.T) {
 	state := makeBlankBaselineState(config)
 
 	req := calculateBaseline(0, 0, 0, 500, state)
-	assert.Equal(t, "Baseline", req.Name)
+	assert.Equal(t, modeBaseline, req.Name)
 	assert.InDelta(t, 0.0, req.Watts, 0.001)
 }
 
@@ -171,7 +171,7 @@ func TestSelectBaselineMode_BaselineContributes(t *testing.T) {
 	assert.Equal(t, 2, count)
 	assert.Empty(t, debug.SafetyReason)
 
-	baselineMode := findMode(debug.Modes, "Baseline")
+	baselineMode := findMode(debug.Modes, modeBaseline)
 	assert.NotNil(t, baselineMode)
 	assert.InDelta(t, 500.0, baselineMode.Watts, 0.001)
 	assert.True(t, baselineMode.Contributing)
@@ -194,7 +194,7 @@ func TestSelectBaselineMode_OverflowWins(t *testing.T) {
 	assert.NotNil(t, overflowMode)
 	assert.True(t, overflowMode.Contributing)
 
-	baselineMode := findMode(debug.Modes, "Baseline")
+	baselineMode := findMode(debug.Modes, modeBaseline)
 	assert.NotNil(t, baselineMode)
 	assert.False(t, baselineMode.Contributing)
 }
@@ -205,7 +205,7 @@ func TestSelectBaselineMode_TransferLimitApplied(t *testing.T) {
 	input := makeBaselineInput()
 	input.Battery2ChargeState = floatChargingState
 	input.Battery2SOC = 100.0      // Overflow → 3 inverters desired
-	input.Battery3SOC = 100.0       // transfer limit applies
+	input.Battery3SOC = 100.0      // transfer limit applies
 	input.Solar1P90_15Min = 4500.0 // limit = 5000-4500 = 500W → int(500/255) = 1
 
 	count, _ := selectBaselineMode(input, config, state)

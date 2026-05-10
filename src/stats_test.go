@@ -258,16 +258,16 @@ func TestCloneTopicData(t *testing.T) {
 		{
 			name:     "string",
 			topic:    "climate/state",
-			original: &StringTopicData{Current: "cool"},
+			original: &StringTopicData{Current: acStateCool},
 			verify: func(t *testing.T, original, cloned any) {
 				c, ok := cloned.(*StringTopicData)
 				assert.True(t, ok)
-				assert.Equal(t, "cool", c.Current)
+				assert.Equal(t, acStateCool, c.Current)
 
 				o, ok := original.(*StringTopicData)
 				assert.True(t, ok)
-				o.Current = "heat"
-				assert.Equal(t, "cool", c.Current)
+				o.Current = acStateHeat
+				assert.Equal(t, acStateCool, c.Current)
 			},
 		},
 		{

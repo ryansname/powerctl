@@ -7,29 +7,42 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func makeFloatTopic(v float64) *FloatTopicData   { return &FloatTopicData{Current: v} }
+func makeFloatTopic(v float64) *FloatTopicData { return &FloatTopicData{Current: v} }
 func makeBoolTopic(v bool, raw string) *BooleanTopicData {
 	return &BooleanTopicData{Current: v, Raw: raw}
 }
 func makeStringTopic(v string) *StringTopicData { return &StringTopicData{Current: v} }
 
+const (
+	testTopicB2SOC    = "b2soc"
+	testTopicB2Charge = "b2charge"
+	testTopicB2Volt   = "b2volt"
+	testTopicB2Energy = "b2energy"
+	testTopicGrid     = "grid"
+	testTopicB3SOC    = "b3soc"
+	testTopicSolar1   = "solar1"
+	testTopicSolar2   = "solar2"
+	testTopicLoad     = "load"
+	testTopicPWSOC    = "pwsoc"
+)
+
 func makeBaselineDisplayData() (DisplayData, BaselineInputConfig) {
 	freqTopic := "freq"
 	config := BaselineInputConfig{
-		Battery2SOCTopic:         "b2soc",
-		Battery2ChargeStateTopic: "b2charge",
-		Battery2VoltageTopic:     "b2volt",
-		Battery2EnergyTopic:      "b2energy",
-		Solar1PowerTopic:         "solar1",
-		Solar2PowerTopic:         "solar2",
-		HouseLoadTopic:           "load",
-		GridStatusTopic:          "grid",
+		Battery2SOCTopic:         testTopicB2SOC,
+		Battery2ChargeStateTopic: testTopicB2Charge,
+		Battery2VoltageTopic:     testTopicB2Volt,
+		Battery2EnergyTopic:      testTopicB2Energy,
+		Solar1PowerTopic:         testTopicSolar1,
+		Solar2PowerTopic:         testTopicSolar2,
+		HouseLoadTopic:           testTopicLoad,
+		GridStatusTopic:          testTopicGrid,
 		ACFrequencyTopic:         freqTopic,
 		ForecastRemainingTopic:   "forecastwh",
 		DetailedForecastTopic:    "forecast",
 		InverterStateTopics:      []string{"inv1", "inv2", "inv3"},
-		Battery3SOCTopic:         "b3soc",
-		PowerwallSOCTopic:        "pwsoc",
+		Battery3SOCTopic:         testTopicB3SOC,
+		PowerwallSOCTopic:        testTopicPWSOC,
 		ExpectingPowerCutsTopic:  "powercuts",
 	}
 
@@ -37,26 +50,26 @@ func makeBaselineDisplayData() (DisplayData, BaselineInputConfig) {
 	solar1P90Key := PercentileKey{Topic: config.Solar1PowerTopic, Percentile: P90, Window: Window15Min}
 	data := DisplayData{
 		TopicData: map[string]any{
-			"b2soc":      makeFloatTopic(87.5),
-			"b2charge":   makeStringTopic("Float Charging"),
-			"b2volt":     makeFloatTopic(52.1),
-			"b2energy":   makeFloatTopic(8500),
-			"solar1":     makeFloatTopic(1200),
-			"solar2":     makeFloatTopic(800),
-			"load":       makeFloatTopic(1500),
-			"grid":       makeBoolTopic(true, "on"),
-			freqTopic:    makeFloatTopic(50.02),
-			"forecastwh": makeFloatTopic(12000),
-			"forecast":   makeStringTopic("[]"),
-			"inv1":       makeBoolTopic(true, "on"),
-			"inv2":       makeBoolTopic(false, "off"),
-			"inv3":       makeBoolTopic(true, "on"),
-			"b3soc":      makeFloatTopic(72.0),
-			"pwsoc":      makeFloatTopic(45.0),
-			"powercuts":  makeBoolTopic(false, "off"),
+			testTopicB2SOC:    makeFloatTopic(87.5),
+			testTopicB2Charge: makeStringTopic("Float Charging"),
+			testTopicB2Volt:   makeFloatTopic(52.1),
+			testTopicB2Energy: makeFloatTopic(8500),
+			testTopicSolar1:   makeFloatTopic(1200),
+			testTopicSolar2:   makeFloatTopic(800),
+			testTopicLoad:     makeFloatTopic(1500),
+			testTopicGrid:     makeBoolTopic(true, "on"),
+			freqTopic:         makeFloatTopic(50.02),
+			"forecastwh":      makeFloatTopic(12000),
+			"forecast":        makeStringTopic("[]"),
+			"inv1":            makeBoolTopic(true, "on"),
+			"inv2":            makeBoolTopic(false, "off"),
+			"inv3":            makeBoolTopic(true, "on"),
+			testTopicB3SOC:    makeFloatTopic(72.0),
+			testTopicPWSOC:    makeFloatTopic(45.0),
+			"powercuts":       makeBoolTopic(false, "off"),
 		},
 		Percentiles: map[PercentileKey]float64{
-			freqKey:     50.15,
+			freqKey:      50.15,
 			solar1P90Key: 900.0,
 		},
 	}
@@ -96,31 +109,31 @@ func TestExtractBaselineInput_ExpectingPowerCuts(t *testing.T) {
 func makeDynamicDisplayData() (DisplayData, DynamicInputConfig) {
 	freqTopic := "freq"
 	config := DynamicInputConfig{
-		HouseLoadTopic:          "load",
-		Solar1PowerTopic:        "solar1",
-		Solar2PowerTopic:        "solar2",
+		HouseLoadTopic:          testTopicLoad,
+		Solar1PowerTopic:        testTopicSolar1,
+		Solar2PowerTopic:        testTopicSolar2,
 		Inverter1to9PowerTopics: []string{"inv1p", "inv2p", "inv3p"},
 		MultiplusACPowerTopic:   "multiplusac",
-		Battery3SOCTopic:        "b3soc",
-		GridStatusTopic:         "grid",
+		Battery3SOCTopic:        testTopicB3SOC,
+		GridStatusTopic:         testTopicGrid,
 		ACFrequencyTopic:        freqTopic,
-		PowerwallSOCTopic:       "pwsoc",
+		PowerwallSOCTopic:       testTopicPWSOC,
 	}
 
 	freqKey := PercentileKey{Topic: freqTopic, Percentile: P100, Window: 5 * time.Minute}
 	data := DisplayData{
 		TopicData: map[string]any{
-			"load":       makeFloatTopic(2000),
-			"solar1":     makeFloatTopic(1500),
-			"solar2":     makeFloatTopic(600),
-			"inv1p":      makeFloatTopic(-255),
-			"inv2p":      makeFloatTopic(-255),
-			"inv3p":      makeFloatTopic(-510),
-			"multiplusac": makeFloatTopic(-800),
-			"b3soc":      makeFloatTopic(65.0),
-			"grid":       makeBoolTopic(true, "on"),
-			freqTopic:    makeFloatTopic(50.0),
-			"pwsoc":      makeFloatTopic(88.0),
+			testTopicLoad:   makeFloatTopic(2000),
+			testTopicSolar1: makeFloatTopic(1500),
+			testTopicSolar2: makeFloatTopic(600),
+			"inv1p":         makeFloatTopic(-255),
+			"inv2p":         makeFloatTopic(-255),
+			"inv3p":         makeFloatTopic(-510),
+			"multiplusac":   makeFloatTopic(-800),
+			testTopicB3SOC:  makeFloatTopic(65.0),
+			testTopicGrid:   makeBoolTopic(true, "on"),
+			freqTopic:       makeFloatTopic(50.0),
+			testTopicPWSOC:  makeFloatTopic(88.0),
 		},
 		Percentiles: map[PercentileKey]float64{
 			freqKey: 50.1,
@@ -146,7 +159,7 @@ func TestExtractDynamicInput(t *testing.T) {
 
 func TestExtractDynamicInput_GridOff(t *testing.T) {
 	data, config := makeDynamicDisplayData()
-	data.TopicData["grid"] = makeBoolTopic(false, "off")
+	data.TopicData[testTopicGrid] = makeBoolTopic(false, "off")
 	input := ExtractDynamicInput(data, config)
 	assert.False(t, input.GridAvailable)
 }

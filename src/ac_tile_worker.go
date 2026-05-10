@@ -18,6 +18,14 @@ const TopicTemperatureInside = "homeassistant/sensor/temperature_inside_temperat
 // TopicSunState is the sun entity state (above_horizon / below_horizon).
 const TopicSunState = "homeassistant/sun/sun/state"
 
+const (
+	acStateCool         = "cool"
+	acStateHeat         = "heat"
+	acStateHeatCool     = "heat_cool"
+	acAttrBrightnessPct = "brightness_pct"
+	acAttrHSColor       = "hs_color"
+)
+
 type hsColor struct {
 	Hue        float64
 	Saturation float64
@@ -26,9 +34,9 @@ type hsColor struct {
 // States where the Daikin module reports hvac_action.
 // For these, we use hvac_action to distinguish active vs idle.
 var acHvacActionStates = map[string]bool{
-	"cool":      true,
-	"heat":      true,
-	"heat_cool": true,
+	acStateCool:     true,
+	acStateHeat:     true,
+	acStateHeatCool: true,
 }
 
 // acActionColors maps hvac_action values to tile colors (active, 75% brightness).
@@ -40,9 +48,9 @@ var acActionColors = map[string]hsColor{
 // acStateIdleColors maps climate state to tile colors when hvac_action is "idle".
 // Uses same color as active but at 25% brightness to indicate standby.
 var acStateIdleColors = map[string]hsColor{
-	"cool":      {200, 80},
-	"heat":      {0, 85},
-	"heat_cool": {0, 85},
+	acStateCool:     {200, 80},
+	acStateHeat:     {0, 85},
+	acStateHeatCool: {0, 85},
 }
 
 // acStateColors maps climate state to tile colors for modes
@@ -141,8 +149,8 @@ func acTileWorker(
 					brightness := dimBrightness(75)
 					log.Printf("AC tile: state=%s action=%s, setting tiles to hs(%.0f, %.0f) %d%%\n", state, action, color.Hue, color.Saturation, brightness)
 					sender.CallService("light", "turn_on", "light.tiles", map[string]any{
-						"hs_color":       []float64{color.Hue, color.Saturation},
-						"brightness_pct": brightness,
+						acAttrHSColor:       []float64{color.Hue, color.Saturation},
+						acAttrBrightnessPct: brightness,
 					})
 				}
 			} else if action == "idle" {
@@ -151,8 +159,8 @@ func acTileWorker(
 						brightness := dimBrightness(25)
 						log.Printf("AC tile: state=%s action=idle, setting tiles to hs(%.0f, %.0f) %d%%\n", state, color.Hue, color.Saturation, brightness)
 						sender.CallService("light", "turn_on", "light.tiles", map[string]any{
-							"hs_color":       []float64{color.Hue, color.Saturation},
-							"brightness_pct": brightness,
+							acAttrHSColor:       []float64{color.Hue, color.Saturation},
+							acAttrBrightnessPct: brightness,
 						})
 					}
 				}
@@ -161,8 +169,8 @@ func acTileWorker(
 					brightness := dimBrightness(75)
 					log.Printf("AC tile: state=%s, setting tiles to hs(%.0f, %.0f) %d%%\n", state, color.Hue, color.Saturation, brightness)
 					sender.CallService("light", "turn_on", "light.tiles", map[string]any{
-						"hs_color":       []float64{color.Hue, color.Saturation},
-						"brightness_pct": brightness,
+						acAttrHSColor:       []float64{color.Hue, color.Saturation},
+						acAttrBrightnessPct: brightness,
 					})
 				}
 			} else {
@@ -170,8 +178,8 @@ func acTileWorker(
 				brightness := dimBrightness(50)
 				log.Printf("AC tile: AC off, temp=%.1f°C, setting tiles to hs(%.0f, 80) %d%%\n", temp, hue, brightness)
 				sender.CallService("light", "turn_on", "light.tiles", map[string]any{
-					"hs_color":       []float64{hue, 80},
-					"brightness_pct": brightness,
+					acAttrHSColor:       []float64{hue, 80},
+					acAttrBrightnessPct: brightness,
 				})
 			}
 

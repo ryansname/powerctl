@@ -41,7 +41,6 @@ func TestForecastExcessRequestCore_NoExcessEnergy(t *testing.T) {
 		WattsPerInverter:    250,
 		SolarMultiplier:     1.0,
 		CapacityWh:          10000,
-
 	}
 
 	state := &ForecastExcessState{}
@@ -64,7 +63,6 @@ func TestForecastExcessRequestCore_HasExcessEnergy(t *testing.T) {
 		WattsPerInverter:    250,
 		SolarMultiplier:     1.0,
 		CapacityWh:          10000,
-
 	}
 
 	state := &ForecastExcessState{}
@@ -128,7 +126,6 @@ func TestForecastExcessRequestCore_SolarEndAtThreshold(t *testing.T) {
 				WattsPerInverter:    250,
 				SolarMultiplier:     1.0,
 				CapacityWh:          10000,
-		
 			}
 
 			result := ForecastExcessRequestCore(input, state)

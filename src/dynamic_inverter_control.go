@@ -41,6 +41,8 @@ const (
 	cclOverflowHeadroomA = 5.0
 
 	priorityCarCharge = "CarCharge"
+	priorityCharge    = "Charge"
+	prioritySafety    = "Safety"
 )
 
 // DynamicInverterConfig holds configuration for the dynamic (Multiplus) inverter controller.
@@ -215,7 +217,7 @@ func intentConstraint(input DynamicInput, state *DynamicInverterState) (DynamicM
 	default:
 		// Priority 3: Charge from Surplus — absorb only the surplus, not all generation
 		c = DynamicModeConstraint{Target: min(-target, dynamicMaxChargeW), MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
-		priority = "Charge"
+		priority = priorityCharge
 	}
 
 	// Car charging overrides the default intent when eligible
@@ -249,18 +251,18 @@ func calculateDynamicSetpoint(
 
 	intent, priority, carStatus := intentConstraint(input, state)
 
-	tl    := transferLimitConstraint(busLoad)
-	sfty  := safetyConstraint(isSafety)
+	tl := transferLimitConstraint(busLoad)
+	sfty := safetyConstraint(isSafety)
 	cclOF := cclOverflowConstraint(input.Solar3BatteryCurrent, input.Solar4BatteryCurrent, input.Battery3CCL, input.Battery3Voltage)
 	if isSafety {
-		priority = "Safety"
+		priority = prioritySafety
 	}
 
 	// Compose: intent (single non-zero Target) → hard range constraints (Target=0).
 	// sfty and tl narrow the allowed range; cclOF enforces a minimum discharge floor;
 	// socLimit tapers MaxCharge as B3 fills (transfer-limit MinCharge still wins via lo>hi).
 	// phChargeLimit prevents charging from drawing power through the cable from the house side.
-	socLimit     := b3SOCChargeLimit(input.Battery3SOC)
+	socLimit := b3SOCChargeLimit(input.Battery3SOC)
 	phChargeLimit := DynamicModeConstraint{
 		MaxDischarge: dynamicMaxDischargeW,
 		MaxCharge:    max(0, input.Solar1Power+input.Inverter1to9Power),
@@ -304,7 +306,7 @@ func dynamicInverterControl(
 	defer ticker.Stop()
 
 	send := func(setpoint float64) {
-		payload, _ := json.Marshal(map[string]float64{"value": setpoint})
+		payload, _ := json.Marshal(map[string]float64{haServiceValueKey: setpoint})
 		sender.Send(MQTTMessage{Topic: TopicMultiplusSetpointWrite, Payload: payload, QoS: 0})
 	}
 

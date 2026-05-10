@@ -39,7 +39,6 @@ type BaselineInverterState struct {
 	socLimit2      *governor.SteppedHysteresis
 	powerCutAllow2 *governor.SteppedHysteresis
 	lowVoltage2    *governor.SteppedHysteresis
-
 }
 
 // BaselineDebugInfo contains mode states for the baseline controller debug output.
@@ -50,8 +49,8 @@ type BaselineDebugInfo struct {
 	ACFreqP100    float64
 	PowerwallSOC  float64
 
-	Battery2LowVoltage   bool
-	Battery2VoltageMin   float64
+	Battery2LowVoltage    bool
+	Battery2VoltageMin    float64
 	Battery2VoltageMaxInv int
 
 	BaselineTarget float64
@@ -75,7 +74,7 @@ func calculateBaseline(
 	usedBaseline := max(0.0, state.targetMinusSolar.Min())
 
 	return PowerRequest{
-		Name:  "Baseline",
+		Name:  modeBaseline,
 		Watts: min(usedBaseline, maxWatts),
 	}
 }
@@ -194,7 +193,7 @@ func baselineInverterControl(
 		houseLoadHourly:    governor.NewRollingMinMaxHours(168),
 		targetMinusSolar:   governor.NewRollingMinMax(60),
 		socLimit2:          governor.NewSteppedHysteresis(b2Count, true, 15, 25, 12.5, 22.5),
-		powerCutAllow2: governor.NewSteppedHysteresis(1, true, 53, 53, 47, 47),
+		powerCutAllow2:     governor.NewSteppedHysteresis(1, true, 53, 53, 47, 47),
 		lowVoltage2: governor.NewSteppedHysteresis(
 			b2Count, true,
 			config.LowVoltageTurnOnStart, config.LowVoltageTurnOnEnd,

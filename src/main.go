@@ -118,7 +118,6 @@ func buildTopicsList(batteries []BatteryConfig) []string {
 	return topics
 }
 
-
 // SafeGo launches a goroutine with panic recovery and retry logic.
 // On panic, retries with exponential backoff (max 10 retries).
 // Retry count resets if worker ran for 2+ minutes before failing.
@@ -216,7 +215,7 @@ func main() {
 	// Get MQTT client ID from environment, default to "powerctl"
 	mqttClientID := os.Getenv("MQTT_CLIENT_ID")
 	if mqttClientID == "" {
-		mqttClientID = "powerctl"
+		mqttClientID = deviceIDPowerctl
 	}
 
 	// Create context for lifecycle management
@@ -278,7 +277,7 @@ func main() {
 	}
 
 	battery3 := BatteryConfig{
-		Name:         "Battery 3",
+		Name:         deviceNameBattery3,
 		CapacityKWh:  3 * 14.5,
 		Manufacturer: "Micromall",
 		InflowEnergyTopics: []string{

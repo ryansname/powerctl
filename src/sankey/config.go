@@ -1,5 +1,14 @@
 package sankey
 
+const (
+	groupBattery2        = "battery_2"
+	groupBattery3        = "battery_3"
+	groupPowerhouseNet   = "powerhouse_net"
+	groupGridExport      = "grid_export"
+	groupHouseMains      = "house_mains"
+	groupPowerwallCharge = "powerwall_charge"
+)
+
 // DefaultConfig returns the embedded sankey configuration
 func DefaultConfig() Config {
 	return Config{
@@ -24,7 +33,7 @@ func DefaultConfig() Config {
 				Name:     "battery_2_charging",
 				Section:  SectionPowerhouseIn,
 				Sensors:  []Sensor{{Name: "sensor.solar_5_solar_power", Label: "Solar 5"}},
-				Children: []string{"battery_2"},
+				Children: []string{groupBattery2},
 			},
 			{
 				Name:    "battery_3_charging",
@@ -35,25 +44,25 @@ func DefaultConfig() Config {
 					{Name: "sensor.powerhouse_charger_1_switch_0_power"},
 					{Name: "sensor.powerhouse_charger_2_switch_0_power"},
 				},
-				Children: []string{"battery_3"},
+				Children: []string{groupBattery3},
 			},
 			{
-				Name:     "battery_2",
+				Name:     groupBattery2,
 				Section:  SectionPowerhouse,
 				Children: []string{"microinverter_bank_2"},
 				Other: &RemainderStrategy{
-					Key:        "battery_2",
+					Key:        groupBattery2,
 					Label:      "Battery 2",
 					Type:       RemainderChildState,
 					ParentsSum: &Reconcile{ShouldBe: ShouldBeEqualOrLess, ReconcileTo: ReconcileToMax},
 				},
 			},
 			{
-				Name:     "battery_3",
+				Name:     groupBattery3,
 				Section:  SectionPowerhouse,
 				Children: []string{"powerhouse_10"},
 				Other: &RemainderStrategy{
-					Key:        "battery_3",
+					Key:        groupBattery3,
 					Label:      "Battery 3",
 					Type:       RemainderChildState,
 					ParentsSum: &Reconcile{ShouldBe: ShouldBeEqualOrLess, ReconcileTo: ReconcileToMax},
@@ -73,59 +82,59 @@ func DefaultConfig() Config {
 					{Name: "sensor.powerhouse_inverter_8_switch_0_power_inverted", Label: "Powerhouse 8"},
 					{Name: "sensor.powerhouse_inverter_9_switch_0_power_inverted", Label: "Powerhouse 9"},
 				},
-				Children: []string{"powerhouse_net"},
+				Children: []string{groupPowerhouseNet},
 			},
 			{
 				Name:     "solar_1",
 				Section:  SectionPowerhouseOut,
 				Sensors:  []Sensor{{Name: "sensor.solar_1_power", Label: "Solar 1"}},
-				Children: []string{"powerhouse_net"},
+				Children: []string{groupPowerhouseNet},
 			},
 			{
-				Name:     "powerhouse_net",
+				Name:     groupPowerhouseNet,
 				Section:  SectionHouseMainsIn,
 				Sensors:  []Sensor{{Name: "sensor.powerhouse_net_power", Label: "Powerhouse"}},
-				Children: []string{"house_mains", "grid_export", "powerwall_charge"},
+				Children: []string{groupHouseMains, groupGridExport, groupPowerwallCharge},
 			},
 			{
 				Name:     "powerhouse_10",
 				Section:  SectionPowerhouseOut,
 				Sensors:  []Sensor{{Name: "sensor.powerhouse_inverter_10_ac_power_inverted", Label: "Powerhouse 10"}},
-				Children: []string{"powerhouse_net"},
+				Children: []string{groupPowerhouseNet},
 			},
 			{
 				Name:     "powerwall_discharge",
 				Section:  SectionHouseMainsIn,
 				Sensors:  []Sensor{{Name: "sensor.home_sweet_home_battery_power_2", Label: "Powerwall"}},
-				Children: []string{"house_mains"},
+				Children: []string{groupHouseMains},
 			},
 			{
 				Name:     "solar_2",
 				Section:  SectionHouseMainsIn,
 				Sensors:  []Sensor{{Name: "sensor.primo_5_0_ac_power", Label: "Solar 2"}},
-				Children: []string{"house_mains", "grid_export", "powerwall_charge"},
+				Children: []string{groupHouseMains, groupGridExport, groupPowerwallCharge},
 			},
 			{
 				Name:     "grid_import",
 				Section:  SectionHouseMainsIn,
 				Sensors:  []Sensor{{Name: "sensor.home_sweet_home_site_power", Label: "Buying In"}},
-				Children: []string{"house_mains", "grid_export"},
+				Children: []string{groupHouseMains, groupGridExport},
 			},
 			{
-				Name:    "grid_export",
+				Name:    groupGridExport,
 				Section: SectionHouseMains,
 				Sensors: []Sensor{{Name: "sensor.home_sweet_home_site_power_inverted", Label: "Selling Back"}},
 			},
 			{
-				Name:    "powerwall_charge",
+				Name:    groupPowerwallCharge,
 				Section: SectionHouseMains,
 				Sensors: []Sensor{{Name: "sensor.home_sweet_home_battery_power_2_inverted", Label: "Powerwall"}},
 			},
 			{
-				Name:     "house_mains",
+				Name:     groupHouseMains,
 				Section:  SectionHouseMains,
 				Sensors:  []Sensor{},
-				Other:    &RemainderStrategy{Key: "house_mains", Label: "House Usage", Type: RemainderParentState},
+				Other:    &RemainderStrategy{Key: groupHouseMains, Label: "House Usage", Type: RemainderParentState},
 				Children: []string{"house_draw_components"},
 			},
 			{
