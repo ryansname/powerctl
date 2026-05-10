@@ -39,9 +39,9 @@ func expectingPowerCutsWorker(
 	for {
 		select {
 		case data := <-dataChan:
-			enabled := data.GetBoolean(TopicExpectingPowerCutsState)
+			enabled, _ := data.GetBoolean(TopicExpectingPowerCutsState)
 			soc := data.GetFloat(PowerwallSOCTopic).Current
-			discharging := data.GetBoolean(TopicPW2DischargeState)
+			discharging, _ := data.GetBoolean(TopicPW2DischargeState)
 
 			// Start/stop 24h auto-disable timer when switch toggles
 			if enabled && autoDisableTimer == nil {
@@ -59,7 +59,7 @@ func expectingPowerCutsWorker(
 
 			// State-based power cut preparation: hold PW2 at 50%, turn off hot water
 			backupReserve := data.GetFloat(TopicPW2BackupReserve).Current
-			hotWaterOn := data.GetBoolean(TopicHotWaterCylinderState)
+			hotWaterOn, _ := data.GetBoolean(TopicHotWaterCylinderState)
 
 			if enabled && backupReserve < 50 {
 				log.Println("Power cut prep: setting PW2 backup reserve to 50%")

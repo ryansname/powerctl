@@ -76,13 +76,12 @@ func (d *DisplayData) GetString(topic string) string {
 	return ""
 }
 
-// GetBoolean extracts a boolean value from DisplayData
-// Returns the boolean value if topic is a BooleanTopicData, false otherwise
-func (d *DisplayData) GetBoolean(topic string) bool {
+// GetBoolean extracts a boolean value and whether it changed this tick from DisplayData.
+func (d *DisplayData) GetBoolean(topic string) (bool, bool) {
 	if td, ok := d.TopicData[topic].(*BooleanTopicData); ok {
-		return td.Current
+		return td.Current, td.Changed
 	}
-	return false
+	return false, false
 }
 
 // SumTopics calculates the sum of all specified topics

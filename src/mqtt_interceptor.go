@@ -23,7 +23,7 @@ func mqttInterceptorWorker(
 	for {
 		select {
 		case data := <-dataChan:
-			newEnabled := data.GetBoolean(enableTopic)
+			newEnabled, _ := data.GetBoolean(enableTopic)
 			if newEnabled != enabled {
 				log.Printf("%s enabled: %v\n", name, newEnabled)
 				enabled = newEnabled

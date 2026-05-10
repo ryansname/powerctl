@@ -145,6 +145,11 @@ func (c DynamicInputConfig) Topics() []string {
 
 // ExtractDynamicInput extracts values from DisplayData for the dynamic controller.
 func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInput {
+	gridAvailable, _ := data.GetBoolean(config.GridStatusTopic)
+	dynamicAutoEnabled, _ := data.GetBoolean(config.DynamicAutoTopic)
+	carChargingEnabled, _ := data.GetBoolean(config.CarChargingEnabledTopic)
+	carChargingActive, _ := data.GetBoolean(config.CarChargingActiveTopic)
+
 	return DynamicInput{
 		HouseLoad:             data.GetFloat(config.HouseLoadTopic).Current,
 		Solar1Power:           data.GetFloat(config.Solar1PowerTopic).Current,
@@ -152,13 +157,13 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		Inverter1to9Power:     -data.SumTopics(config.Inverter1to9PowerTopics),
 		MultiplusACPower:      data.GetFloat(config.MultiplusACPowerTopic).Current,
 		Battery3SOC:           data.GetFloat(config.Battery3SOCTopic).Current,
-		GridAvailable:         data.GetBoolean(config.GridStatusTopic),
+		GridAvailable:         gridAvailable,
 		ACFreqP100_5Min:       data.GetPercentile(config.ACFrequencyTopic, P100, Window5Min),
 		PowerwallSOC:          data.GetFloat(config.PowerwallSOCTopic).Current,
-		DynamicAutoEnabled:    data.GetBoolean(config.DynamicAutoTopic),
+		DynamicAutoEnabled:    dynamicAutoEnabled,
 		MultiplusSetpointCmd:  data.GetFloat(config.MultiplusSetpointCmdTopic).Current,
-		CarChargingEnabled:    data.GetBoolean(config.CarChargingEnabledTopic),
-		CarChargingActive:     data.GetBoolean(config.CarChargingActiveTopic),
+		CarChargingEnabled:    carChargingEnabled,
+		CarChargingActive:     carChargingActive,
 		CarBatterySOC:         data.GetFloat(config.CarBatterySOCTopic).Current,
 		CarBattery3Cutoff:     data.GetFloat(config.CarBattery3CutoffTopic).Current,
 		Tariff:                CurrentTariff(time.Now()),

@@ -724,7 +724,7 @@ func mqttSenderWorker(
 		select {
 		case data := <-dataChan:
 			// Read enabled state using GetBoolean (parsed by statsWorker)
-			newEnabled := data.GetBoolean(TopicPowerctlEnabledState)
+			newEnabled, _ := data.GetBoolean(TopicPowerctlEnabledState)
 			if newEnabled != enabled {
 				log.Printf("Powerctl enabled: %v\n", newEnabled)
 				enabled = newEnabled

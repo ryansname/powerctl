@@ -93,6 +93,7 @@ type StringTopicData struct {
 // BooleanTopicData holds current value for a boolean topic (on/off switches)
 type BooleanTopicData struct {
 	Current bool
+	Changed bool
 	Raw     string
 }
 
@@ -239,7 +240,7 @@ func cloneTopicData(topicData map[string]any) map[string]any {
 		case *StringTopicData:
 			clone[topic] = &StringTopicData{Current: d.Current}
 		case *BooleanTopicData:
-			clone[topic] = &BooleanTopicData{Current: d.Current, Raw: d.Raw}
+			clone[topic] = &BooleanTopicData{Current: d.Current, Changed: d.Changed, Raw: d.Raw}
 		}
 	}
 	return clone
@@ -351,7 +352,9 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 						data = &BooleanTopicData{}
 						topicData[msg.Topic] = data
 					}
-					data.Current = (lowerValue == "on")
+					newBool := lowerValue == "on"
+					data.Changed = data.Changed || (newBool != data.Current)
+					data.Current = newBool
 					data.Raw = msg.Value
 				} else {
 					data, _ := topicData[msg.Topic].(*StringTopicData)
@@ -438,6 +441,11 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 				TopicData:   cloneTopicData(topicData),
 				Percentiles: clonePercentiles(percentiles),
 			}:
+				for _, d := range topicData {
+					if b, ok := d.(*BooleanTopicData); ok {
+						b.Changed = false
+					}
+				}
 			default:
 				// Channel full, skip this update
 			}

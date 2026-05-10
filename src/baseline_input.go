@@ -71,8 +71,11 @@ func ExtractBaselineInput(data DisplayData, config BaselineInputConfig) Baseline
 
 	states := make([]bool, len(config.InverterStateTopics))
 	for i, topic := range config.InverterStateTopics {
-		states[i] = data.GetBoolean(topic)
+		states[i], _ = data.GetBoolean(topic)
 	}
+
+	gridAvailable, _ := data.GetBoolean(config.GridStatusTopic)
+	expectingPowerCuts, _ := data.GetBoolean(config.ExpectingPowerCutsTopic)
 
 	return BaselineInput{
 		Battery2SOC:         data.GetFloat(config.Battery2SOCTopic).Current,
@@ -83,7 +86,7 @@ func ExtractBaselineInput(data DisplayData, config BaselineInputConfig) Baseline
 		Solar1P90_15Min:     data.GetPercentile(config.Solar1PowerTopic, P90, Window15Min),
 		Solar2Power:         data.GetFloat(config.Solar2PowerTopic).Current,
 		HouseLoad:           data.GetFloat(config.HouseLoadTopic).Current,
-		GridAvailable:       data.GetBoolean(config.GridStatusTopic),
+		GridAvailable:       gridAvailable,
 		ACFrequency:         data.GetFloat(config.ACFrequencyTopic).Current,
 		ACFreqP100_5Min:     data.GetPercentile(config.ACFrequencyTopic, P100, Window5Min),
 		ForecastRemainingWh: data.GetFloat(config.ForecastRemainingTopic).Current,
@@ -91,6 +94,6 @@ func ExtractBaselineInput(data DisplayData, config BaselineInputConfig) Baseline
 		InverterStates:      states,
 		Battery3SOC:         data.GetFloat(config.Battery3SOCTopic).Current,
 		PowerwallSOC:        data.GetFloat(config.PowerwallSOCTopic).Current,
-		ExpectingPowerCuts:  data.GetBoolean(config.ExpectingPowerCutsTopic),
+		ExpectingPowerCuts:  expectingPowerCuts,
 	}
 }
