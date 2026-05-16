@@ -71,11 +71,11 @@ func ExtractBaselineInput(data DisplayData, config BaselineInputConfig) Baseline
 
 	states := make([]bool, len(config.InverterStateTopics))
 	for i, topic := range config.InverterStateTopics {
-		states[i], _ = data.GetBoolean(topic)
+		states[i] = data.GetBoolean(topic)
 	}
 
-	gridAvailable, _ := data.GetBoolean(config.GridStatusTopic)
-	expectingPowerCuts, _ := data.GetBoolean(config.ExpectingPowerCutsTopic)
+	gridAvailable := data.GetBoolean(config.GridStatusTopic)
+	expectingPowerCuts := data.GetBoolean(config.ExpectingPowerCutsTopic)
 
 	return BaselineInput{
 		Battery2SOC:         data.GetFloat(config.Battery2SOCTopic).Current,

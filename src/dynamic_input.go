@@ -144,10 +144,10 @@ func (c DynamicInputConfig) Topics() []string {
 
 // ExtractDynamicInput extracts values from DisplayData for the dynamic controller.
 func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInput {
-	gridAvailable, _ := data.GetBoolean(config.GridStatusTopic)
-	dynamicAutoEnabled, _ := data.GetBoolean(config.DynamicAutoTopic)
-	carChargingEnabled, _ := data.GetBoolean(config.CarChargingEnabledTopic)
-	carChargingActive, _ := data.GetBoolean(config.CarChargingActiveTopic)
+	gridAvailable := data.GetBoolean(config.GridStatusTopic)
+	dynamicAutoEnabled := data.GetBoolean(config.DynamicAutoTopic)
+	carChargingEnabled := data.GetBoolean(config.CarChargingEnabledTopic)
+	carChargingActive := data.GetBoolean(config.CarChargingActiveTopic)
 
 	return DynamicInput{
 		HouseLoad:             data.GetFloat(config.HouseLoadTopic).Current,

@@ -38,7 +38,7 @@ func powerhouseCoolingWorker(ctx context.Context, dataChan <-chan DisplayData, s
 			// statsWorker guarantees temperature topic has a real value before first broadcast.
 			tracker.Update(data.GetFloat(TopicPowerhouseBlowerTemp).Current)
 			tempMax := tracker.Max()
-			cooling, _ := data.GetBoolean(TopicPowerhouseBlowerSwitch0State)
+			cooling := data.GetBoolean(TopicPowerhouseBlowerSwitch0State)
 
 			if !cooling && tempMax > coolOn {
 				sender.CallService("switch", "turn_off", switchBlower1, nil)

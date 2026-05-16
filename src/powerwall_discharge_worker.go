@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// TopicPW2DischargeState is the state topic for the powerctl_pw2_discharge switch.
-const TopicPW2DischargeState = "homeassistant/switch/powerctl_pw2_discharge/state"
+// TopicPW2DischargeMode is the state topic for the powerctl_pw2_discharge_mode select entity.
+const TopicPW2DischargeMode = "homeassistant/select/powerctl_pw2_discharge_mode/state"
 
 // TopicPW2OperationMode is the state topic for the Powerwall 2 operation mode select entity.
 const TopicPW2OperationMode = "homeassistant/select/home_sweet_home_operation_mode/state"
@@ -16,9 +16,40 @@ const TopicPW2OperationMode = "homeassistant/select/home_sweet_home_operation_mo
 // TopicPW2BackupReserve is the state topic for the Powerwall 2 backup reserve number entity.
 const TopicPW2BackupReserve = "homeassistant/number/home_sweet_home_backup_reserve/state"
 
+// User-facing options for the powerctl_pw2_discharge_mode select entity.
+const (
+	PW2DischargeModeAuto     = "Auto"
+	PW2DischargeModeForceOn  = "Force On"
+	PW2DischargeModeForceOff = "Force Off"
+)
+
 const pw2SiteID = "2233628"
 const pw2OperationModeEntity = "select.home_sweet_home_operation_mode"
 const pw2BackupReserveEntity = "number.home_sweet_home_backup_reserve"
+const pw2TimeBasedControl = "Time-Based Control" //nolint:gosec // operation mode label, not a secret
+
+// propagationWindow is how long the arbiter waits after sending a command before
+// re-issuing the same intent — gives Tesla time to update its operation mode. An
+// intent change (desired flips) bypasses the window and fires immediately.
+const propagationWindow = 30 * time.Second
+
+// DischargeVote is an automation source's opinion on whether the Powerwall should
+// discharge. NoOpinion sources are ignored; On requests discharge; Off vetoes it.
+type DischargeVote int
+
+const (
+	VoteNoOpinion DischargeVote = iota
+	VoteOn
+	VoteOff
+)
+
+// DischargeRequest is a single source's vote into the arbiter. Votes are sticky:
+// the arbiter holds the last vote per source until that source sends another.
+type DischargeRequest struct {
+	Source string
+	Want   DischargeVote
+	Reason string
+}
 
 // Tesla TOU tariff wire-format constants.
 const (
@@ -60,57 +91,119 @@ const (
 	tariffKeyValue               = "value"
 )
 
-// powerwallDischargeWorker monitors the PW2 discharge switch and controls
-// Tesla Powerwall 2 discharge via TOU tariff manipulation.
-func powerwallDischargeWorker(
+// decideDischarge resolves the user select state plus all active automation votes
+// into a single desired discharge state. Returns the desired bool plus a human
+// reason string for logging / debug visibility.
+//
+// Rules (in order):
+//  1. User Force On / Force Off wins outright.
+//  2. In Auto mode, any VoteOff vetoes; otherwise any VoteOn engages discharge;
+//     otherwise idle.
+//  3. Empty/unknown user mode (startup before statestream lands) → treat as Auto.
+func decideDischarge(userMode string, votes map[string]DischargeRequest) (bool, string) {
+	switch userMode {
+	case PW2DischargeModeForceOn:
+		return true, "user-force-on"
+	case PW2DischargeModeForceOff:
+		return false, "user-force-off"
+	}
+
+	var vetoSource, vetoReason string
+	var onSource, onReason string
+	for source, req := range votes {
+		switch req.Want {
+		case VoteOff:
+			if vetoSource == "" || source < vetoSource {
+				vetoSource, vetoReason = source, req.Reason
+			}
+		case VoteOn:
+			if onSource == "" || source < onSource {
+				onSource, onReason = source, req.Reason
+			}
+		}
+	}
+
+	if vetoSource != "" {
+		return false, fmt.Sprintf("%s-veto: %s", vetoSource, vetoReason)
+	}
+	if onSource != "" {
+		return true, fmt.Sprintf("%s: %s", onSource, onReason)
+	}
+	return false, "idle"
+}
+
+// reconcileDischarge decides whether to issue a command this tick. Same intent
+// already in-flight is suppressed for propagationWindow so Tesla can catch up;
+// an intent change always fires immediately so user toggles can never be lost.
+func reconcileDischarge(
+	desired, actual, lastSentDesired bool,
+	lastSent, now time.Time,
+) bool {
+	if desired == actual {
+		return false
+	}
+	intentChanged := desired != lastSentDesired
+	return intentChanged || now.Sub(lastSent) >= propagationWindow
+}
+
+// dischargeArbiter holds per-source votes, reads the user-facing select mode, and
+// reconciles the Powerwall 2 operation mode to match the merged desired state.
+// Replaces the old edge-detection switch worker: state-based eventual consistency
+// means a toggle made during the propagation window is never lost.
+func dischargeArbiter(
 	ctx context.Context,
 	dataChan <-chan DisplayData,
+	voteChan <-chan DischargeRequest,
 	sender *MQTTSender,
 ) {
-	log.Println("Powerwall discharge worker started")
+	log.Println("Discharge arbiter started")
 
-	var lastCommandSent time.Time
+	votes := make(map[string]DischargeRequest)
+	var lastSent time.Time
+	var lastSentDesired bool
 	var lastTOURefresh time.Time
-	commandCooldown := 60 * time.Second
+	var lastReason string
 
-	log.Println("PW2 discharge: sending initial Octopus tariff")
+	log.Println("Discharge arbiter: sending initial Octopus tariff")
 	sendOctopusTariff(sender)
 
 	for {
 		select {
 		case data := <-dataChan:
-			switchEnabled, switchChanged := data.GetBoolean(TopicPW2DischargeState)
+			userMode := data.GetString(TopicPW2DischargeMode)
 			currentMode := data.GetString(TopicPW2OperationMode)
 			backupReserve := data.GetFloat(TopicPW2BackupReserve).Current
 
-			// Cooldown after sending commands (wait for mode to update)
-			if time.Since(lastCommandSent) < commandCooldown {
-				continue
+			desired, reason := decideDischarge(userMode, votes)
+			actual := currentMode == pw2TimeBasedControl
+			now := time.Now()
+
+			if reason != lastReason {
+				log.Printf("Discharge arbiter: desired=%v reason=%q (mode=%q)\n", desired, reason, userMode)
+				lastReason = reason
 			}
 
-			actuallyDischarging := currentMode == "Time-Based Control"
-			switchDisabled := switchChanged && !switchEnabled
-
-			switch {
-			case switchDisabled:
-				log.Println("PW2 discharge: deactivating")
-				stopDischarge(sender)
+			if reconcileDischarge(desired, actual, lastSentDesired, lastSent, now) {
+				if desired {
+					startDischarge(sender, backupReserve)
+					lastTOURefresh = now
+				} else {
+					stopDischarge(sender)
+				}
 				requestModeUpdate(sender)
-				lastCommandSent = time.Now()
-			case switchEnabled && !actuallyDischarging:
-				log.Println("PW2 discharge: activating")
+				lastSent = now
+				lastSentDesired = desired
+			} else if desired && actual && time.Since(lastTOURefresh) >= time.Hour {
+				log.Println("Discharge arbiter: refreshing discharge state")
 				startDischarge(sender, backupReserve)
-				requestModeUpdate(sender)
-				lastCommandSent = time.Now()
-				lastTOURefresh = time.Now()
-			case switchEnabled && actuallyDischarging && time.Since(lastTOURefresh) >= time.Hour:
-				log.Println("PW2 discharge: refreshing discharge state")
-				startDischarge(sender, backupReserve)
-				lastTOURefresh = time.Now()
+				lastTOURefresh = now
 			}
+
+		case req := <-voteChan:
+			votes[req.Source] = req
 
 		case <-ctx.Done():
-			log.Println("Powerwall discharge worker stopped")
+			log.Println("Discharge arbiter stopped")
 			return
 		}
 	}

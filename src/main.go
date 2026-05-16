@@ -76,12 +76,12 @@ func (d *DisplayData) GetString(topic string) string {
 	return ""
 }
 
-// GetBoolean extracts a boolean value and whether it changed this tick from DisplayData.
-func (d *DisplayData) GetBoolean(topic string) (bool, bool) {
+// GetBoolean extracts a boolean value from DisplayData.
+func (d *DisplayData) GetBoolean(topic string) bool {
 	if td, ok := d.TopicData[topic].(*BooleanTopicData); ok {
-		return td.Current, td.Changed
+		return td.Current
 	}
-	return false, false
+	return false
 }
 
 // SumTopics calculates the sum of all specified topics
@@ -325,7 +325,7 @@ func main() {
 	haTopics = append(haTopics, TopicPowerhouseInvertersEnabledState)
 
 	// Add PW2 discharge, operation mode, and expecting power cuts state topics
-	haTopics = append(haTopics, TopicPW2DischargeState)
+	haTopics = append(haTopics, TopicPW2DischargeMode)
 	haTopics = append(haTopics, TopicPW2OperationMode)
 	haTopics = append(haTopics, TopicPW2BackupReserve)
 	haTopics = append(haTopics, TopicExpectingPowerCutsState)
@@ -412,11 +412,14 @@ func main() {
 		log.Fatalf("Failed to create powerhouse inverters switch: %v", err)
 	}
 
-	// Create PW2 discharge switch
-	err = mqttSender.CreatePW2DischargeSwitch()
+	// Clean up any HA entities that have been renamed or retired.
+	mqttSender.DeleteOldEntities()
+
+	// Create PW2 discharge mode select (Auto / Force On / Force Off).
+	err = mqttSender.CreatePW2DischargeModeSelect()
 	if err != nil {
 		cancel()
-		log.Fatalf("Failed to create PW2 discharge switch: %v", err)
+		log.Fatalf("Failed to create PW2 discharge mode select: %v", err)
 	}
 
 	// Create expecting power cuts switch
@@ -632,12 +635,15 @@ func main() {
 		debugAggregatorWorker(ctx, baselineDebugChan, dynamicDebugChan, mqttSender)
 	})
 
-	// Launch Powerwall 2 discharge worker
+	// Vote channel carries discharge requests from automation sources into the arbiter.
+	dischargeVoteChan := make(chan DischargeRequest, 10)
+
+	// Launch Powerwall 2 discharge arbiter
 	pw2DischargeChan := make(chan DisplayData, 10)
 	downstreamChans = append(downstreamChans, pw2DischargeChan)
 
-	SafeGo(ctx, cancel, "pw2-discharge", func(ctx context.Context) {
-		powerwallDischargeWorker(ctx, pw2DischargeChan, mqttSender)
+	SafeGo(ctx, cancel, "discharge-arbiter", func(ctx context.Context) {
+		dischargeArbiter(ctx, pw2DischargeChan, dischargeVoteChan, mqttSender)
 	})
 
 	// Launch expecting power cuts worker
@@ -645,7 +651,7 @@ func main() {
 	downstreamChans = append(downstreamChans, expectingPowerCutsChan)
 
 	SafeGo(ctx, cancel, "expecting-power-cuts", func(ctx context.Context) {
-		expectingPowerCutsWorker(ctx, expectingPowerCutsChan, mqttSender)
+		expectingPowerCutsWorker(ctx, expectingPowerCutsChan, dischargeVoteChan, mqttSender)
 	})
 
 	// Launch AC tile color worker

@@ -315,6 +315,54 @@ func (s *MQTTSender) createSwitch(uniqueID, name, icon, stateTopic string) error
 	return nil
 }
 
+func (s *MQTTSender) createSelect(uniqueID, name, icon, stateTopic string, options []string) error {
+	type haDeviceConfig struct {
+		Identifiers  []string `json:"identifiers"`
+		Name         string   `json:"name"`
+		Manufacturer string   `json:"manufacturer,omitempty"`
+	}
+
+	type haSelectConfig struct {
+		Name         string         `json:"name"`
+		StateTopic   string         `json:"state_topic"`
+		CommandTopic string         `json:"command_topic"`
+		UniqueId     string         `json:"unique_id"`
+		Icon         string         `json:"icon,omitempty"`
+		Options      []string       `json:"options"`
+		Optimistic   bool           `json:"optimistic"`
+		Device       haDeviceConfig `json:"device"`
+	}
+
+	config := haSelectConfig{
+		Name:         name,
+		StateTopic:   stateTopic,
+		CommandTopic: "powerctl/select/" + uniqueID + "/set",
+		UniqueId:     uniqueID,
+		Icon:         icon,
+		Options:      options,
+		Optimistic:   true,
+		Device: haDeviceConfig{
+			Identifiers:  []string{deviceIDPowerctl},
+			Name:         deviceNamePowerctl,
+			Manufacturer: deviceManufacturerCustom,
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/select/" + uniqueID + "/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
 // CreatePowerctlSwitch creates the powerctl_enabled switch via MQTT discovery
 func (s *MQTTSender) CreatePowerctlSwitch() error {
 	return s.createSwitch("powerctl_enabled", "Enabled", "mdi:power", TopicPowerctlEnabledState)
@@ -325,9 +373,33 @@ func (s *MQTTSender) CreatePowerhouseInvertersSwitch() error {
 	return s.createSwitch("powerctl_inverter_enabled", "Inverter Enabled", "mdi:power-plug", TopicPowerhouseInvertersEnabledState)
 }
 
-// CreatePW2DischargeSwitch creates the powerctl_pw2_discharge switch via MQTT discovery
-func (s *MQTTSender) CreatePW2DischargeSwitch() error {
-	return s.createSwitch("powerctl_pw2_discharge", "PW2 Discharge", "mdi:battery-arrow-down", TopicPW2DischargeState)
+// CreatePW2DischargeModeSelect creates the powerctl_pw2_discharge_mode select via MQTT discovery.
+// Tri-state: Auto (delegate to automation), Force On (always discharge), Force Off (never discharge).
+func (s *MQTTSender) CreatePW2DischargeModeSelect() error {
+	return s.createSelect(
+		"powerctl_pw2_discharge_mode",
+		"PW2 Discharge Mode",
+		"mdi:battery-arrow-down",
+		TopicPW2DischargeMode,
+		[]string{PW2DischargeModeAuto, PW2DischargeModeForceOn, PW2DischargeModeForceOff},
+	)
+}
+
+// DeleteOldEntities removes obsolete HA entities by publishing empty retained discovery
+// configs. Add an entry here whenever an entity is renamed or retired so old installs
+// don't keep a ghost copy. Safe to call repeatedly.
+func (s *MQTTSender) DeleteOldEntities() {
+	obsolete := []string{
+		"homeassistant/switch/powerctl_pw2_discharge/config", // superseded by powerctl_pw2_discharge_mode select
+	}
+	for _, topic := range obsolete {
+		s.Send(MQTTMessage{
+			Topic:   topic,
+			Payload: []byte{},
+			QoS:     2,
+			Retain:  true,
+		})
+	}
 }
 
 // CreateExpectingPowerCutsSwitch creates the expecting power cuts switch via MQTT discovery
@@ -735,7 +807,7 @@ func mqttSenderWorker(
 		select {
 		case data := <-dataChan:
 			// Read enabled state using GetBoolean (parsed by statsWorker)
-			newEnabled, _ := data.GetBoolean(TopicPowerctlEnabledState)
+			newEnabled := data.GetBoolean(TopicPowerctlEnabledState)
 			if newEnabled != enabled {
 				log.Printf("Powerctl enabled: %v\n", newEnabled)
 				enabled = newEnabled

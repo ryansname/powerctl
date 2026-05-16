@@ -99,7 +99,6 @@ type StringTopicData struct {
 // BooleanTopicData holds current value for a boolean topic (on/off switches)
 type BooleanTopicData struct {
 	Current bool
-	Changed bool
 	Raw     string
 }
 
@@ -246,7 +245,7 @@ func cloneTopicData(topicData map[string]any) map[string]any {
 		case *StringTopicData:
 			clone[topic] = &StringTopicData{Current: d.Current}
 		case *BooleanTopicData:
-			clone[topic] = &BooleanTopicData{Current: d.Current, Changed: d.Changed, Raw: d.Raw}
+			clone[topic] = &BooleanTopicData{Current: d.Current, Raw: d.Raw}
 		}
 	}
 	return clone
@@ -285,14 +284,14 @@ var selfPublishedFloatTopics = []string{
 
 // String topics that should be initialized to a default if not received within timeout
 var selfPublishedStringTopics = map[string]string{
-	TopicMinerWorkmode: WorkmodeOff, // dump_load_enabler controls this; default to off
+	TopicMinerWorkmode:    WorkmodeOff,          // dump_load_enabler controls this; default to off
+	TopicPW2DischargeMode: PW2DischargeModeAuto, // arbiter delegates to automation by default
 }
 
 // Boolean topics that should be initialized to true if not received within timeout
 var selfPublishedBoolTopics = []string{
 	TopicPowerctlEnabledState,
 	TopicPowerhouseInvertersEnabledState,
-	TopicPW2DischargeState,
 	TopicExpectingPowerCutsState,
 	TopicDynamicAutoState,
 }
@@ -358,9 +357,7 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 						data = &BooleanTopicData{}
 						topicData[msg.Topic] = data
 					}
-					newBool := lowerValue == "on"
-					data.Changed = data.Changed || (newBool != data.Current)
-					data.Current = newBool
+					data.Current = lowerValue == "on"
 					data.Raw = msg.Value
 				} else {
 					data, _ := topicData[msg.Topic].(*StringTopicData)
@@ -447,11 +444,6 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 				TopicData:   cloneTopicData(topicData),
 				Percentiles: clonePercentiles(percentiles),
 			}:
-				for _, d := range topicData {
-					if b, ok := d.(*BooleanTopicData); ok {
-						b.Changed = false
-					}
-				}
 			default:
 				// Channel full, skip this update
 			}

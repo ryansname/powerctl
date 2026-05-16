@@ -1,9 +1,111 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
+
+const (
+	testSourcePeak   = "peak-power"
+	testReasonSOC92  = "SOC 92%"
+)
+
+func TestDecideDischarge_UserForceOnWinsOverAllVotes(t *testing.T) {
+	votes := map[string]DischargeRequest{
+		powerCutVoteSource:  {Source: powerCutVoteSource, Want: VoteOff, Reason: "low SOC"},
+		testSourcePeak: {Source: testSourcePeak, Want: VoteOn, Reason: "peak window"},
+	}
+	desired, reason := decideDischarge(PW2DischargeModeForceOn, votes)
+	assert.True(t, desired)
+	assert.Equal(t, "user-force-on", reason)
+}
+
+func TestDecideDischarge_UserForceOffWinsOverAllVotes(t *testing.T) {
+	votes := map[string]DischargeRequest{
+		powerCutVoteSource: {Source: powerCutVoteSource, Want: VoteOn, Reason: testReasonSOC92},
+	}
+	desired, reason := decideDischarge(PW2DischargeModeForceOff, votes)
+	assert.False(t, desired)
+	assert.Equal(t, "user-force-off", reason)
+}
+
+func TestDecideDischarge_AutoNoVotes_Idle(t *testing.T) {
+	desired, reason := decideDischarge(PW2DischargeModeAuto, map[string]DischargeRequest{})
+	assert.False(t, desired)
+	assert.Equal(t, "idle", reason)
+}
+
+func TestDecideDischarge_AutoSingleOnVote(t *testing.T) {
+	votes := map[string]DischargeRequest{
+		powerCutVoteSource: {Source: powerCutVoteSource, Want: VoteOn, Reason: testReasonSOC92},
+	}
+	desired, reason := decideDischarge(PW2DischargeModeAuto, votes)
+	assert.True(t, desired)
+	assert.Contains(t, reason, powerCutVoteSource)
+	assert.Contains(t, reason, testReasonSOC92)
+}
+
+func TestDecideDischarge_AutoVetoBeatsOn(t *testing.T) {
+	votes := map[string]DischargeRequest{
+		powerCutVoteSource:  {Source: powerCutVoteSource, Want: VoteOn, Reason: testReasonSOC92},
+		"low-batt":   {Source: "low-batt", Want: VoteOff, Reason: "B3 below 30%"},
+		testSourcePeak: {Source: testSourcePeak, Want: VoteOn, Reason: "evening peak"},
+	}
+	desired, reason := decideDischarge(PW2DischargeModeAuto, votes)
+	assert.False(t, desired)
+	assert.Contains(t, reason, "low-batt")
+	assert.Contains(t, reason, "veto")
+}
+
+func TestDecideDischarge_AutoNoOpinionIgnored(t *testing.T) {
+	votes := map[string]DischargeRequest{
+		powerCutVoteSource:  {Source: powerCutVoteSource, Want: VoteNoOpinion, Reason: "armed, SOC too low"},
+		testSourcePeak: {Source: testSourcePeak, Want: VoteOn, Reason: "peak window"},
+	}
+	desired, reason := decideDischarge(PW2DischargeModeAuto, votes)
+	assert.True(t, desired)
+	assert.True(t, strings.HasPrefix(reason, "peak-power:"))
+}
+
+func TestDecideDischarge_EmptyModeTreatedAsAuto(t *testing.T) {
+	votes := map[string]DischargeRequest{
+		powerCutVoteSource: {Source: powerCutVoteSource, Want: VoteOn, Reason: testReasonSOC92},
+	}
+	desired, _ := decideDischarge("", votes)
+	assert.True(t, desired)
+}
+
+func TestReconcileDischarge_NoChangeWhenDesiredMatchesActual(t *testing.T) {
+	now := time.Now()
+	send := reconcileDischarge(true, true, true, now.Add(-time.Hour), now)
+	assert.False(t, send)
+}
+
+func TestReconcileDischarge_FiresImmediatelyOnIntentChange(t *testing.T) {
+	now := time.Now()
+	send := reconcileDischarge(false, true, true, now.Add(-5*time.Second), now)
+	assert.True(t, send, "intent change must fire immediately, not wait for propagation window")
+}
+
+func TestReconcileDischarge_SuppressedDuringPropagationWindow(t *testing.T) {
+	now := time.Now()
+	send := reconcileDischarge(true, false, true, now.Add(-10*time.Second), now)
+	assert.False(t, send, "same intent within propagation window must be suppressed")
+}
+
+func TestReconcileDischarge_RetriesAfterPropagationWindow(t *testing.T) {
+	now := time.Now()
+	send := reconcileDischarge(true, false, true, now.Add(-35*time.Second), now)
+	assert.True(t, send, "stale mismatch beyond propagation window must retry")
+}
+
+func TestReconcileDischarge_ColdStartFiresWhenMismatched(t *testing.T) {
+	send := reconcileDischarge(true, false, false, time.Time{}, time.Now())
+	assert.True(t, send)
+}
 
 // octopusSellRate looks up the sell rate from buildOctopusTariff for a weekday at the given month and hour.
 func octopusSellRate(t *testing.T, month, hour int) float64 {
