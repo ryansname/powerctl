@@ -431,9 +431,9 @@ func (s *MQTTSender) CreateCarChargingBattery3CutoffEntity() error {
 	}
 
 	type haNumberConfig struct {
-		Name     string `json:"name"`
-		UniqueId string `json:"unique_id"`
-		// CommandTopic  string         `json:"command_topic"`
+		Name          string         `json:"name"`
+		UniqueId      string         `json:"unique_id"`
+		CommandTopic  string         `json:"command_topic"`
 		StateTopic    string         `json:"state_topic"`
 		UnitOfMeasure string         `json:"unit_of_measurement"`
 		Min           float64        `json:"min"`
@@ -446,9 +446,9 @@ func (s *MQTTSender) CreateCarChargingBattery3CutoffEntity() error {
 	}
 
 	config := haNumberConfig{
-		Name:     "Car Charging B3 Cutoff",
-		UniqueId: "powerctl_car_charging_battery3_cutoff",
-		// CommandTopic: TopicCarChargingBattery3CutoffCmd,
+		Name:          "Car Charging B3 Cutoff",
+		UniqueId:      "powerctl_car_charging_battery3_cutoff",
+		CommandTopic:  TopicCarChargingBattery3CutoffCmd,
 		StateTopic:    TopicCarChargingBattery3CutoffState,
 		UnitOfMeasure: "%",
 		Min:           0,
