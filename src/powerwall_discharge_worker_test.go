@@ -13,95 +13,112 @@ const (
 	testReasonSOC92  = "SOC 92%"
 )
 
+// covers: DISCHARGE-USER-3
 func TestDecideDischarge_UserForceOnWinsOverAllVotes(t *testing.T) {
 	votes := map[string]DischargeRequest{
-		powerCutVoteSource:  {Source: powerCutVoteSource, Want: VoteOff, Reason: "low SOC"},
-		testSourcePeak: {Source: testSourcePeak, Want: VoteOn, Reason: "peak window"},
+		powerCutVoteSource: {Source: powerCutVoteSource, Want: VoteOff, Reason: "low SOC"},
+		testSourcePeak:     {Source: testSourcePeak, Want: VoteOn, Reason: "peak window"},
 	}
-	desired, reason := decideDischarge(PW2DischargeModeForceOn, votes)
-	assert.True(t, desired)
+	intent, reason := decideDischarge(PW2DischargeModeForceOn, votes)
+	assert.Equal(t, IntentOn, intent)
 	assert.Equal(t, "user-force-on", reason)
 }
 
+// covers: DISCHARGE-USER-4
 func TestDecideDischarge_UserForceOffWinsOverAllVotes(t *testing.T) {
 	votes := map[string]DischargeRequest{
 		powerCutVoteSource: {Source: powerCutVoteSource, Want: VoteOn, Reason: testReasonSOC92},
 	}
-	desired, reason := decideDischarge(PW2DischargeModeForceOff, votes)
-	assert.False(t, desired)
+	intent, reason := decideDischarge(PW2DischargeModeForceOff, votes)
+	assert.Equal(t, IntentOff, intent)
 	assert.Equal(t, "user-force-off", reason)
 }
 
-func TestDecideDischarge_AutoNoVotes_Idle(t *testing.T) {
-	desired, reason := decideDischarge(PW2DischargeModeAuto, map[string]DischargeRequest{})
-	assert.False(t, desired)
-	assert.Equal(t, "idle", reason)
+// covers: DISCHARGE-USER-5, DISCHARGE-PASSIVE-1 (decision side)
+func TestDecideDischarge_AutoNoVotesIsPassive(t *testing.T) {
+	intent, reason := decideDischarge(PW2DischargeModeAuto, map[string]DischargeRequest{})
+	assert.Equal(t, IntentPassive, intent,
+		"Auto with no votes must be Passive so Tesla-app manual changes are respected")
+	assert.Equal(t, "passive", reason)
 }
 
+// covers: DISCHARGE-AUTO-2
 func TestDecideDischarge_AutoSingleOnVote(t *testing.T) {
 	votes := map[string]DischargeRequest{
 		powerCutVoteSource: {Source: powerCutVoteSource, Want: VoteOn, Reason: testReasonSOC92},
 	}
-	desired, reason := decideDischarge(PW2DischargeModeAuto, votes)
-	assert.True(t, desired)
+	intent, reason := decideDischarge(PW2DischargeModeAuto, votes)
+	assert.Equal(t, IntentOn, intent)
 	assert.Contains(t, reason, powerCutVoteSource)
 	assert.Contains(t, reason, testReasonSOC92)
 }
 
+// covers: DISCHARGE-AUTO-1
 func TestDecideDischarge_AutoVetoBeatsOn(t *testing.T) {
 	votes := map[string]DischargeRequest{
-		powerCutVoteSource:  {Source: powerCutVoteSource, Want: VoteOn, Reason: testReasonSOC92},
-		"low-batt":   {Source: "low-batt", Want: VoteOff, Reason: "B3 below 30%"},
-		testSourcePeak: {Source: testSourcePeak, Want: VoteOn, Reason: "evening peak"},
+		powerCutVoteSource: {Source: powerCutVoteSource, Want: VoteOn, Reason: testReasonSOC92},
+		"low-batt":         {Source: "low-batt", Want: VoteOff, Reason: "B3 below 30%"},
+		testSourcePeak:     {Source: testSourcePeak, Want: VoteOn, Reason: "evening peak"},
 	}
-	desired, reason := decideDischarge(PW2DischargeModeAuto, votes)
-	assert.False(t, desired)
+	intent, reason := decideDischarge(PW2DischargeModeAuto, votes)
+	assert.Equal(t, IntentOff, intent)
 	assert.Contains(t, reason, "low-batt")
 	assert.Contains(t, reason, "veto")
 }
 
 func TestDecideDischarge_AutoNoOpinionIgnored(t *testing.T) {
 	votes := map[string]DischargeRequest{
-		powerCutVoteSource:  {Source: powerCutVoteSource, Want: VoteNoOpinion, Reason: "armed, SOC too low"},
-		testSourcePeak: {Source: testSourcePeak, Want: VoteOn, Reason: "peak window"},
+		powerCutVoteSource: {Source: powerCutVoteSource, Want: VoteNoOpinion, Reason: "armed, SOC too low"},
+		testSourcePeak:     {Source: testSourcePeak, Want: VoteOn, Reason: "peak window"},
 	}
-	desired, reason := decideDischarge(PW2DischargeModeAuto, votes)
-	assert.True(t, desired)
+	intent, reason := decideDischarge(PW2DischargeModeAuto, votes)
+	assert.Equal(t, IntentOn, intent)
 	assert.True(t, strings.HasPrefix(reason, "peak-power:"))
 }
 
+// covers: DISCHARGE-USER-2 (empty/unknown user mode falls back to default Auto)
 func TestDecideDischarge_EmptyModeTreatedAsAuto(t *testing.T) {
 	votes := map[string]DischargeRequest{
 		powerCutVoteSource: {Source: powerCutVoteSource, Want: VoteOn, Reason: testReasonSOC92},
 	}
-	desired, _ := decideDischarge("", votes)
-	assert.True(t, desired)
+	intent, _ := decideDischarge("", votes)
+	assert.Equal(t, IntentOn, intent)
 }
 
+func TestDecideDischarge_EmptyModeNoVotesIsPassive(t *testing.T) {
+	intent, _ := decideDischarge("", map[string]DischargeRequest{})
+	assert.Equal(t, IntentPassive, intent)
+}
+
+// covers: DISCHARGE-RECON-2 (no spam when state already matches)
 func TestReconcileDischarge_NoChangeWhenDesiredMatchesActual(t *testing.T) {
 	now := time.Now()
 	send := reconcileDischarge(true, true, true, now.Add(-time.Hour), now)
 	assert.False(t, send)
 }
 
+// covers: DISCHARGE-RECON-3
 func TestReconcileDischarge_FiresImmediatelyOnIntentChange(t *testing.T) {
 	now := time.Now()
 	send := reconcileDischarge(false, true, true, now.Add(-5*time.Second), now)
 	assert.True(t, send, "intent change must fire immediately, not wait for propagation window")
 }
 
+// covers: DISCHARGE-RECON-2
 func TestReconcileDischarge_SuppressedDuringPropagationWindow(t *testing.T) {
 	now := time.Now()
 	send := reconcileDischarge(true, false, true, now.Add(-10*time.Second), now)
 	assert.False(t, send, "same intent within propagation window must be suppressed")
 }
 
+// covers: DISCHARGE-RECON-4
 func TestReconcileDischarge_RetriesAfterPropagationWindow(t *testing.T) {
 	now := time.Now()
 	send := reconcileDischarge(true, false, true, now.Add(-35*time.Second), now)
 	assert.True(t, send, "stale mismatch beyond propagation window must retry")
 }
 
+// covers: DISCHARGE-RECON-1
 func TestReconcileDischarge_ColdStartFiresWhenMismatched(t *testing.T) {
 	send := reconcileDischarge(true, false, false, time.Time{}, time.Now())
 	assert.True(t, send)

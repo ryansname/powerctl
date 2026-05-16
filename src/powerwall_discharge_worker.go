@@ -91,21 +91,33 @@ const (
 	tariffKeyValue               = "value"
 )
 
-// decideDischarge resolves the user select state plus all active automation votes
-// into a single desired discharge state. Returns the desired bool plus a human
-// reason string for logging / debug visibility.
+// DischargeIntent is the arbiter's merged decision for this tick. Passive means
+// "no active opinion, leave external state alone" — letting the user override
+// from the Tesla app without the arbiter fighting back.
+type DischargeIntent int
+
+const (
+	IntentPassive DischargeIntent = iota
+	IntentOn
+	IntentOff
+)
+
+// decideDischarge resolves the user select state plus all active automation
+// votes into an intent. Returns the intent plus a human reason string for
+// logging / debug visibility.
 //
 // Rules (in order):
-//  1. User Force On / Force Off wins outright.
-//  2. In Auto mode, any VoteOff vetoes; otherwise any VoteOn engages discharge;
-//     otherwise idle.
-//  3. Empty/unknown user mode (startup before statestream lands) → treat as Auto.
-func decideDischarge(userMode string, votes map[string]DischargeRequest) (bool, string) {
+//  1. User Force On / Force Off wins outright (active control).
+//  2. In Auto mode, any VoteOff vetoes; otherwise any VoteOn engages discharge.
+//  3. Auto with no votes → Passive: arbiter does nothing, external (Tesla app,
+//     manual HA tweaks) is respected.
+//  4. Empty/unknown user mode (startup before statestream lands) → treat as Auto.
+func decideDischarge(userMode string, votes map[string]DischargeRequest) (DischargeIntent, string) {
 	switch userMode {
 	case PW2DischargeModeForceOn:
-		return true, "user-force-on"
+		return IntentOn, "user-force-on"
 	case PW2DischargeModeForceOff:
-		return false, "user-force-off"
+		return IntentOff, "user-force-off"
 	}
 
 	var vetoSource, vetoReason string
@@ -124,12 +136,12 @@ func decideDischarge(userMode string, votes map[string]DischargeRequest) (bool, 
 	}
 
 	if vetoSource != "" {
-		return false, fmt.Sprintf("%s-veto: %s", vetoSource, vetoReason)
+		return IntentOff, fmt.Sprintf("%s-veto: %s", vetoSource, vetoReason)
 	}
 	if onSource != "" {
-		return true, fmt.Sprintf("%s: %s", onSource, onReason)
+		return IntentOn, fmt.Sprintf("%s: %s", onSource, onReason)
 	}
-	return false, "idle"
+	return IntentPassive, "passive"
 }
 
 // reconcileDischarge decides whether to issue a command this tick. Same intent
@@ -174,14 +186,32 @@ func dischargeArbiter(
 			currentMode := data.GetString(TopicPW2OperationMode)
 			backupReserve := data.GetFloat(TopicPW2BackupReserve).Current
 
-			desired, reason := decideDischarge(userMode, votes)
-			actual := currentMode == pw2TimeBasedControl
+			intent, reason := decideDischarge(userMode, votes)
 			now := time.Now()
 
 			if reason != lastReason {
-				log.Printf("Discharge arbiter: desired=%v reason=%q (mode=%q)\n", desired, reason, userMode)
+				log.Printf("Discharge arbiter: intent=%v reason=%q (mode=%q)\n", intent, reason, userMode)
 				lastReason = reason
 			}
+
+			if intent == IntentPassive {
+				// covers: DISCHARGE-PASSIVE-2 — one-shot cleanup when transitioning
+				// into Passive from a prior commanded On so the discharge tariff
+				// doesn't linger. lastSentDesired flips to false after cleanup, so
+				// subsequent passive ticks are no-ops and external Tesla-app
+				// changes stick (DISCHARGE-PASSIVE-1).
+				if lastSentDesired {
+					log.Println("Discharge arbiter: entering Passive, running stopDischarge cleanup")
+					stopDischarge(sender)
+					requestModeUpdate(sender)
+					lastSent = now
+					lastSentDesired = false
+				}
+				continue
+			}
+
+			desired := intent == IntentOn
+			actual := currentMode == pw2TimeBasedControl
 
 			if reconcileDischarge(desired, actual, lastSentDesired, lastSent, now) {
 				if desired {

@@ -6,6 +6,8 @@ When controlling devices in powerctl you can take two approaches:
 1. Rely on internal state - this is good when the humans want to be able to override what is happening, but can be confusing #2 should be preferred unless there is good reason.
 2. Rely on HA state via MQTT - this way there is not a desync between the HA view and powerctl view
 
+Behavioural specs with tagged requirements live in `specs/` (e.g. `specs/discharge-arbiter.md`). When changing logic covered there, update the spec tag and the test that references it.
+
 ## Project Overview
 
 `powerctl` is a Go-based MQTT client that monitors Home Assistant sensors and tracks battery state of charge. Connects to Home Assistant MQTT broker, subscribes to sensor topics, calculates real-time statistics, and monitors battery levels with automatic HA integration.
