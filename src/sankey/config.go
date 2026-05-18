@@ -41,8 +41,7 @@ func DefaultConfig() Config {
 				Sensors: []Sensor{
 					{Name: "sensor.solar_3_solar_power", Label: "Solar 3"},
 					{Name: "sensor.solar_4_solar_power", Label: "Solar 4"},
-					{Name: "sensor.powerhouse_charger_1_switch_0_power"},
-					{Name: "sensor.powerhouse_charger_2_switch_0_power"},
+					{Name: "sensor.powerhouse_inverter_10_ac_power", Label: "Powerhouse 10"},
 				},
 				Children: []string{groupBattery3},
 			},
