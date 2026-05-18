@@ -67,46 +67,42 @@ func GenerateTemplatesYAML(cfg Config) string {
 	return w.String()
 }
 
-// GenerateSankeyYAML generates the Lovelace sankey chart card YAML
+// GenerateSankeyYAML generates the Lovelace sankey chart card YAML for ha-sankey-chart v4+.
 func GenerateSankeyYAML(cfg Config) string {
 	w := newIndentWriter()
 
+	w.writeLine("type: custom:sankey-chart")
+
 	w.writeLine("sections:")
 	w.indent()
-
-	// Iterate through all sections in order
-	for section := SectionPowerhouseIn; section <= SectionHouseMainsOut; section++ {
+	for s := SectionPowerhouseIn; s <= SectionHouseMainsOut; s++ {
 		w.writeLine("- sort_group_by_parent: true")
-		w.indent()
-		w.writeLine("entities:")
+	}
+	w.unindent()
 
+	w.writeLine("nodes:")
+	w.indent()
+	for section := SectionPowerhouseIn; section <= SectionHouseMainsOut; section++ {
 		for _, group := range cfg.Groups {
 			if group.Section != section {
 				continue
 			}
-
-			// Write regular sensors
 			for _, sensor := range group.Sensors {
-				w.writeLine("- type: entity")
+				w.writeLine(fmt.Sprintf("- id: %s", sensor.Name))
 				w.indent()
-				w.writeLine(fmt.Sprintf("entity_id: %s", sensor.Name))
+				w.writeLine("type: entity")
+				w.writeLine(fmt.Sprintf("section: %d", section))
 				if sensor.Label != "" {
 					w.writeLine(fmt.Sprintf("name: %s", sensor.Label))
 				}
-
-				if len(group.Children) > 0 {
-					writeChildren(w, cfg, group.Children)
-				}
 				w.unindent()
 			}
-
-			// Write remainder entity if present
 			if group.Other != nil {
-				w.writeLine(fmt.Sprintf("- type: %s", group.Other.Type.String()))
+				w.writeLine(fmt.Sprintf("- id: %s", group.Other.Key))
 				w.indent()
-				w.writeLine(fmt.Sprintf("entity_id: %s", group.Other.Key))
+				w.writeLine(fmt.Sprintf("type: %s", group.Other.Type.String()))
+				w.writeLine(fmt.Sprintf("section: %d", section))
 				w.writeLine(fmt.Sprintf("name: %s", group.Other.Label))
-
 				if group.Other.ChildrenSum != nil {
 					w.writeLine("children_sum:")
 					w.indent()
@@ -114,7 +110,6 @@ func GenerateSankeyYAML(cfg Config) string {
 					w.writeLine(fmt.Sprintf("reconcile_to: %s", group.Other.ChildrenSum.ReconcileTo.String()))
 					w.unindent()
 				}
-
 				if group.Other.ParentsSum != nil {
 					w.writeLine("parents_sum:")
 					w.indent()
@@ -122,22 +117,41 @@ func GenerateSankeyYAML(cfg Config) string {
 					w.writeLine(fmt.Sprintf("reconcile_to: %s", group.Other.ParentsSum.ReconcileTo.String()))
 					w.unindent()
 				}
-
-				if len(group.Children) > 0 {
-					writeChildren(w, cfg, group.Children)
-				}
 				w.unindent()
 			}
 		}
-
-		w.unindent()
 	}
-
 	w.unindent()
 
-	// Write fixed configuration
-	w.writeRaw(`type: custom:sankey-chart
-min_state: 10
+	w.writeLine("links:")
+	w.indent()
+	for _, group := range cfg.Groups {
+		if len(group.Children) == 0 {
+			continue
+		}
+		fromIDs := groupEntityIDs(group)
+		if len(fromIDs) == 0 {
+			continue
+		}
+		for _, childName := range group.Children {
+			child, ok := findGroup(cfg, childName)
+			if !ok {
+				continue
+			}
+			toIDs := groupEntityIDs(child)
+			for _, from := range fromIDs {
+				for _, to := range toIDs {
+					w.writeLine(fmt.Sprintf("- source: %s", from))
+					w.indent()
+					w.writeLine(fmt.Sprintf("target: %s", to))
+					w.unindent()
+				}
+			}
+		}
+	}
+	w.unindent()
+
+	w.writeRaw(`min_state: 10
 show_names: true
 wide: false
 grid_options:
@@ -160,23 +174,23 @@ show_units: true
 	return w.String()
 }
 
-// writeChildren writes the children list for a group
-func writeChildren(w *indentWriter, cfg Config, childNames []string) {
-	w.writeLine("children:")
-	w.indent()
-	for _, childName := range childNames {
-		for _, child := range cfg.Groups {
-			if child.Name != childName {
-				continue
-			}
-			for _, childSensor := range child.Sensors {
-				w.writeLine(fmt.Sprintf("- %s", childSensor.Name))
-			}
-			if child.Other != nil {
-				w.writeLine(fmt.Sprintf("- %s", child.Other.Key))
-			}
-			break
+// groupEntityIDs returns the node ids contributed by a group: each sensor name plus the remainder key if present.
+func groupEntityIDs(g Group) []string {
+	ids := make([]string, 0, len(g.Sensors)+1)
+	for _, s := range g.Sensors {
+		ids = append(ids, s.Name)
+	}
+	if g.Other != nil {
+		ids = append(ids, g.Other.Key)
+	}
+	return ids
+}
+
+func findGroup(cfg Config, name string) (Group, bool) {
+	for _, g := range cfg.Groups {
+		if g.Name == name {
+			return g, true
 		}
 	}
-	w.unindent()
+	return Group{}, false
 }
