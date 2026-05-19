@@ -40,17 +40,15 @@ const (
 	// maintains by discharging when solar pushes battery current above CCL - margin.
 	cclOverflowHeadroomA = 5.0
 
-	// cvlOverflowRampV is the voltage window below CVL across which the CVL discharge
-	// floor ramps from 0 (at CVL - rampV) to its full value (at CVL).
-	cvlOverflowRampV = 0.20
+	// cvlOverflowRampStartV is the voltage offset below CVL where the discharge floor
+	// begins to ramp up from zero.
+	cvlOverflowRampStartV = 0.20
 
-	// cvlOverflowSolarMultiplier scales current solar production into the floor.
-	// 1x matches production so voltage drifts down gently rather than crashing it.
-	cvlOverflowSolarMultiplier = 1.0
-
-	// cvlOverflowFloorW is a small absolute discharge kick added on top of the solar-
-	// proportional term so the loop can break out of curtailment even when solar reads ~0.
-	cvlOverflowFloorW = 25.0
+	// cvlOverflowTargetOffsetV is the voltage offset below CVL where the ramp reaches
+	// fraction=1 (floor matches current solar). Above CVL - targetOffset, fraction
+	// exceeds 1.0 so the floor over-corrects, dragging voltage back to exactly this
+	// point. Steady state settles at CVL - targetOffset.
+	cvlOverflowTargetOffsetV = 0.02
 
 	priorityCarCharge = "CarCharge"
 	priorityCharge    = "Charge"
@@ -66,6 +64,7 @@ type DynamicInverterConfig struct {
 type DynamicInverterState struct {
 	houseLoadMax        governor.RollingMinMax // 1-min max of house load
 	houseSideGeneration governor.RollingMinMax // 1-min tracking of solar_1 + inverter_1_9
+	cvlVoltageMax       governor.RollingMinMax // 10s rolling max of Battery 3 voltage; smooths CVL ramp input
 }
 
 // DynamicDebugInfo contains mode states for the dynamic controller debug output.
@@ -162,11 +161,11 @@ func safetyConstraint(active bool) DynamicModeConstraint {
 	return DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
 }
 
-// cvlOverflowConstraint returns a MinDischarge floor that ramps from 0 (at CVL - rampV)
-// up to (multiplier * solar34W + floorW) at CVL. The solar-proportional term tracks
-// current production so the floor is self-limiting: as discharge drops voltage, fraction
-// drops, floor settles near production. A small absolute floor (floorW) provides the kick
-// to break out when solar is throttled to near-zero. Returns no-op when CVL is unknown.
+// cvlOverflowConstraint returns a MinDischarge floor of (fraction * solar34W). The fraction
+// ramps from 0 at (CVL - rampStartV) up to 1 at (CVL - targetOffsetV), then continues to
+// grow past 1 between (CVL - targetOffsetV) and CVL. The over-correction above the target
+// voltage drags voltage back down; equilibrium settles at exactly (CVL - targetOffsetV).
+// Returns no-op when CVL is unknown.
 func cvlOverflowConstraint(voltage, cvl, solar34W float64) DynamicModeConstraint {
 	base := DynamicModeConstraint{
 		MaxDischarge: dynamicMaxDischargeW,
@@ -175,9 +174,9 @@ func cvlOverflowConstraint(voltage, cvl, solar34W float64) DynamicModeConstraint
 	if cvl <= 0 {
 		return base
 	}
-	fraction := clamp((voltage-(cvl-cvlOverflowRampV))/cvlOverflowRampV, 0, 1)
-	floor := fraction * (cvlOverflowSolarMultiplier*solar34W + cvlOverflowFloorW)
-	base.MinDischarge = min(floor, dynamicMaxDischargeW)
+	rampWidth := cvlOverflowRampStartV - cvlOverflowTargetOffsetV
+	fraction := max(0, (voltage-(cvl-cvlOverflowRampStartV))/rampWidth)
+	base.MinDischarge = min(fraction*solar34W, dynamicMaxDischargeW)
 	return base
 }
 
@@ -273,6 +272,7 @@ func calculateDynamicSetpoint(
 ) (float64, DynamicDebugInfo) {
 	state.houseLoadMax.Update(input.HouseLoad)
 	state.houseSideGeneration.Update(input.Solar1Power + input.Inverter1to9Power)
+	state.cvlVoltageMax.Update(input.Battery3Voltage)
 
 	busLoad := input.PowerhouseNetPower + input.MultiplusACPower
 	headroom := dynamicTransferLimit - busLoad
@@ -286,7 +286,7 @@ func calculateDynamicSetpoint(
 	tl := transferLimitConstraint(busLoad)
 	sfty := safetyConstraint(isSafety)
 	cclOF := cclOverflowConstraint(input.Solar3BatteryCurrent, input.Solar4BatteryCurrent, input.Battery3CCL, input.Battery3Voltage)
-	cvlOF := cvlOverflowConstraint(input.Battery3Voltage, input.Battery3CVL, input.Solar34Power)
+	cvlOF := cvlOverflowConstraint(state.cvlVoltageMax.Max(), input.Battery3CVL, input.Solar34Power)
 	if isSafety {
 		priority = prioritySafety
 	}
@@ -329,6 +329,7 @@ func dynamicInverterControl(
 	state := &DynamicInverterState{
 		houseLoadMax:        governor.NewRollingMinMaxSeconds(60),
 		houseSideGeneration: governor.NewRollingMinMaxSeconds(60),
+		cvlVoltageMax:       governor.NewRollingMinMaxSeconds(10),
 	}
 
 	var lastSetpoint float64

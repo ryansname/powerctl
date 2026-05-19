@@ -11,6 +11,7 @@ func makeTestDynamicState() *DynamicInverterState {
 	return &DynamicInverterState{
 		houseLoadMax:        governor.NewRollingMinMaxSeconds(60),
 		houseSideGeneration: governor.NewRollingMinMaxSeconds(60),
+		cvlVoltageMax:       governor.NewRollingMinMaxSeconds(10),
 	}
 }
 
@@ -150,52 +151,64 @@ func TestCCLOverflow_ExactlyAtTarget_NoConstraint(t *testing.T) {
 
 // --- cvlOverflowConstraint tests ---
 
+// cvlOverCorrectFraction is the fraction value at V = CVL (above the targetOffset point),
+// = rampStart / (rampStart - targetOffset). Used to verify over-correction tests.
+func cvlOverCorrectFraction() float64 {
+	return cvlOverflowRampStartV / (cvlOverflowRampStartV - cvlOverflowTargetOffsetV)
+}
+
 func TestCVLOverflow_UnknownCVL_NoConstraint(t *testing.T) {
-	// CVL not yet received → no-op even if voltage looks high.
 	c := cvlOverflowConstraint(55.5, 0, 500)
 	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
 }
 
 func TestCVLOverflow_WellBelowWindow_NoConstraint(t *testing.T) {
-	// Voltage well under (CVL - rampV) → fraction clamps to 0 regardless of solar.
 	c := cvlOverflowConstraint(53.0, 55.2, 500)
 	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
 }
 
 func TestCVLOverflow_AtRampStart_NoConstraint(t *testing.T) {
-	c := cvlOverflowConstraint(55.2-cvlOverflowRampV, 55.2, 500)
+	c := cvlOverflowConstraint(55.2-cvlOverflowRampStartV, 55.2, 500)
 	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
 }
 
-func TestCVLOverflow_AtCVL_NoSolar_OnlyAbsoluteFloor(t *testing.T) {
-	// Solar throttled to 0 + voltage at CVL → only the absolute floor kicks in.
+func TestCVLOverflow_AtCVL_NoSolar_NoFloor(t *testing.T) {
+	// Solar throttled to 0 + voltage at CVL → fraction>0 but floor = fraction*0 = 0.
+	// Loop is "stuck" but harmless: no curtailment to relieve when MPPTs aren't producing.
 	c := cvlOverflowConstraint(55.2, 55.2, 0)
-	assert.InDelta(t, cvlOverflowFloorW, c.MinDischarge, 0.001)
+	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
 }
 
-func TestCVLOverflow_AtCVL_TracksDoubleSolar(t *testing.T) {
-	// Solar=500W, voltage at CVL → MinDischarge = 2*500 + 20 = 1020W.
+func TestCVLOverflow_AtTargetVoltage_FractionOne(t *testing.T) {
+	// V = CVL - targetOffset → fraction = 1.0 → floor matches solar exactly.
+	c := cvlOverflowConstraint(55.2-cvlOverflowTargetOffsetV, 55.2, 500)
+	assert.InDelta(t, 500.0, c.MinDischarge, 0.001)
+}
+
+func TestCVLOverflow_AtCVL_OverCorrects(t *testing.T) {
+	// V = CVL → fraction = rampStart/(rampStart-targetOffset) ≈ 1.111 → floor > solar.
 	c := cvlOverflowConstraint(55.2, 55.2, 500)
-	assert.InDelta(t, cvlOverflowSolarMultiplier*500+cvlOverflowFloorW, c.MinDischarge, 0.001)
+	assert.InDelta(t, cvlOverCorrectFraction()*500, c.MinDischarge, 0.001)
 }
 
-func TestCVLOverflow_Midpoint_HalfOfFullFloor(t *testing.T) {
-	// Halfway → 0.5 * (2*500 + 20) = 510W.
-	c := cvlOverflowConstraint(55.2-cvlOverflowRampV/2, 55.2, 500)
-	assert.InDelta(t, 0.5*(cvlOverflowSolarMultiplier*500+cvlOverflowFloorW), c.MinDischarge, 0.001)
+func TestCVLOverflow_Midpoint_HalfOfSolar(t *testing.T) {
+	// Midpoint of ramp: V = CVL - (rampStart+targetOffset)/2 → fraction = 0.5.
+	midOffset := (cvlOverflowRampStartV + cvlOverflowTargetOffsetV) / 2
+	c := cvlOverflowConstraint(55.2-midOffset, 55.2, 500)
+	assert.InDelta(t, 250.0, c.MinDischarge, 0.001)
 }
 
 func TestCVLOverflow_OverCVL_CappedAtMaxDischarge(t *testing.T) {
-	// Huge solar + over CVL → would compute 4025W → capped at dynamicMaxDischargeW.
+	// V above CVL with high solar → fraction>>1, would compute >3000W → capped.
 	c := cvlOverflowConstraint(55.5, 55.2, 4000)
 	assert.InDelta(t, dynamicMaxDischargeW, c.MinDischarge, 0.001)
 }
 
 func TestCVLOverflow_OverridesChargeIntent(t *testing.T) {
-	// Mid-ramp floor (0.5 * (1*1000 + 25) = 512.5W) overrides a +500W charge intent.
-	c := cvlOverflowConstraint(55.2-cvlOverflowRampV/2, 55.2, 1000)
+	// At target voltage with solar=1000W → floor=1000W overrides +500W charge intent.
+	c := cvlOverflowConstraint(55.2-cvlOverflowTargetOffsetV, 55.2, 1000)
 	got := DynamicModeConstraint{Target: 500, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(c).Setpoint()
-	assert.InDelta(t, -512.5, got, 0.001)
+	assert.InDelta(t, -1000.0, got, 0.001)
 }
 
 func TestCVLOverflow_Safety_NoForcedDischarge(t *testing.T) {
@@ -399,7 +412,7 @@ func TestCalculateDynamic_CCLOverflow_HigherDemandWins(t *testing.T) {
 // --- CVL overflow integration in calculateDynamicSetpoint ---
 
 func TestCalculateDynamic_CVLOverflow_SwitchesChargeToDischarge(t *testing.T) {
-	// Voltage at CVL with charge surplus and Solar34=500W → floor = 1*500+25 = 525W discharge.
+	// V=CVL with Solar34=500W → over-correct fraction (≈1.111) → floor ≈ 555.6W discharge.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 	input.HouseLoad = 500
@@ -408,26 +421,28 @@ func TestCalculateDynamic_CVLOverflow_SwitchesChargeToDischarge(t *testing.T) {
 	input.Battery3CVL = 55.2
 	input.Battery3Voltage = 55.2
 
+	expected := cvlOverCorrectFraction() * 500
 	setpoint, debug := calculateDynamicSetpoint(input, state)
-	assert.InDelta(t, -525.0, setpoint, 0.001)
-	assert.InDelta(t, 525.0, debug.CVLOverflowW, 0.001)
+	assert.InDelta(t, -expected, setpoint, 0.001)
+	assert.InDelta(t, expected, debug.CVLOverflowW, 0.001)
 }
 
 func TestCalculateDynamic_CVLOverflow_HigherSupplyWins(t *testing.T) {
-	// Mid-ramp CVL floor (262.5W) is less than 2000W supply intent → supply wins.
+	// Mid-ramp CVL floor (250W) is less than 2000W supply intent → supply wins.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 	input.HouseLoad = 2000
 	input.Solar34Power = 500
 	input.Battery3CVL = 55.2
-	input.Battery3Voltage = 55.2 - cvlOverflowRampV/2
+	midOffset := (cvlOverflowRampStartV + cvlOverflowTargetOffsetV) / 2
+	input.Battery3Voltage = 55.2 - midOffset
 
 	setpoint, _ := calculateDynamicSetpoint(input, state)
 	assert.InDelta(t, -2000.0, setpoint, 0.001)
 }
 
 func TestCalculateDynamic_CVLOverflow_SOCFull_DischargesAnyway(t *testing.T) {
-	// SOC at 98% (MaxCharge=0) + voltage at CVL + Solar34=500W → CVL discharge floor still wins.
+	// SOC at 98% (MaxCharge=0) + V=CVL + Solar34=500W → CVL discharge floor still wins.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 	input.Battery3SOC = 98
@@ -437,8 +452,9 @@ func TestCalculateDynamic_CVLOverflow_SOCFull_DischargesAnyway(t *testing.T) {
 	input.Battery3CVL = 55.2
 	input.Battery3Voltage = 55.2
 
+	expected := cvlOverCorrectFraction() * 500
 	setpoint, _ := calculateDynamicSetpoint(input, state)
-	assert.InDelta(t, -525.0, setpoint, 0.001)
+	assert.InDelta(t, -expected, setpoint, 0.001)
 }
 
 // --- regression tests ---
