@@ -44,13 +44,13 @@ const (
 	// floor ramps from 0 (at CVL - rampV) to its full value (at CVL).
 	cvlOverflowRampV = 0.20
 
-	// cvlOverflowSolarMultiplier is the over-provision factor on current solar production.
-	// 2x drags voltage below CVL fast enough to free MPPTs without crashing it.
-	cvlOverflowSolarMultiplier = 2.0
+	// cvlOverflowSolarMultiplier scales current solar production into the floor.
+	// 1x matches production so voltage drifts down gently rather than crashing it.
+	cvlOverflowSolarMultiplier = 1.0
 
 	// cvlOverflowFloorW is a small absolute discharge kick added on top of the solar-
 	// proportional term so the loop can break out of curtailment even when solar reads ~0.
-	cvlOverflowFloorW = 20.0
+	cvlOverflowFloorW = 25.0
 
 	priorityCarCharge = "CarCharge"
 	priorityCharge    = "Charge"
