@@ -40,10 +40,17 @@ const (
 	// maintains by discharging when solar pushes battery current above CCL - margin.
 	cclOverflowHeadroomA = 5.0
 
-	// cvlOverflowRampV is the voltage window below CVL over which MinDischarge ramps
-	// from 0 (at CVL - rampV) to dynamicMaxDischargeW (at CVL). Discharging drops
-	// voltage so MPPTs stop throttling — solar is redirected to AC instead of curtailed.
+	// cvlOverflowRampV is the voltage window below CVL across which the CVL discharge
+	// floor ramps from 0 (at CVL - rampV) to its full value (at CVL).
 	cvlOverflowRampV = 0.20
+
+	// cvlOverflowSolarMultiplier is the over-provision factor on current solar production.
+	// 2x drags voltage below CVL fast enough to free MPPTs without crashing it.
+	cvlOverflowSolarMultiplier = 2.0
+
+	// cvlOverflowFloorW is a small absolute discharge kick added on top of the solar-
+	// proportional term so the loop can break out of curtailment even when solar reads ~0.
+	cvlOverflowFloorW = 20.0
 
 	priorityCarCharge = "CarCharge"
 	priorityCharge    = "Charge"
@@ -155,12 +162,12 @@ func safetyConstraint(active bool) DynamicModeConstraint {
 	return DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
 }
 
-// cvlOverflowConstraint returns a MinDischarge floor that ramps from 0 to dynamicMaxDischargeW
-// as battery voltage crosses from (CVL - cvlOverflowRampV) up to CVL. When voltage is at CVL the
-// MPPTs throttle to hold the limit; forcing the Multiplus to discharge drops voltage so MPPTs
-// can produce again, redirecting solar to AC loads instead of being curtailed.
-// Returns no-op when CVL is unknown (<= 0; topic not yet received).
-func cvlOverflowConstraint(voltage, cvl float64) DynamicModeConstraint {
+// cvlOverflowConstraint returns a MinDischarge floor that ramps from 0 (at CVL - rampV)
+// up to (multiplier * solar34W + floorW) at CVL. The solar-proportional term tracks
+// current production so the floor is self-limiting: as discharge drops voltage, fraction
+// drops, floor settles near production. A small absolute floor (floorW) provides the kick
+// to break out when solar is throttled to near-zero. Returns no-op when CVL is unknown.
+func cvlOverflowConstraint(voltage, cvl, solar34W float64) DynamicModeConstraint {
 	base := DynamicModeConstraint{
 		MaxDischarge: dynamicMaxDischargeW,
 		MaxCharge:    dynamicMaxChargeW,
@@ -169,7 +176,8 @@ func cvlOverflowConstraint(voltage, cvl float64) DynamicModeConstraint {
 		return base
 	}
 	fraction := clamp((voltage-(cvl-cvlOverflowRampV))/cvlOverflowRampV, 0, 1)
-	base.MinDischarge = fraction * dynamicMaxDischargeW
+	floor := fraction * (cvlOverflowSolarMultiplier*solar34W + cvlOverflowFloorW)
+	base.MinDischarge = min(floor, dynamicMaxDischargeW)
 	return base
 }
 
@@ -278,7 +286,7 @@ func calculateDynamicSetpoint(
 	tl := transferLimitConstraint(busLoad)
 	sfty := safetyConstraint(isSafety)
 	cclOF := cclOverflowConstraint(input.Solar3BatteryCurrent, input.Solar4BatteryCurrent, input.Battery3CCL, input.Battery3Voltage)
-	cvlOF := cvlOverflowConstraint(input.Battery3Voltage, input.Battery3CVL)
+	cvlOF := cvlOverflowConstraint(input.Battery3Voltage, input.Battery3CVL, input.Solar34Power)
 	if isSafety {
 		priority = prioritySafety
 	}
