@@ -473,6 +473,11 @@ func main() {
 		cancel()
 		log.Fatalf("Failed to create Battery 3 CCL entity: %v", err)
 	}
+	err = mqttSender.CreateBattery3CVLEntity()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create Battery 3 CVL entity: %v", err)
+	}
 
 	// Create dynamic auto switch (controls auto vs manual Multiplus setpoint)
 	err = mqttSender.CreateDynamicAutoSwitch()

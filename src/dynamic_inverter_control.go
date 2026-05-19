@@ -40,6 +40,11 @@ const (
 	// maintains by discharging when solar pushes battery current above CCL - margin.
 	cclOverflowHeadroomA = 5.0
 
+	// cvlOverflowRampV is the voltage window below CVL over which MinDischarge ramps
+	// from 0 (at CVL - rampV) to dynamicMaxDischargeW (at CVL). Discharging drops
+	// voltage so MPPTs stop throttling — solar is redirected to AC instead of curtailed.
+	cvlOverflowRampV = 0.20
+
 	priorityCarCharge = "CarCharge"
 	priorityCharge    = "Charge"
 	prioritySafety    = "Safety"
@@ -66,6 +71,7 @@ type DynamicDebugInfo struct {
 	Safety       bool
 	CarCharging  string  // "" = disabled, "active", or gate reason (e.g. "gated: soc")
 	CCLOverflowW float64 // watts the CCL-overflow constraint requires as minimum discharge
+	CVLOverflowW float64 // watts the CVL-overflow constraint requires as minimum discharge
 	B3ChargeMaxW float64 // max charge W from SOC lerp (dynamicMaxChargeW when unrestricted)
 }
 
@@ -147,6 +153,24 @@ func safetyConstraint(active bool) DynamicModeConstraint {
 		return DynamicModeConstraint{MaxDischarge: 0, MaxCharge: dynamicMaxChargeW}
 	}
 	return DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
+}
+
+// cvlOverflowConstraint returns a MinDischarge floor that ramps from 0 to dynamicMaxDischargeW
+// as battery voltage crosses from (CVL - cvlOverflowRampV) up to CVL. When voltage is at CVL the
+// MPPTs throttle to hold the limit; forcing the Multiplus to discharge drops voltage so MPPTs
+// can produce again, redirecting solar to AC loads instead of being curtailed.
+// Returns no-op when CVL is unknown (<= 0; topic not yet received).
+func cvlOverflowConstraint(voltage, cvl float64) DynamicModeConstraint {
+	base := DynamicModeConstraint{
+		MaxDischarge: dynamicMaxDischargeW,
+		MaxCharge:    dynamicMaxChargeW,
+	}
+	if cvl <= 0 {
+		return base
+	}
+	fraction := clamp((voltage-(cvl-cvlOverflowRampV))/cvlOverflowRampV, 0, 1)
+	base.MinDischarge = fraction * dynamicMaxDischargeW
+	return base
 }
 
 // cclOverflowConstraint returns a MinDischarge floor to keep battery current
@@ -254,12 +278,13 @@ func calculateDynamicSetpoint(
 	tl := transferLimitConstraint(busLoad)
 	sfty := safetyConstraint(isSafety)
 	cclOF := cclOverflowConstraint(input.Solar3BatteryCurrent, input.Solar4BatteryCurrent, input.Battery3CCL, input.Battery3Voltage)
+	cvlOF := cvlOverflowConstraint(input.Battery3Voltage, input.Battery3CVL)
 	if isSafety {
 		priority = prioritySafety
 	}
 
 	// Compose: intent (single non-zero Target) → hard range constraints (Target=0).
-	// sfty and tl narrow the allowed range; cclOF enforces a minimum discharge floor;
+	// sfty and tl narrow the allowed range; cclOF/cvlOF enforce a minimum discharge floor;
 	// socLimit tapers MaxCharge as B3 fills (transfer-limit MinCharge still wins via lo>hi).
 	// phChargeLimit prevents charging from drawing power through the cable from the house side.
 	socLimit := b3SOCChargeLimit(input.Battery3SOC)
@@ -267,7 +292,7 @@ func calculateDynamicSetpoint(
 		MaxDischarge: dynamicMaxDischargeW,
 		MaxCharge:    max(0, input.Solar1Power+input.Inverter1to9Power),
 	}
-	setpoint := intent.add(sfty).add(tl).add(cclOF).add(socLimit).add(phChargeLimit).Setpoint()
+	setpoint := intent.add(sfty).add(tl).add(cclOF).add(cvlOF).add(socLimit).add(phChargeLimit).Setpoint()
 
 	return setpoint, DynamicDebugInfo{
 		Priority:     priority,
@@ -277,6 +302,7 @@ func calculateDynamicSetpoint(
 		Safety:       isSafety,
 		CarCharging:  carStatus,
 		CCLOverflowW: cclOF.MinDischarge,
+		CVLOverflowW: cvlOF.MinDischarge,
 		B3ChargeMaxW: socLimit.MaxCharge,
 	}
 }

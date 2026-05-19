@@ -24,6 +24,7 @@ type DynamicInputConfig struct {
 	Solar34PowerTopics        []string
 	Battery3DCCurrentTopic    string
 	Battery3CCLTopic          string
+	Battery3CVLTopic          string
 	Battery3VoltageTopic      string
 	Solar3BatteryCurrentTopic string
 	Solar4BatteryCurrentTopic string
@@ -52,6 +53,7 @@ type DynamicInput struct {
 	Solar34Power          float64 // combined Solar 3 + Solar 4 generation (W)
 	Battery3ChargeCurrent float64 // A, actual battery charge current (always >= 0)
 	Battery3CCL           float64 // A, BMS charge current limit
+	Battery3CVL           float64 // V, BMS charge voltage limit
 	Battery3Voltage       float64 // V
 	Solar3BatteryCurrent  float64 // A
 	Solar4BatteryCurrent  float64 // A
@@ -132,6 +134,7 @@ func (c DynamicInputConfig) Topics() []string {
 		c.CarBattery3CutoffTopic,
 		c.Battery3DCCurrentTopic,
 		c.Battery3CCLTopic,
+		c.Battery3CVLTopic,
 		c.Battery3VoltageTopic,
 		c.Solar3BatteryCurrentTopic,
 		c.Solar4BatteryCurrentTopic,
@@ -170,6 +173,7 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		Solar34Power:          data.SumTopics(config.Solar34PowerTopics),
 		Battery3ChargeCurrent: max(0, data.GetFloat(config.Battery3DCCurrentTopic).Current),
 		Battery3CCL:           data.GetFloat(config.Battery3CCLTopic).Current,
+		Battery3CVL:           data.GetFloat(config.Battery3CVLTopic).Current,
 		Battery3Voltage:       data.GetFloat(config.Battery3VoltageTopic).Current,
 		Solar3BatteryCurrent:  data.GetFloat(config.Solar3BatteryCurrentTopic).Current,
 		Solar4BatteryCurrent:  data.GetFloat(config.Solar4BatteryCurrentTopic).Current,

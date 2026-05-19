@@ -148,6 +148,58 @@ func TestCCLOverflow_ExactlyAtTarget_NoConstraint(t *testing.T) {
 	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
 }
 
+// --- cvlOverflowConstraint tests ---
+
+func TestCVLOverflow_UnknownCVL_NoConstraint(t *testing.T) {
+	// CVL not yet received → no-op even if voltage looks high.
+	c := cvlOverflowConstraint(55.5, 0)
+	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
+}
+
+func TestCVLOverflow_WellBelowWindow_NoConstraint(t *testing.T) {
+	// Voltage well under (CVL - rampV) → fraction clamps to 0.
+	c := cvlOverflowConstraint(53.0, 55.2)
+	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
+}
+
+func TestCVLOverflow_AtRampStart_NoConstraint(t *testing.T) {
+	// Voltage exactly at (CVL - rampV) → fraction=0.
+	c := cvlOverflowConstraint(55.2-cvlOverflowRampV, 55.2)
+	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
+}
+
+func TestCVLOverflow_Midpoint_HalfDischarge(t *testing.T) {
+	// Halfway through ramp → half of dynamicMaxDischargeW.
+	c := cvlOverflowConstraint(55.2-cvlOverflowRampV/2, 55.2)
+	assert.InDelta(t, dynamicMaxDischargeW*0.5, c.MinDischarge, 0.001)
+}
+
+func TestCVLOverflow_AtCVL_FullDischarge(t *testing.T) {
+	c := cvlOverflowConstraint(55.2, 55.2)
+	assert.InDelta(t, dynamicMaxDischargeW, c.MinDischarge, 0.001)
+}
+
+func TestCVLOverflow_OverCVL_CappedAtMax(t *testing.T) {
+	// Above CVL (transient overshoot) → still capped at MinDischarge=max.
+	c := cvlOverflowConstraint(55.5, 55.2)
+	assert.InDelta(t, dynamicMaxDischargeW, c.MinDischarge, 0.001)
+}
+
+func TestCVLOverflow_OverridesChargeIntent(t *testing.T) {
+	// Mid-ramp MinDischarge floor (1500W) overrides a +500W charge intent.
+	c := cvlOverflowConstraint(55.2-cvlOverflowRampV/2, 55.2)
+	got := DynamicModeConstraint{Target: 500, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(c).Setpoint()
+	assert.InDelta(t, -dynamicMaxDischargeW*0.5, got, 0.001)
+}
+
+func TestCVLOverflow_Safety_NoForcedDischarge(t *testing.T) {
+	// Safety (MaxDischarge=0) wins over CVL MinDischarge via lo>hi tie-break.
+	c := cvlOverflowConstraint(55.2, 55.2)
+	sfty := safetyConstraint(true)
+	got := DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(sfty).add(c).Setpoint()
+	assert.InDelta(t, 0.0, got, 0.001)
+}
+
 // --- calculateDynamicSetpoint tests ---
 
 func TestCalculateDynamic_Safety_HighFreq_PreventsDischarge(t *testing.T) {
@@ -336,6 +388,48 @@ func TestCalculateDynamic_CCLOverflow_HigherDemandWins(t *testing.T) {
 
 	setpoint, _ := calculateDynamicSetpoint(input, state)
 	assert.InDelta(t, -2000.0, setpoint, 0.001)
+}
+
+// --- CVL overflow integration in calculateDynamicSetpoint ---
+
+func TestCalculateDynamic_CVLOverflow_SwitchesChargeToDischarge(t *testing.T) {
+	// Voltage at CVL with mild charge surplus → CVL floor forces full discharge.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 500
+	input.Solar1Power = 1000 // surplus → Charge intent
+	input.Battery3CVL = 55.2
+	input.Battery3Voltage = 55.2
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, -dynamicMaxDischargeW, setpoint, 0.001)
+	assert.InDelta(t, dynamicMaxDischargeW, debug.CVLOverflowW, 0.001)
+}
+
+func TestCalculateDynamic_CVLOverflow_HigherSupplyWins(t *testing.T) {
+	// Mid-ramp CVL floor (1500W) is less than 2000W supply intent → supply wins.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 2000
+	input.Battery3CVL = 55.2
+	input.Battery3Voltage = 55.2 - cvlOverflowRampV/2
+
+	setpoint, _ := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, -2000.0, setpoint, 0.001)
+}
+
+func TestCalculateDynamic_CVLOverflow_SOCFull_DischargesAnyway(t *testing.T) {
+	// SOC at 98% (MaxCharge=0) + voltage at CVL → CVL discharge floor still wins.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.Battery3SOC = 98
+	input.HouseLoad = 500
+	input.Solar1Power = 1000
+	input.Battery3CVL = 55.2
+	input.Battery3Voltage = 55.2
+
+	setpoint, _ := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, -dynamicMaxDischargeW, setpoint, 0.001)
 }
 
 // --- regression tests ---
