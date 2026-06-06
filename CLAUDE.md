@@ -65,6 +65,8 @@ Goroutine-based with message passing via channels. All source code in `src/`.
    - **4.5kW hard transfer limit**: `solar_1 + inverter_1_9 + multiplus_discharge ≤ 4500W`; forces charge when exceeded
    - **CCL overflow**: when battery-side solar (Solar 3+4 amps) exceeds `CCL − 5A`, forces Multiplus to discharge the excess as watts (`overflowA × voltage`), preventing MPPT throttling. Stateless and instantaneous — no ramp. Safety and transfer-limit constraints take precedence.
    - **SOC charge limit**: voluntary charging tapered linearly from 100% below 60% SOC to 0% at 85% SOC. Transfer-limit forced absorption still applies at all SOC levels (MinCharge floor wins via lo>hi tie-break).
+   - **B3 discharge limit**: max discharge tapered linearly from 0W at 10% B3 SOC to full at 20% (low-SOC protection, no hysteresis).
+   - **Powerwall offset**: when Powerwall low, extra discharge added to intent — +250W at 10% PW SOC ramping to 0W at 20%. Adds to existing discharge; only reduces charge (never forces net discharge) otherwise.
    - **Car Charging** (`powerctl_car_charging` switch, auto mode only): overrides auto setpoint with max Multiplus discharge (clamped by the 4.5kW transfer / 3kW discharge limits) while gated on Battery 3 SOC ≥ `powerctl_car_charging_battery3_cutoff`, transfer headroom ≥ 1.5kW, and solar producing OR B3 above cutoff. Auto-disables when Battery 3 drops below cutoff or `binary_sensor.plb942_charging` transitions ON→OFF.
    - **Safety**: high frequency or grid off + Powerwall >90% suppresses discharge (takes precedence over car charging and CCL overflow)
 

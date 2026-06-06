@@ -51,6 +51,12 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 	if dynamic.B3ChargeMaxW < dynamicMaxChargeW {
 		rows = append(rows, [2]string{"Charge Limit", fmt.Sprintf("%.0fW", dynamic.B3ChargeMaxW)})
 	}
+	if dynamic.B3DischargeMaxW < dynamicMaxDischargeW {
+		rows = append(rows, [2]string{"Discharge Limit", fmt.Sprintf("%.0fW", dynamic.B3DischargeMaxW)})
+	}
+	if dynamic.PWOffsetW > 0 {
+		rows = append(rows, [2]string{"PW+", fmt.Sprintf("%.0fW", dynamic.PWOffsetW)})
+	}
 
 	var sb strings.Builder
 	sb.WriteString("| B2 | Value |\n")

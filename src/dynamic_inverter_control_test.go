@@ -598,6 +598,134 @@ func TestCalculateDynamic_SOCLimit_Full_CCLOverflowUnaffected(t *testing.T) {
 	assert.InDelta(t, -265.0, setpoint, 0.001)
 }
 
+// --- b3SOCDischargeLimit tests ---
+
+func TestB3SOCDischargeLimit_AtZero_NoDischarge(t *testing.T) {
+	c := b3SOCDischargeLimit(10)
+	assert.InDelta(t, 0.0, c.MaxDischarge, 0.001)
+}
+
+func TestB3SOCDischargeLimit_BelowZero_NoDischarge(t *testing.T) {
+	c := b3SOCDischargeLimit(5)
+	assert.InDelta(t, 0.0, c.MaxDischarge, 0.001)
+}
+
+func TestB3SOCDischargeLimit_Midpoint_HalfRate(t *testing.T) {
+	// SOC=15%: midpoint of 10→20 → fraction=0.5 → 1500W
+	c := b3SOCDischargeLimit(15)
+	assert.InDelta(t, dynamicMaxDischargeW*0.5, c.MaxDischarge, 0.001)
+}
+
+func TestB3SOCDischargeLimit_AtFull_NoLimit(t *testing.T) {
+	c := b3SOCDischargeLimit(20)
+	assert.InDelta(t, dynamicMaxDischargeW, c.MaxDischarge, 0.001)
+}
+
+func TestB3SOCDischargeLimit_AboveFull_NoLimit(t *testing.T) {
+	c := b3SOCDischargeLimit(50)
+	assert.InDelta(t, dynamicMaxDischargeW, c.MaxDischarge, 0.001)
+}
+
+func TestCalculateDynamic_B3DischargeLimit_SupplyCapped(t *testing.T) {
+	// SOC=15% → MaxDischarge=1500. Supply wants 2000W discharge → capped to 1500W.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.Battery3SOC = 15
+	input.HouseLoad = 2000
+	input.Solar1Power = 0
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.Equal(t, "Supply", debug.Priority)
+	assert.InDelta(t, -1500.0, setpoint, 0.001)
+	assert.InDelta(t, 1500.0, debug.B3DischargeMaxW, 0.001)
+}
+
+func TestCalculateDynamic_B3DischargeLimit_AtZero_NoDischarge(t *testing.T) {
+	// SOC=10% → MaxDischarge=0. Supply intent fully suppressed.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.Battery3SOC = 10
+	input.HouseLoad = 2000
+	input.Solar1Power = 0
+
+	setpoint, _ := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 0.0, setpoint, 0.001)
+}
+
+// --- powerwallLowOffset tests ---
+
+func TestPowerwallLowOffset_AtFull_MaxOffset(t *testing.T) {
+	assert.InDelta(t, pwOffsetMaxW, powerwallLowOffset(10), 0.001)
+}
+
+func TestPowerwallLowOffset_BelowFull_MaxOffset(t *testing.T) {
+	assert.InDelta(t, pwOffsetMaxW, powerwallLowOffset(5), 0.001)
+}
+
+func TestPowerwallLowOffset_Midpoint_HalfOffset(t *testing.T) {
+	assert.InDelta(t, pwOffsetMaxW*0.5, powerwallLowOffset(15), 0.001)
+}
+
+func TestPowerwallLowOffset_AtZero_NoOffset(t *testing.T) {
+	assert.InDelta(t, 0.0, powerwallLowOffset(20), 0.001)
+}
+
+func TestPowerwallLowOffset_AboveZero_NoOffset(t *testing.T) {
+	assert.InDelta(t, 0.0, powerwallLowOffset(30), 0.001)
+}
+
+func TestCalculateDynamic_PWOffset_AddsToSupplyDischarge(t *testing.T) {
+	// PW=15% → +125W. Supply wants 2000W discharge → total 2125W discharge.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.PowerwallSOC = 15
+	input.HouseLoad = 2000
+	input.Solar1Power = 0
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.Equal(t, "Supply", debug.Priority)
+	assert.InDelta(t, -2125.0, setpoint, 0.001)
+	assert.InDelta(t, 125.0, debug.PWOffsetW, 0.001)
+}
+
+func TestCalculateDynamic_PWOffset_ReducesChargeNotForcesDischarge(t *testing.T) {
+	// PW=10% → +250W offset. Charge surplus only 100W → reduced to 0, not flipped to discharge.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.PowerwallSOC = 10
+	input.HouseLoad = 0
+	input.Solar1Power = 100 // 100W surplus → small charge intent
+
+	setpoint, _ := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 0.0, setpoint, 0.001)
+}
+
+func TestCalculateDynamic_PWOffset_ReducesLargeCharge(t *testing.T) {
+	// PW=10% → +250W. Charge surplus 1000W → reduced to 750W charge (still charging).
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.PowerwallSOC = 10
+	input.HouseLoad = 0
+	input.Solar1Power = 1000
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.Equal(t, priorityCharge, debug.Priority)
+	assert.InDelta(t, 750.0, setpoint, 0.001)
+}
+
+func TestCalculateDynamic_PWOffset_CappedByB3DischargeLimit(t *testing.T) {
+	// PW=10% (+250W discharge wanted) but B3 SOC=10% → MaxDischarge=0 → no discharge.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.PowerwallSOC = 10
+	input.Battery3SOC = 10
+	input.HouseLoad = 2000
+	input.Solar1Power = 0
+
+	setpoint, _ := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 0.0, setpoint, 0.001)
+}
+
 // TestDynamicOverflowScenario is a scratch test for manual exploration.
 // Edit the values under "Scenario inputs" and run:
 //

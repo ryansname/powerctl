@@ -36,6 +36,19 @@ const (
 	b3ChargeLimitFullSOC = 60.0
 	b3ChargeLimitZeroSOC = 85.0
 
+	// b3DischargeLimitZeroSOC / b3DischargeLimitFullSOC define the Battery 3 SOC window over
+	// which max discharge is tapered for low-SOC protection. At/below Zero, MaxDischarge is 0;
+	// at/above Full, MaxDischarge is unrestricted. Linear in between, no hysteresis.
+	b3DischargeLimitZeroSOC = 10.0
+	b3DischargeLimitFullSOC = 20.0
+
+	// pwOffsetMaxW is the extra discharge added to the intent when the Powerwall is fully low.
+	// pwOffsetFullSOC / pwOffsetZeroSOC bound the linear ramp: full offset at/below Full SOC,
+	// zero at/above Zero SOC. No hysteresis.
+	pwOffsetMaxW    = 250.0
+	pwOffsetFullSOC = 10.0
+	pwOffsetZeroSOC = 20.0
+
 	// cclOverflowHeadroomA is the target margin below CCL (in amps) that the Multiplus
 	// maintains by discharging when solar pushes battery current above CCL - margin.
 	cclOverflowHeadroomA = 5.0
@@ -76,9 +89,11 @@ type DynamicDebugInfo struct {
 	Battery3SOC  float64
 	Safety       bool
 	CarCharging  string  // "" = disabled, "active", or gate reason (e.g. "gated: soc")
-	CCLOverflowW float64 // watts the CCL-overflow constraint requires as minimum discharge
-	CVLOverflowW float64 // watts the CVL-overflow constraint requires as minimum discharge
-	B3ChargeMaxW float64 // max charge W from SOC lerp (dynamicMaxChargeW when unrestricted)
+	CCLOverflowW    float64 // watts the CCL-overflow constraint requires as minimum discharge
+	CVLOverflowW    float64 // watts the CVL-overflow constraint requires as minimum discharge
+	B3ChargeMaxW    float64 // max charge W from SOC lerp (dynamicMaxChargeW when unrestricted)
+	B3DischargeMaxW float64 // max discharge W from B3 low-SOC taper (dynamicMaxDischargeW when unrestricted)
+	PWOffsetW       float64 // extra discharge W added to intent from the Powerwall-low offset
 }
 
 // DynamicModeConstraint encodes a mode's desired setpoint and its allowed range.
@@ -206,6 +221,25 @@ func b3SOCChargeLimit(soc float64) DynamicModeConstraint {
 	}
 }
 
+// b3SOCDischargeLimit caps MaxDischarge linearly from 0W at b3DischargeLimitZeroSOC up to
+// dynamicMaxDischargeW at b3DischargeLimitFullSOC, protecting Battery 3 from over-discharge
+// at low SOC. Held flat (0 below Zero, unrestricted above Full). No hysteresis.
+func b3SOCDischargeLimit(soc float64) DynamicModeConstraint {
+	fraction := clamp((soc-b3DischargeLimitZeroSOC)/(b3DischargeLimitFullSOC-b3DischargeLimitZeroSOC), 0, 1)
+	return DynamicModeConstraint{
+		MaxDischarge: dynamicMaxDischargeW * fraction,
+		MaxCharge:    dynamicMaxChargeW,
+	}
+}
+
+// powerwallLowOffset returns extra discharge watts (positive) to add to the discharge intent
+// when the Powerwall is low: pwOffsetMaxW at pwOffsetFullSOC, ramping linearly to 0 at
+// pwOffsetZeroSOC, held flat outside that band. No hysteresis.
+func powerwallLowOffset(powerwallSOC float64) float64 {
+	fraction := clamp((pwOffsetZeroSOC-powerwallSOC)/(pwOffsetZeroSOC-pwOffsetFullSOC), 0, 1)
+	return pwOffsetMaxW * fraction
+}
+
 // carChargingSetpoint returns the desired Multiplus setpoint for car-charging mode
 // (negative = discharge) along with a short status string. Returns 0 setpoint if any
 // gate fails. Does not evaluate safety/tariff — those are handled downstream.
@@ -283,10 +317,20 @@ func calculateDynamicSetpoint(
 
 	intent, priority, carStatus := intentConstraint(input, state)
 
+	// Powerwall-low offset: add extra discharge to the intent. Increases existing discharge;
+	// when charging/neutral it only reduces charge toward 0 and never forces net discharge.
+	pwOffset := powerwallLowOffset(input.PowerwallSOC)
+	if intent.Target < 0 {
+		intent.Target -= pwOffset
+	} else {
+		intent.Target = max(0, intent.Target-pwOffset)
+	}
+
 	tl := transferLimitConstraint(busLoad)
 	sfty := safetyConstraint(isSafety)
 	cclOF := cclOverflowConstraint(input.Solar3BatteryCurrent, input.Solar4BatteryCurrent, input.Battery3CCL, input.Battery3Voltage)
 	cvlOF := cvlOverflowConstraint(state.cvlVoltageMax.Max(), input.Battery3CVL, input.Solar34Power)
+	dischargeLimit := b3SOCDischargeLimit(input.Battery3SOC)
 	if isSafety {
 		priority = prioritySafety
 	}
@@ -300,18 +344,20 @@ func calculateDynamicSetpoint(
 		MaxDischarge: dynamicMaxDischargeW,
 		MaxCharge:    max(0, input.Solar1Power+input.Inverter1to9Power),
 	}
-	setpoint := intent.add(sfty).add(tl).add(cclOF).add(cvlOF).add(socLimit).add(phChargeLimit).Setpoint()
+	setpoint := intent.add(sfty).add(tl).add(cclOF).add(cvlOF).add(socLimit).add(dischargeLimit).add(phChargeLimit).Setpoint()
 
 	return setpoint, DynamicDebugInfo{
-		Priority:     priority,
-		Setpoint:     setpoint,
-		Headroom:     headroom,
-		Battery3SOC:  input.Battery3SOC,
-		Safety:       isSafety,
-		CarCharging:  carStatus,
-		CCLOverflowW: cclOF.MinDischarge,
-		CVLOverflowW: cvlOF.MinDischarge,
-		B3ChargeMaxW: socLimit.MaxCharge,
+		Priority:        priority,
+		Setpoint:        setpoint,
+		Headroom:        headroom,
+		Battery3SOC:     input.Battery3SOC,
+		Safety:          isSafety,
+		CarCharging:     carStatus,
+		CCLOverflowW:    cclOF.MinDischarge,
+		CVLOverflowW:    cvlOF.MinDischarge,
+		B3ChargeMaxW:    socLimit.MaxCharge,
+		B3DischargeMaxW: dischargeLimit.MaxDischarge,
+		PWOffsetW:       pwOffset,
 	}
 }
 
