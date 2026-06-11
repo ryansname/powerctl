@@ -68,6 +68,10 @@ var requiredPercentiles = map[string][]PercentileSpec{
 
 	// AC frequency - used by baseline/dynamic controllers for high frequency protection (P100._5)
 	topicACFrequency: {{100, 5 * time.Minute}},
+
+	// Tank ADC voltages - P50._5 smooths spikes/glitches for tank_levels_worker
+	TopicHeaderTankADC:  {{50, 5 * time.Minute}},
+	TopicStorageTankADC: {{50, 5 * time.Minute}},
 }
 
 // Reading represents a timestamped sensor reading

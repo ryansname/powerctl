@@ -26,6 +26,8 @@ const (
 	deviceIDBattery3         = "battery_3"
 	deviceNameBattery3       = "Battery 3"
 	deviceIDPowerctl         = "powerctl"
+	deviceIDWaterTanks       = "water_tanks"
+	deviceNameWaterTanks     = "Water Tanks"
 	stateClassMeasurement    = "measurement"
 	valueTemplateJSONValue   = "{{ value_json.value }}"
 	haServiceValueKey        = "value"
@@ -819,6 +821,127 @@ func (s *MQTTSender) CreateSolarMpptModeEntity(
 	})
 
 	return nil
+}
+
+// createPercentSensor creates a percentage sensor on the Water Tanks device via MQTT discovery.
+// The sensor expires to unavailable if powerctl stops publishing (e.g. tank sensor offline).
+func (s *MQTTSender) createPercentSensor(uniqueID, name, stateTopic, jsonKey string) error {
+	type haDeviceConfig struct {
+		Identifiers  []string `json:"identifiers"`
+		Name         string   `json:"name"`
+		Manufacturer string   `json:"manufacturer,omitempty"`
+	}
+
+	type haSensorConfig struct {
+		Name             string         `json:"name"`
+		StateTopic       string         `json:"state_topic"`
+		UnitOfMeasure    string         `json:"unit_of_measurement"`
+		ValueTemplate    string         `json:"value_template"`
+		UniqueId         string         `json:"unique_id"`
+		ExpireAfter      uint           `json:"expire_after,omitempty"`
+		StateClass       string         `json:"state_class,omitempty"`
+		DisplayPrecision int            `json:"suggested_display_precision,omitempty"`
+		Device           haDeviceConfig `json:"device"`
+	}
+
+	config := haSensorConfig{
+		Name:             name,
+		StateTopic:       stateTopic,
+		UnitOfMeasure:    "%",
+		ValueTemplate:    "{{ value_json." + jsonKey + " }}",
+		UniqueId:         uniqueID,
+		ExpireAfter:      60 * 30, // 30 minutes
+		StateClass:       stateClassMeasurement,
+		DisplayPrecision: 1,
+		Device: haDeviceConfig{
+			Identifiers:  []string{deviceIDWaterTanks},
+			Name:         deviceNameWaterTanks,
+			Manufacturer: deviceManufacturerCustom,
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/sensor/" + uniqueID + "/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
+// CreateWaterTankEntities creates the five tank fill sensors published by tankLevelsWorker.
+func (s *MQTTSender) CreateWaterTankEntities() error {
+	sensors := []struct {
+		uniqueID, name, stateTopic, jsonKey string
+	}{
+		{"header_tank_percent_full", "Header Tank Percent Full", TopicHeaderTankLevelsState, "percent_full"},
+		{"storage_tank_percent_full", "Storage Tank Percent Full", TopicStorageTankLevelsState, "percent_full"},
+		{"storage_tank_1_percent_full", "Storage Tank 1 Percent Full", TopicStorageTankLevelsState, "tank_1_percent_full"},
+		{"storage_tank_2_percent_full", "Storage Tank 2 Percent Full", TopicStorageTankLevelsState, "tank_2_percent_full"},
+		{"storage_tank_3_percent_full", "Storage Tank 3 Percent Full", TopicStorageTankLevelsState, "tank_3_percent_full"},
+	}
+	for _, sensor := range sensors {
+		if err := s.createPercentSensor(sensor.uniqueID, sensor.name, sensor.stateTopic, sensor.jsonKey); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// createBinarySensor creates a Home Assistant binary sensor via MQTT discovery.
+// Read-only counterpart of createSwitch (no command topic).
+func (s *MQTTSender) createBinarySensor(uniqueID, name, icon, stateTopic string) error {
+	type haDeviceConfig struct {
+		Identifiers  []string `json:"identifiers"`
+		Name         string   `json:"name"`
+		Manufacturer string   `json:"manufacturer,omitempty"`
+	}
+
+	type haBinarySensorConfig struct {
+		Name       string         `json:"name"`
+		StateTopic string         `json:"state_topic"`
+		UniqueId   string         `json:"unique_id"`
+		Icon       string         `json:"icon,omitempty"`
+		Device     haDeviceConfig `json:"device"`
+	}
+
+	config := haBinarySensorConfig{
+		Name:       name,
+		StateTopic: stateTopic,
+		UniqueId:   uniqueID,
+		Icon:       icon,
+		Device: haDeviceConfig{
+			Identifiers:  []string{deviceIDPowerctl},
+			Name:         deviceNamePowerctl,
+			Manufacturer: deviceManufacturerCustom,
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/binary_sensor/" + uniqueID + "/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
+// CreateTankFlushModeBinarySensor creates the tank flush mode binary sensor via MQTT discovery.
+// On during the first fortnight of every third month (see IsFlushMode).
+func (s *MQTTSender) CreateTankFlushModeBinarySensor() error {
+	return s.createBinarySensor("powerctl_tank_flush_mode", "Tank Flush Mode", "mdi:water-sync", TopicTankFlushModeState)
 }
 
 // isDiscoveryTopic checks if a topic is an MQTT discovery config topic

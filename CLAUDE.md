@@ -84,6 +84,10 @@ Goroutine-based with message passing via channels. All source code in `src/`.
 
 16. **cerboKeepaliveWorker** (src/powerhouse3.go) - Sends Victron GX keepalive every 50s so Cerbo keeps publishing N/ topics
 
+17. **tankLevelsWorker** (src/tank_levels_worker.go) - Computes water tank fill % from P50/5m-smoothed ADC voltages + HA calibration input_numbers; publishes powerctl-owned sensors (Water Tanks device). Invalid data (sensor offline, degenerate calibration) ⇒ no publish ⇒ entities expire to unavailable. Spec: `specs/water-tanks.md`
+
+18. **pumpControlWorker** (src/pump_control_worker.go) - Header tank pump control: daily start check during the 11:00 hour only (<75%, or <15% in flush mode = days 1-14 of Jan/Apr/Jul/Oct), <5% start floor any time, ≥90% stop any time. Starts `timer.pump_time_remaining` (3h) — HA automations own pump on/off. Spec: `specs/water-tanks.md`
+
 ### Data Structures
 
 **DisplayData** (broadcast to all workers):

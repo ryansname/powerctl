@@ -344,6 +344,10 @@ func main() {
 	haTopics = append(haTopics, TopicPowerhouseBlowerTemp)
 	haTopics = append(haTopics, TopicPowerhouseBlowerSwitch0State)
 
+	// Add water tank and pump control topics
+	haTopics = append(haTopics, TankTopics()...)
+	haTopics = append(haTopics, PumpTopics()...)
+
 	// Sort and dedupe HA topics list
 	slices.Sort(haTopics)
 	haTopics = slices.Compact(haTopics)
@@ -498,6 +502,18 @@ func main() {
 		log.Fatalf("Failed to create car charging cutoff entity: %v", err)
 	}
 
+	// Create water tank fill sensors and flush mode binary sensor
+	err = mqttSender.CreateWaterTankEntities()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create water tank entities: %v", err)
+	}
+	err = mqttSender.CreateTankFlushModeBinarySensor()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create tank flush mode binary sensor: %v", err)
+	}
+
 	log.Println("Home Assistant entities created")
 
 	// Launch sankey config worker (generates and publishes sankey configurations)
@@ -514,15 +530,28 @@ func main() {
 		log.Println("Sankey configurations published")
 	})
 
-	// Pre-seed command topics so statsWorker doesn't block on first startup.
-	// Real broker values override these on connection.
-	msgChan <- SensorMessage{Topic: TopicInverter10SetpointCmd, Value: "0"}
-
 	// Launch stats worker (produces statistics)
 	SafeGo(ctx, cancel, "stats-worker", func(ctx context.Context) {
 		statsWorker(ctx, msgChan, statsChan, haTopics)
 	})
 	log.Println("Stats worker started")
+
+	// Pre-seed topics that may be absent from the broker so statsWorker doesn't
+	// block on first startup. Real broker values override these on connection.
+	// Sent after the stats worker launch so the seeds can't outgrow the channel buffer.
+	msgChan <- SensorMessage{Topic: TopicInverter10SetpointCmd, Value: "0"}
+	// Tank ADC sentinel: real readings are >= 0, so negative means "no data yet"
+	msgChan <- SensorMessage{Topic: TopicHeaderTankADC, Value: "-1"}
+	msgChan <- SensorMessage{Topic: TopicStorageTankADC, Value: "-1"}
+	// Calibration defaults mirror the current HA input_number values in case the
+	// statestream doesn't republish the input_number domain on connect
+	msgChan <- SensorMessage{Topic: TopicHeaderTankFullVoltage, Value: "4.76"}
+	msgChan <- SensorMessage{Topic: TopicHeaderTankEmptyVoltage, Value: "0.0"}
+	msgChan <- SensorMessage{Topic: TopicStorageTankFullVoltage, Value: "4.86"}
+	msgChan <- SensorMessage{Topic: TopicStorageTankEmptyVoltage, Value: "0.2"}
+	// Header tank level sentinel: powerctl's own publishes aren't retained, so this
+	// marks "no data yet" for the pump controller until tankLevelsWorker publishes
+	msgChan <- SensorMessage{Topic: TopicHeaderTankLevelsState, Value: `{"percent_full": -1000}`}
 
 	// Launch battery workers and collect downstream channels.
 	var downstreamChans []chan<- DisplayData
@@ -673,6 +702,22 @@ func main() {
 
 	SafeGo(ctx, cancel, "powerhouse-cooling-worker", func(ctx context.Context) {
 		powerhouseCoolingWorker(ctx, coolingChan, mqttSender)
+	})
+
+	// Launch tank levels worker (computes water tank fill percentages)
+	tankLevelsChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, tankLevelsChan)
+
+	SafeGo(ctx, cancel, "tank-levels-worker", func(ctx context.Context) {
+		tankLevelsWorker(ctx, tankLevelsChan, mqttSender)
+	})
+
+	// Launch pump control worker (daily start check, low-level floor, full stop)
+	pumpControlChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, pumpControlChan)
+
+	SafeGo(ctx, cancel, "pump-control-worker", func(ctx context.Context) {
+		pumpControlWorker(ctx, pumpControlChan, mqttSender)
 	})
 
 	// Launch Cerbo keepalive worker (outbound only)
