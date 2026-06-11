@@ -18,8 +18,10 @@ const (
 // Percentile constants for GetPercentile
 const (
 	P1   = 1
+	P25  = 25
 	P50  = 50
 	P66  = 66
+	P75  = 75
 	P90  = 90
 	P99  = 99
 	P100 = 100
@@ -69,9 +71,9 @@ var requiredPercentiles = map[string][]PercentileSpec{
 	// AC frequency - used by baseline/dynamic controllers for high frequency protection (P100._5)
 	topicACFrequency: {{100, 5 * time.Minute}},
 
-	// Tank ADC voltages - P50._5 smooths spikes/glitches for tank_levels_worker
-	TopicHeaderTankADC:  {{50, 5 * time.Minute}},
-	TopicStorageTankADC: {{50, 5 * time.Minute}},
+	// Tank ADC voltages - quartiles feed tank_levels_worker's 5-minute Tukey trimean
+	TopicHeaderTankADC:  {{25, 5 * time.Minute}, {50, 5 * time.Minute}, {75, 5 * time.Minute}},
+	TopicStorageTankADC: {{25, 5 * time.Minute}, {50, 5 * time.Minute}, {75, 5 * time.Minute}},
 }
 
 // Reading represents a timestamped sensor reading

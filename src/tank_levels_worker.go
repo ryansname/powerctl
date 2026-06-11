@@ -60,7 +60,7 @@ type StorageTankLevels struct {
 
 // TankLevelInput holds the smoothed ADC voltages and calibration voltages.
 type TankLevelInput struct {
-	HeaderADC  float64 // P50 over 5 minutes; < 0 means no data yet
+	HeaderADC  float64 // 5-minute trimean; < 0 means no data yet
 	StorageADC float64
 
 	HeaderFullVoltage   float64
@@ -69,11 +69,26 @@ type TankLevelInput struct {
 	StorageEmptyVoltage float64
 }
 
+// adcTrimean returns Tukey's trimean (P25 + 2·P50 + P75)/4 of the topic over the
+// 5-minute window: smoother than a plain median while still ignoring spikes that
+// occupy under a quarter of the window. A negative P25 means the startup sentinel
+// (or persistent garbage) still carries weight, so the value is not yet trustworthy
+// and must not be blended in — report "no data" instead.
+func adcTrimean(data DisplayData, topic string) float64 {
+	p25 := data.GetPercentile(topic, P25, Window5Min)
+	if p25 < 0 {
+		return -1
+	}
+	p50 := data.GetPercentile(topic, P50, Window5Min)
+	p75 := data.GetPercentile(topic, P75, Window5Min)
+	return (p25 + 2*p50 + p75) / 4
+}
+
 // ExtractTankLevelInput reads tank worker inputs from DisplayData.
 func ExtractTankLevelInput(data DisplayData) TankLevelInput {
 	return TankLevelInput{
-		HeaderADC:           data.GetPercentile(TopicHeaderTankADC, P50, Window5Min),
-		StorageADC:          data.GetPercentile(TopicStorageTankADC, P50, Window5Min),
+		HeaderADC:           adcTrimean(data, TopicHeaderTankADC),
+		StorageADC:          adcTrimean(data, TopicStorageTankADC),
 		HeaderFullVoltage:   data.GetFloat(TopicHeaderTankFullVoltage).Current,
 		HeaderEmptyVoltage:  data.GetFloat(TopicHeaderTankEmptyVoltage).Current,
 		StorageFullVoltage:  data.GetFloat(TopicStorageTankFullVoltage).Current,

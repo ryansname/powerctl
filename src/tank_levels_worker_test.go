@@ -89,7 +89,7 @@ func TestComputeTankLevels_DegenerateCalibrationInvalid(t *testing.T) {
 	assert.False(t, out.StorageValid)
 }
 
-// covers: TANK-SMOOTH-1 (pins the P50/5m wiring through DisplayData)
+// covers: TANK-SMOOTH-1 (pins the trimean/5m wiring through DisplayData)
 func TestExtractTankLevelInput(t *testing.T) {
 	data := DisplayData{
 		TopicData: map[string]any{
@@ -99,16 +99,49 @@ func TestExtractTankLevelInput(t *testing.T) {
 			TopicStorageTankEmptyVoltage: &FloatTopicData{Current: 0.2},
 		},
 		Percentiles: map[PercentileKey]float64{
+			{TopicHeaderTankADC, P25, Window5Min}:  3.20,
 			{TopicHeaderTankADC, P50, Window5Min}:  3.23,
+			{TopicHeaderTankADC, P75, Window5Min}:  3.30,
+			{TopicStorageTankADC, P25, Window5Min}: 2.6,
 			{TopicStorageTankADC, P50, Window5Min}: 2.6,
+			{TopicStorageTankADC, P75, Window5Min}: 2.6,
 		},
 	}
 
 	in := ExtractTankLevelInput(data)
-	assert.InDelta(t, 3.23, in.HeaderADC, 0.001)
+	assert.InDelta(t, 3.24, in.HeaderADC, 0.001, "trimean (3.20 + 2*3.23 + 3.30)/4")
 	assert.InDelta(t, 2.6, in.StorageADC, 0.001)
 	assert.InDelta(t, 4.76, in.HeaderFullVoltage, 0.001)
 	assert.InDelta(t, 0.0, in.HeaderEmptyVoltage, 0.001)
 	assert.InDelta(t, 4.86, in.StorageFullVoltage, 0.001)
 	assert.InDelta(t, 0.2, in.StorageEmptyVoltage, 0.001)
+}
+
+// covers: TANK-VALID-1, TANK-SMOOTH-1 (sentinel weight in the window is never blended in)
+func TestExtractTankLevelInput_SentinelInLowerQuartile(t *testing.T) {
+	data := DisplayData{
+		TopicData: map[string]any{
+			TopicHeaderTankFullVoltage:   &FloatTopicData{Current: 4.76},
+			TopicHeaderTankEmptyVoltage:  &FloatTopicData{Current: 0.0},
+			TopicStorageTankFullVoltage:  &FloatTopicData{Current: 4.86},
+			TopicStorageTankEmptyVoltage: &FloatTopicData{Current: 0.2},
+		},
+		Percentiles: map[PercentileKey]float64{
+			// Startup: the pre-seed sentinel still occupies the lower quartile.
+			{TopicHeaderTankADC, P25, Window5Min}:  -1,
+			{TopicHeaderTankADC, P50, Window5Min}:  3.23,
+			{TopicHeaderTankADC, P75, Window5Min}:  3.30,
+			{TopicStorageTankADC, P25, Window5Min}: -1,
+			{TopicStorageTankADC, P50, Window5Min}: -1,
+			{TopicStorageTankADC, P75, Window5Min}: -1,
+		},
+	}
+
+	in := ExtractTankLevelInput(data)
+	assert.Less(t, in.HeaderADC, 0.0, "partially-seeded window reports no data, not a blend")
+	assert.Less(t, in.StorageADC, 0.0)
+
+	out := ComputeTankLevels(in)
+	assert.False(t, out.HeaderValid)
+	assert.False(t, out.StorageValid)
 }
