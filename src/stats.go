@@ -275,6 +275,30 @@ func allExpectedTopicsReceived(topicData map[string]any, expectedTopics []string
 	return true
 }
 
+// Topics pre-seeded into msgChan at startup so statsWorker doesn't block waiting
+// for values that may be absent from the broker. Real broker values override these
+// on connection. Unlike the selfPublished* defaults below, these take effect
+// immediately rather than after the startup timeout — use them when waiting would
+// block the first broadcast (e.g. topics powerctl itself publishes unretained).
+var preSeededTopics = []SensorMessage{
+	{Topic: TopicInverter10SetpointCmd, Value: "0"},
+	// Tank ADC sentinel: real readings are >= 0, so negative means "no data yet"
+	{Topic: TopicHeaderTankADC, Value: "-1"},
+	{Topic: TopicStorageTankADC, Value: "-1"},
+	// Calibration defaults mirror the HA input_number values; statestream only
+	// republishes input_numbers on change, so they may never arrive after connect.
+	// TODO: fetch the live input_number values from HA at startup instead of hardcoding.
+	{Topic: TopicHeaderTankFullVoltage, Value: "4.76"},
+	{Topic: TopicHeaderTankEmptyVoltage, Value: "0.0"},
+	{Topic: TopicStorageTankFullVoltage, Value: "4.86"},
+	{Topic: TopicStorageTankEmptyVoltage, Value: "0.2"},
+	// Header tank level sentinel: powerctl's own publishes aren't retained, and
+	// tankLevelsWorker can't publish until the first broadcast, so a selfPublished*
+	// timeout default would stall every startup. Pre-seeding marks "no data yet"
+	// for the pump controller instantly.
+	{Topic: TopicHeaderTankLevelsState, Value: `{"percent_full": -1000}`},
+}
+
 // Topics that should be initialized to 0.0 if not received within timeout
 // These are self-published topics that won't exist on first startup
 var selfPublishedFloatTopics = []string{

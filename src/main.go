@@ -536,22 +536,12 @@ func main() {
 	})
 	log.Println("Stats worker started")
 
-	// Pre-seed topics that may be absent from the broker so statsWorker doesn't
+	// Pre-seed topics (see preSeededTopics in stats.go) so statsWorker doesn't
 	// block on first startup. Real broker values override these on connection.
 	// Sent after the stats worker launch so the seeds can't outgrow the channel buffer.
-	msgChan <- SensorMessage{Topic: TopicInverter10SetpointCmd, Value: "0"}
-	// Tank ADC sentinel: real readings are >= 0, so negative means "no data yet"
-	msgChan <- SensorMessage{Topic: TopicHeaderTankADC, Value: "-1"}
-	msgChan <- SensorMessage{Topic: TopicStorageTankADC, Value: "-1"}
-	// Calibration defaults mirror the current HA input_number values in case the
-	// statestream doesn't republish the input_number domain on connect
-	msgChan <- SensorMessage{Topic: TopicHeaderTankFullVoltage, Value: "4.76"}
-	msgChan <- SensorMessage{Topic: TopicHeaderTankEmptyVoltage, Value: "0.0"}
-	msgChan <- SensorMessage{Topic: TopicStorageTankFullVoltage, Value: "4.86"}
-	msgChan <- SensorMessage{Topic: TopicStorageTankEmptyVoltage, Value: "0.2"}
-	// Header tank level sentinel: powerctl's own publishes aren't retained, so this
-	// marks "no data yet" for the pump controller until tankLevelsWorker publishes
-	msgChan <- SensorMessage{Topic: TopicHeaderTankLevelsState, Value: `{"percent_full": -1000}`}
+	for _, msg := range preSeededTopics {
+		msgChan <- msg
+	}
 
 	// Launch battery workers and collect downstream channels.
 	var downstreamChans []chan<- DisplayData
