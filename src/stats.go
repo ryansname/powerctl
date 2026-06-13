@@ -297,6 +297,9 @@ var preSeededTopics = []SensorMessage{
 	// timeout default would stall every startup. Pre-seeding marks "no data yet"
 	// for the pump controller instantly.
 	{Topic: TopicHeaderTankLevelsState, Value: `{"percent_full": -1000}`},
+	// Ryan's lights brightness is null (statestream may not publish) while the
+	// light is off; seed 0 so the lights worker's dim doesn't block startup.
+	{Topic: TopicLightRyansBrightness, Value: "0"},
 }
 
 // Topics that should be initialized to 0.0 if not received within timeout

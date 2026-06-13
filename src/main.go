@@ -347,6 +347,7 @@ func main() {
 	// Add water tank and pump control topics
 	haTopics = append(haTopics, TankTopics()...)
 	haTopics = append(haTopics, PumpTopics()...)
+	haTopics = append(haTopics, LightsTopics()...)
 
 	// Sort and dedupe HA topics list
 	slices.Sort(haTopics)
@@ -438,6 +439,18 @@ func main() {
 	if err != nil {
 		cancel()
 		log.Fatalf("Failed to create inverter 10 AC setpoint entity: %v", err)
+	}
+
+	// Create the "Sleep Ryan" button (triggers the slow dim of Ryan's lights)
+	err = mqttSender.createButton(
+		"powerctl_sleep_ryan",
+		"Sleep Ryan",
+		"mdi:weather-night",
+		TopicSleepRyanPress,
+	)
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create sleep ryan button: %v", err)
 	}
 
 	// Create inverter 10 (Multiplus) AC power sensor entity
@@ -717,6 +730,17 @@ func main() {
 		pumpControlWorker(ctx, pumpControlChan, mqttSender)
 	})
 
+	// Launch lights worker (outside auto-off, kitchen↔mum, garage mirror, sleep dim).
+	// sleepRyanChan delivers button presses on a dedicated route so momentary
+	// presses aren't collapsed by statsWorker's per-topic state.
+	lightsChan := make(chan DisplayData, 10)
+	sleepRyanChan := make(chan SensorMessage, 10)
+	downstreamChans = append(downstreamChans, lightsChan)
+
+	SafeGo(ctx, cancel, "lights-worker", func(ctx context.Context) {
+		lightsWorker(ctx, lightsChan, sleepRyanChan, mqttSender)
+	})
+
 	// Launch Cerbo keepalive worker (outbound only)
 	SafeGo(ctx, cancel, "cerbo-keepalive", func(ctx context.Context) {
 		cerboKeepaliveWorker(ctx, mqttSender)
@@ -744,6 +768,7 @@ func main() {
 	SafeGo(ctx, cancel, "mqtt-worker", func(ctx context.Context) {
 		mqttWorker(ctx, "homeassistant.lan", []TopicRoute{
 			{Topics: haTopics, Channel: msgChan},
+			{Topics: []string{TopicSleepRyanPress}, Channel: sleepRyanChan},
 		}, mqttUsername, mqttPassword, mqttClientID, mqttClientChan)
 	})
 	log.Println("MQTT worker started")

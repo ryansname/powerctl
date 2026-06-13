@@ -321,6 +321,55 @@ func (s *MQTTSender) createSwitch(uniqueID, name, icon, stateTopic string) error
 	return nil
 }
 
+// createButton creates a stateless Home Assistant button via MQTT discovery.
+// Pressing it (in the HA UI or via button.press) publishes to commandTopic;
+// powerctl routes that topic straight to the relevant worker.
+func (s *MQTTSender) createButton(uniqueID, name, icon, commandTopic string) error {
+	type haDeviceConfig struct {
+		Identifiers  []string `json:"identifiers"`
+		Name         string   `json:"name"`
+		Manufacturer string   `json:"manufacturer,omitempty"`
+	}
+
+	type haButtonConfig struct {
+		Name         string         `json:"name"`
+		CommandTopic string         `json:"command_topic"`
+		UniqueId     string         `json:"unique_id"`
+		ObjectId     string         `json:"object_id"`
+		Icon         string         `json:"icon,omitempty"`
+		Device       haDeviceConfig `json:"device"`
+	}
+
+	// object_id pins the entity_id (button.<uniqueID>) instead of letting HA
+	// derive it from the device+entity name.
+	config := haButtonConfig{
+		Name:         name,
+		CommandTopic: commandTopic,
+		UniqueId:     uniqueID,
+		ObjectId:     uniqueID,
+		Icon:         icon,
+		Device: haDeviceConfig{
+			Identifiers:  []string{deviceIDPowerctl},
+			Name:         deviceNamePowerctl,
+			Manufacturer: deviceManufacturerCustom,
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/button/" + uniqueID + "/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
 func (s *MQTTSender) createSelect(uniqueID, name, icon, stateTopic string, options []string) error {
 	type haDeviceConfig struct {
 		Identifiers  []string `json:"identifiers"`
