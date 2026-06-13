@@ -43,7 +43,7 @@ var kiloToBaseUnitTopics = map[string]bool{
 	// Energy sensors (kWh → Wh)
 	"homeassistant/sensor/home_sweet_home_tg118095000r1a_battery_remaining/state": true,
 	"homeassistant/sensor/solcast_pv_forecast_forecast_today/state":               true,
-	"homeassistant/sensor/solcast_pv_forecast_forecast_remaining_today/state":     true,
+	TopicSolcastForecastRemaining:                                                 true,
 }
 
 // PercentileSpec defines a specific percentile and time window combination

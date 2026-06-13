@@ -2,6 +2,8 @@ package main
 
 import (
 	"time"
+
+	"github.com/ryansname/powerctl/src/governor"
 )
 
 // DynamicInputConfig holds the topics needed to extract DynamicInput from DisplayData.
@@ -29,6 +31,10 @@ type DynamicInputConfig struct {
 	Solar3BatteryCurrentTopic string
 	Solar4BatteryCurrentTopic string
 	PowerhouseNetPowerTopic   string
+	ForecastRemainingTopic    string
+	DetailedForecastTopic     string
+	Battery3CapacityWh        float64 // static config, not a topic
+	SolarMultiplier           float64 // static config, not a topic
 }
 
 // DynamicInput holds extracted values for the dynamic inverter controller.
@@ -58,6 +64,10 @@ type DynamicInput struct {
 	Solar3BatteryCurrent  float64 // A
 	Solar4BatteryCurrent  float64 // A
 	PowerhouseNetPower    float64 // W, actual flow across the powerhouse↔house cable
+	ForecastRemainingWh   float64 // Wh of solar forecast remaining today (statsWorker converts kWh→Wh)
+	DetailedForecast      governor.ForecastPeriods
+	Battery3CapacityWh    float64 // static config
+	SolarMultiplier       float64 // static config; scales Solcast forecast to B3 arrays
 }
 
 // Tariff classifies the current time-of-use band for Vector's residential plan.
@@ -139,6 +149,8 @@ func (c DynamicInputConfig) Topics() []string {
 		c.Solar3BatteryCurrentTopic,
 		c.Solar4BatteryCurrentTopic,
 		c.PowerhouseNetPowerTopic,
+		c.ForecastRemainingTopic,
+		c.DetailedForecastTopic,
 	}
 	topics = append(topics, c.Inverter1to9PowerTopics...)
 	topics = append(topics, c.Solar34PowerTopics...)
@@ -151,6 +163,9 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 	dynamicAutoEnabled := data.GetBoolean(config.DynamicAutoTopic)
 	carChargingEnabled := data.GetBoolean(config.CarChargingEnabledTopic)
 	carChargingActive := data.GetBoolean(config.CarChargingActiveTopic)
+
+	var forecast governor.ForecastPeriods
+	data.GetJSON(config.DetailedForecastTopic, &forecast)
 
 	return DynamicInput{
 		HouseLoad:             data.GetFloat(config.HouseLoadTopic).Current,
@@ -178,5 +193,10 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		Solar3BatteryCurrent:  data.GetFloat(config.Solar3BatteryCurrentTopic).Current,
 		Solar4BatteryCurrent:  data.GetFloat(config.Solar4BatteryCurrentTopic).Current,
 		PowerhouseNetPower:    data.GetFloat(config.PowerhouseNetPowerTopic).Current,
+		// Already in Wh: statsWorker converts this topic via kiloToBaseUnitTopics.
+		ForecastRemainingWh: data.GetFloat(config.ForecastRemainingTopic).Current,
+		DetailedForecast:    forecast,
+		Battery3CapacityWh:  config.Battery3CapacityWh,
+		SolarMultiplier:     config.SolarMultiplier,
 	}
 }

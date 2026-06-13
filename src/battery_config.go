@@ -4,6 +4,10 @@ import (
 	"strings"
 )
 
+// solarForecastMultiplier scales the single-site Solcast forecast to the actual array output.
+// Shared by the Battery 2 baseline forecast-excess mode and the Battery 3 dynamic charge limit.
+const solarForecastMultiplier = 3.9
+
 // BatteryConfig holds shared configuration for a battery
 type BatteryConfig struct {
 	Name                 string
@@ -114,7 +118,7 @@ func buildInverterGroup(b BatteryConfig, availableEnergyTopic string) BatteryInv
 		SOCTopic:             "homeassistant/sensor/" + deviceID + "_state_of_charge/state",
 		BatteryVoltageTopic:  b.BatteryVoltageTopic,
 		CapacityWh:           b.CapacityKWh * 1000,
-		SolarMultiplier:      3.9,
+		SolarMultiplier:      solarForecastMultiplier,
 		AvailableEnergyTopic: availableEnergyTopic,
 	}
 }
@@ -142,8 +146,8 @@ func BuildBaselineInverterConfig(battery2, battery3 BatteryConfig) BaselineInver
 		HouseLoadTopic:           topicHouseLoadPower2,
 		GridStatusTopic:          "homeassistant/binary_sensor/home_sweet_home_grid_status_2/state",
 		ACFrequencyTopic:         topicACFrequency,
-		ForecastRemainingTopic:   "homeassistant/sensor/solcast_pv_forecast_forecast_remaining_today/state",
-		DetailedForecastTopic:    "homeassistant/sensor/solcast_pv_forecast_forecast_today/detailedForecast",
+		ForecastRemainingTopic:   TopicSolcastForecastRemaining,
+		DetailedForecastTopic:    TopicSolcastDetailedForecast,
 		InverterStateTopics:      inverterStateTopics,
 		Battery3SOCTopic:         "homeassistant/sensor/" + strings.ReplaceAll(strings.ToLower(battery3.Name), " ", "_") + "_state_of_charge/state",
 		PowerwallSOCTopic:        "homeassistant/sensor/home_sweet_home_charge/state",
@@ -194,6 +198,10 @@ func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverte
 			Solar3BatteryCurrentTopic: "homeassistant/sensor/solar_3_battery_current/state",
 			Solar4BatteryCurrentTopic: "homeassistant/sensor/solar_4_battery_current/state",
 			PowerhouseNetPowerTopic:   "homeassistant/sensor/powerhouse_net_power/state",
+			ForecastRemainingTopic:    TopicSolcastForecastRemaining,
+			DetailedForecastTopic:     TopicSolcastDetailedForecast,
+			Battery3CapacityWh:        battery3.CapacityKWh * 1000,
+			SolarMultiplier:           solarForecastMultiplier,
 		},
 	}
 }

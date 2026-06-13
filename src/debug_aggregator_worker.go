@@ -51,6 +51,7 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 	if dynamic.B3ChargeMaxW < dynamicMaxChargeW {
 		rows = append(rows, [2]string{"Charge Limit", fmt.Sprintf("%.0fW", dynamic.B3ChargeMaxW)})
 	}
+	rows = append(rows, [2]string{"Exp. Final", fmt.Sprintf("%.1fkWh", dynamic.B3ExpectedFinalKwh)})
 	if dynamic.B3DischargeMaxW < dynamicMaxDischargeW {
 		rows = append(rows, [2]string{"Discharge Limit", fmt.Sprintf("%.0fW", dynamic.B3DischargeMaxW)})
 	}

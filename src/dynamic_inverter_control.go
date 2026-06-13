@@ -30,11 +30,13 @@ const (
 	// carChargingMinHeadroom requires at least this much transfer-limit headroom to engage.
 	carChargingMinHeadroom = 1500.0
 
-	// b3ChargeLimitFullSOC / b3ChargeLimitZeroSOC define the SOC window over which voluntary
-	// B3 charging is tapered. Below Full, the Multiplus may charge at full rate. Above Zero,
-	// MaxCharge is 0 so only transfer-limit-forced absorption still occurs.
-	b3ChargeLimitFullSOC = 60.0
-	b3ChargeLimitZeroSOC = 85.0
+	// b3ChargeTargetSOC is the SOC the forecast-aware charge limit aims to reach by the end of
+	// the solar day. Above it, voluntary charging stops (only transfer-limit absorption remains).
+	b3ChargeTargetSOC = 98.0
+
+	// b3SolarEndThresholdKw is the (pre-multiplier Solcast) generation above which a forecast
+	// period still counts as "solar producing" when locating the end of the solar day.
+	b3SolarEndThresholdKw = 0.05
 
 	// b3DischargeLimitZeroSOC / b3DischargeLimitFullSOC define the Battery 3 SOC window over
 	// which max discharge is tapered for low-SOC protection. At/below Zero, MaxDischarge is 0;
@@ -78,6 +80,9 @@ type DynamicInverterState struct {
 	houseLoadMax        governor.RollingMinMax // 1-min max of house load
 	houseSideGeneration governor.RollingMinMax // 1-min tracking of solar_1 + inverter_1_9
 	cvlVoltageMax       governor.RollingMinMax // 10s rolling max of Battery 3 voltage; smooths CVL ramp input
+
+	smoothedForecastWh float64   // running daily-min of remaining-solar forecast (Wh)
+	forecastResetDate  time.Time // calendar day the smoothing was last reset
 }
 
 // DynamicDebugInfo contains mode states for the dynamic controller debug output.
@@ -91,7 +96,8 @@ type DynamicDebugInfo struct {
 	CarCharging  string  // "" = disabled, "active", or gate reason (e.g. "gated: soc")
 	CCLOverflowW    float64 // watts the CCL-overflow constraint requires as minimum discharge
 	CVLOverflowW    float64 // watts the CVL-overflow constraint requires as minimum discharge
-	B3ChargeMaxW    float64 // max charge W from SOC lerp (dynamicMaxChargeW when unrestricted)
+	B3ChargeMaxW    float64 // max charge W from forecast charge limit (dynamicMaxChargeW when unrestricted)
+	B3ExpectedFinalKwh float64 // projected EOD B3 energy from current SOC + forecast battery-side solar (no powerhouse charging)
 	B3DischargeMaxW float64 // max discharge W from B3 low-SOC taper (dynamicMaxDischargeW when unrestricted)
 	PWOffsetW       float64 // extra discharge W added to intent from the Powerwall-low offset
 }
@@ -209,16 +215,62 @@ func cclOverflowConstraint(solar3A, solar4A, ccl, voltage float64) DynamicModeCo
 	}
 }
 
-// b3SOCChargeLimit tapers MaxCharge linearly from dynamicMaxChargeW at b3ChargeLimitFullSOC
-// to 0W at b3ChargeLimitZeroSOC. This suppresses voluntary charging as B3 approaches full
-// while leaving transfer-limit forced absorption unaffected (MinCharge beats MaxCharge via
-// the lo>hi tie-break — see DynamicModeConstraint comment).
-func b3SOCChargeLimit(soc float64) DynamicModeConstraint {
-	fraction := clamp((b3ChargeLimitZeroSOC-soc)/(b3ChargeLimitZeroSOC-b3ChargeLimitFullSOC), 0, 1)
-	return DynamicModeConstraint{
-		MaxDischarge: dynamicMaxDischargeW,
-		MaxCharge:    dynamicMaxChargeW * fraction,
+// updateForecastSmoothing tracks the running minimum of the remaining-solar forecast (Wh) over
+// the calendar day, resetting at the start of each day. Using the most pessimistic estimate
+// seen keeps the charge limit from under-charging B3 on the strength of an upward forecast
+// revision that may not materialise. Mirrors the daily-reset ratchet in
+// governor.ForecastExcessRequestCore. Returns the smoothed value.
+func (s *DynamicInverterState) updateForecastSmoothing(forecastWh float64, now time.Time) float64 {
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	if !s.forecastResetDate.Equal(today) {
+		s.forecastResetDate = today
+		s.smoothedForecastWh = forecastWh
+	} else {
+		s.smoothedForecastWh = min(s.smoothedForecastWh, forecastWh)
 	}
+	return s.smoothedForecastWh
+}
+
+// b3ForecastChargeLimit caps voluntary Multiplus charging so Battery 3 reaches b3ChargeTargetSOC
+// by the end of the forecast solar day, accounting for the battery-side solar (Solar 3 & 4) still
+// expected to arrive. The energy gap to target minus that expected solar is the deficit the
+// powerhouse side must supply; spreading it over the hours until solar end gives the rate cap.
+// MaxCharge is 0 once battery-side solar alone covers the gap (or B3 is already at target), and
+// full once solar has ended (the surplus-only charge intent gates actual charging anyway).
+// Transfer-limit forced absorption is unaffected — MinCharge beats MaxCharge via the lo>hi
+// tie-break (see DynamicModeConstraint comment).
+func b3ForecastChargeLimit(
+	soc float64,
+	capacityWh float64,
+	smoothedForecastWh float64,
+	solarMultiplier float64,
+	forecast governor.ForecastPeriods,
+	now time.Time,
+) DynamicModeConstraint {
+	c := DynamicModeConstraint{
+		MaxDischarge: dynamicMaxDischargeW,
+		MaxCharge:    dynamicMaxChargeW,
+	}
+
+	gapWh := max(0, (b3ChargeTargetSOC-soc)/100*capacityWh)
+	if gapWh == 0 {
+		c.MaxCharge = 0 // already at/above target: no voluntary charge
+		return c
+	}
+
+	deficitWh := gapWh - solarMultiplier*smoothedForecastWh
+	if deficitWh <= 0 {
+		c.MaxCharge = 0 // battery-side solar alone reaches target
+		return c
+	}
+
+	hours := forecast.FindSolarEndTime(b3SolarEndThresholdKw).Sub(now).Hours()
+	if hours <= 0 {
+		return c // solar ended (or no forecast): allow full charge to close the gap
+	}
+
+	c.MaxCharge = clamp(deficitWh/hours, 0, dynamicMaxChargeW)
+	return c
 }
 
 // b3SOCDischargeLimit caps MaxDischarge linearly from 0W at b3DischargeLimitZeroSOC up to
@@ -337,9 +389,19 @@ func calculateDynamicSetpoint(
 
 	// Compose: intent (single non-zero Target) → hard range constraints (Target=0).
 	// sfty and tl narrow the allowed range; cclOF/cvlOF enforce a minimum discharge floor;
-	// socLimit tapers MaxCharge as B3 fills (transfer-limit MinCharge still wins via lo>hi).
+	// socLimit caps MaxCharge to whatever powerhouse charging B3 needs to reach target by solar
+	// end given the forecast (transfer-limit MinCharge still wins via lo>hi).
 	// phChargeLimit prevents charging from drawing power through the cable from the house side.
-	socLimit := b3SOCChargeLimit(input.Battery3SOC)
+	now := time.Now()
+	smoothedForecastWh := state.updateForecastSmoothing(input.ForecastRemainingWh, now)
+	socLimit := b3ForecastChargeLimit(
+		input.Battery3SOC,
+		input.Battery3CapacityWh,
+		smoothedForecastWh,
+		input.SolarMultiplier,
+		input.DetailedForecast,
+		now,
+	)
 	phChargeLimit := DynamicModeConstraint{
 		MaxDischarge: dynamicMaxDischargeW,
 		MaxCharge:    max(0, input.Solar1Power+input.Inverter1to9Power),
@@ -358,6 +420,9 @@ func calculateDynamicSetpoint(
 		B3ChargeMaxW:    socLimit.MaxCharge,
 		B3DischargeMaxW: dischargeLimit.MaxDischarge,
 		PWOffsetW:       pwOffset,
+		// Projected EOD energy if only battery-side solar charges B3 (no powerhouse charging):
+		// current stored energy + smoothed forecast solar, in kWh.
+		B3ExpectedFinalKwh: (input.Battery3SOC/100*input.Battery3CapacityWh + input.SolarMultiplier*smoothedForecastWh) / 1000,
 	}
 }
 

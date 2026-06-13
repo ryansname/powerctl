@@ -59,7 +59,7 @@ func makeBaselineDisplayData() (DisplayData, BaselineInputConfig) {
 			testTopicLoad:     makeFloatTopic(1500),
 			testTopicGrid:     makeBoolTopic(true, "on"),
 			freqTopic:         makeFloatTopic(50.02),
-			"forecastwh":      makeFloatTopic(12000),
+			"forecastwh":      makeFloatTopic(12000), // already Wh (statsWorker converts upstream)
 			"forecast":        makeStringTopic("[]"),
 			"inv1":            makeBoolTopic(true, "on"),
 			"inv2":            makeBoolTopic(false, "off"),
@@ -118,22 +118,28 @@ func makeDynamicDisplayData() (DisplayData, DynamicInputConfig) {
 		GridStatusTopic:         testTopicGrid,
 		ACFrequencyTopic:        freqTopic,
 		PowerwallSOCTopic:       testTopicPWSOC,
+		ForecastRemainingTopic:  "forecastremaining",
+		DetailedForecastTopic:   "detailedforecast",
+		Battery3CapacityWh:      43500,
+		SolarMultiplier:         3.9,
 	}
 
 	freqKey := PercentileKey{Topic: freqTopic, Percentile: P100, Window: 5 * time.Minute}
 	data := DisplayData{
 		TopicData: map[string]any{
-			testTopicLoad:   makeFloatTopic(2000),
-			testTopicSolar1: makeFloatTopic(1500),
-			testTopicSolar2: makeFloatTopic(600),
-			"inv1p":         makeFloatTopic(-255),
-			"inv2p":         makeFloatTopic(-255),
-			"inv3p":         makeFloatTopic(-510),
-			"multiplusac":   makeFloatTopic(-800),
-			testTopicB3SOC:  makeFloatTopic(65.0),
-			testTopicGrid:   makeBoolTopic(true, "on"),
-			freqTopic:       makeFloatTopic(50.0),
-			testTopicPWSOC:  makeFloatTopic(88.0),
+			testTopicLoad:       makeFloatTopic(2000),
+			testTopicSolar1:     makeFloatTopic(1500),
+			testTopicSolar2:     makeFloatTopic(600),
+			"inv1p":             makeFloatTopic(-255),
+			"inv2p":             makeFloatTopic(-255),
+			"inv3p":             makeFloatTopic(-510),
+			"multiplusac":       makeFloatTopic(-800),
+			testTopicB3SOC:      makeFloatTopic(65.0),
+			testTopicGrid:       makeBoolTopic(true, "on"),
+			freqTopic:           makeFloatTopic(50.0),
+			testTopicPWSOC:      makeFloatTopic(88.0),
+			"forecastremaining": makeFloatTopic(2500), // already Wh (statsWorker converts upstream)
+			"detailedforecast":  makeStringTopic("[]"),
 		},
 		Percentiles: map[PercentileKey]float64{
 			freqKey: 50.1,
@@ -155,6 +161,9 @@ func TestExtractDynamicInput(t *testing.T) {
 	assert.True(t, input.GridAvailable)
 	assert.InDelta(t, 50.1, input.ACFreqP100_5Min, 0.001)
 	assert.InDelta(t, 88.0, input.PowerwallSOC, 0.001)
+	assert.InDelta(t, 2500.0, input.ForecastRemainingWh, 0.001) // Wh, passed through
+	assert.InDelta(t, 43500.0, input.Battery3CapacityWh, 0.001)
+	assert.InDelta(t, 3.9, input.SolarMultiplier, 0.001)
 }
 
 func TestExtractDynamicInput_GridOff(t *testing.T) {

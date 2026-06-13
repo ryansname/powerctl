@@ -11,6 +11,9 @@ const (
 	TopicBattery2Energy = "homeassistant/sensor/battery_2_available_energy/state"
 	TopicBattery3Energy = "homeassistant/sensor/battery_3_available_energy/state"
 	TopicSolar1Power    = "homeassistant/sensor/solar_1_power/state"
+
+	TopicSolcastForecastRemaining = "homeassistant/sensor/solcast_pv_forecast_forecast_remaining_today/state"
+	TopicSolcastDetailedForecast  = "homeassistant/sensor/solcast_pv_forecast_forecast_today/detailedForecast"
 )
 
 // PowerExcessTopics returns all topics needed for power excess calculation
