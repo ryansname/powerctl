@@ -45,6 +45,9 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 	if dynamic.CCLOverflowW > 0 {
 		rows = append(rows, [2]string{"CCL+", fmt.Sprintf("%.0fW", dynamic.CCLOverflowW)})
 	}
+	if dynamic.CCLChargeMaxW < dynamicMaxChargeW {
+		rows = append(rows, [2]string{"CCL Chg", fmt.Sprintf("%.0fW", dynamic.CCLChargeMaxW)})
+	}
 	if dynamic.CVLOverflowW > 0 {
 		rows = append(rows, [2]string{"CVL+", fmt.Sprintf("%.0fW", dynamic.CVLOverflowW)})
 	}

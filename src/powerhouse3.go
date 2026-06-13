@@ -12,6 +12,7 @@ const (
 	TopicMultiplusSetpointWrite = "powerhouse_3/W/vebus/276/Hub4/L1/AcPowerSetpoint"
 	TopicMultiplusSetpointRead  = "powerhouse_3/N/vebus/276/Hub4/L1/AcPowerSetpoint"
 	TopicMultiplusACPower       = "powerhouse_3/N/vebus/276/Ac/ActiveIn/L1/P"
+	TopicMultiplusDCCurrent     = "powerhouse_3/N/vebus/276/Dc/0/Current"
 	TopicCerboBatterySOC        = "powerhouse_3/N/system/0/Dc/Battery/Soc"
 	TopicInverter10SetpointCmd  = "powerctl/number/powerhouse_inverter_10_ac_setpoint/set"
 
@@ -32,6 +33,7 @@ func cerboKeepaliveWorker(ctx context.Context, sender *MQTTSender) {
 		"N/battery/512/Info/MaxChargeVoltage",
 		"N/vebus/276/Hub4/L1/AcPowerSetpoint",
 		"N/vebus/276/Ac/ActiveIn/L1/P",
+		"N/vebus/276/Dc/0/Current",
 	})
 	if err != nil {
 		log.Fatalf("cerbo-keepalive: failed to marshal keepalive payload: %v", err)

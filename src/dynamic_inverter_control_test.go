@@ -147,11 +147,28 @@ func TestCCLOverflow_ZeroVoltage_NoConstraint(t *testing.T) {
 	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
 }
 
-func TestCCLOverflow_ExactlyAtTarget_NoConstraint(t *testing.T) {
-	// Solar = CCL - headroomA exactly → overflowA=0 → no constraint
+func TestCCLOverflow_ExactlyAtTarget_NoChargeNoDischarge(t *testing.T) {
+	// Solar = CCL - headroom exactly → headroomA=0: no forced discharge AND no charge room.
 	// CCL=80A, headroom=5A → target=75A; solar3=37.5A+solar4=37.5A=75A
 	c := cclOverflowConstraint(37.5, 37.5, 80, 53)
 	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
+	assert.InDelta(t, 0.0, c.MaxCharge, 0.001)
+}
+
+func TestCCLOverflow_ChargeHeadroom_CapsCharge(t *testing.T) {
+	// Solar=40A, CCL=80A, headroom=5A → 35A of charge room → 35*53=1855W cap.
+	// A 3000W charge intent is capped to 1855W; no forced discharge.
+	c := cclOverflowConstraint(20, 20, 80, 53)
+	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
+	assert.InDelta(t, 1855.0, c.MaxCharge, 0.001)
+	got := DynamicModeConstraint{Target: 3000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(c).Setpoint()
+	assert.InDelta(t, 1855.0, got, 0.001)
+}
+
+func TestCCLOverflow_AmpleHeadroom_NoChargeCap(t *testing.T) {
+	// Solar=30A, CCL=400A → huge charge room → MaxCharge clamps to dynamicMaxChargeW (no effect).
+	c := cclOverflowConstraint(15, 15, 400, 53)
+	assert.InDelta(t, dynamicMaxChargeW, c.MaxCharge, 0.001)
 }
 
 // --- cvlOverflowConstraint tests ---
@@ -412,6 +429,24 @@ func TestCalculateDynamic_CCLOverflow_HigherDemandWins(t *testing.T) {
 
 	setpoint, _ := calculateDynamicSetpoint(input, state)
 	assert.InDelta(t, -2000.0, setpoint, 0.001)
+}
+
+func TestCalculateDynamic_CCLChargeCap_LimitsCharge(t *testing.T) {
+	// Solar=40A (battery-side), CCL=80A, headroom=5A → 35A charge room → 1855W cap.
+	// Powerhouse surplus would charge at 3000W → capped to 1855W by the CCL charge headroom.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 0
+	input.Solar1Power = 3000 // surplus → Charge intent, also house-side charge headroom
+	input.Solar3BatteryCurrent = 20
+	input.Solar4BatteryCurrent = 20
+	input.Battery3CCL = 80
+	input.Battery3Voltage = 53
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.Equal(t, priorityCharge, debug.Priority)
+	assert.InDelta(t, 1855.0, setpoint, 0.001)
+	assert.InDelta(t, 1855.0, debug.CCLChargeMaxW, 0.001)
 }
 
 // --- CVL overflow integration in calculateDynamicSetpoint ---

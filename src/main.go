@@ -447,6 +447,13 @@ func main() {
 		log.Fatalf("Failed to create inverter 10 AC power entity: %v", err)
 	}
 
+	// Create inverter 10 (Multiplus) DC current sensor entity (Cerbo vebus DC current)
+	err = mqttSender.CreateMultiplusDCCurrentEntity()
+	if err != nil {
+		cancel()
+		log.Fatalf("Failed to create inverter 10 DC current entity: %v", err)
+	}
+
 	// Create Solar 3 & 4 MPPT mode sensor entities (Cerbo solarcharger topics)
 	err = mqttSender.CreateSolarMpptModeEntity("Solar 3", TopicSolarcharger279MppMode)
 	if err != nil {

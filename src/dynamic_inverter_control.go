@@ -95,6 +95,7 @@ type DynamicDebugInfo struct {
 	Safety       bool
 	CarCharging  string  // "" = disabled, "active", or gate reason (e.g. "gated: soc")
 	CCLOverflowW    float64 // watts the CCL-overflow constraint requires as minimum discharge
+	CCLChargeMaxW   float64 // max charge W the CCL headroom allows (dynamicMaxChargeW when unrestricted)
 	CVLOverflowW    float64 // watts the CVL-overflow constraint requires as minimum discharge
 	B3ChargeMaxW    float64 // max charge W from forecast charge limit (dynamicMaxChargeW when unrestricted)
 	B3ExpectedFinalKwh float64 // projected EOD B3 energy from current SOC + forecast battery-side solar (no powerhouse charging)
@@ -201,17 +202,25 @@ func cvlOverflowConstraint(voltage, cvl, solar34W float64) DynamicModeConstraint
 	return base
 }
 
-// cclOverflowConstraint returns a MinDischarge floor to keep battery current
-// cclOverflowHeadroomA amps below the BMS CCL. When solar (battery-side DC amps) exceeds
-// CCL minus the headroom, the Multiplus must discharge the difference to relieve MPPT throttling.
-// Returns zero constraint (no effect) when solar is within the allowed window.
+// cclOverflowConstraint keeps total battery current cclOverflowHeadroomA amps below the BMS CCL,
+// in both directions. headroomA is the amps of charge current still available beyond battery-side
+// solar before reaching CCL - headroom; converted to watts (× voltage) the same way for charge and
+// discharge:
+//   - headroomA > 0: cap MaxCharge at headroomA × voltage so solar + Multiplus charge stays under
+//     the limit (the Multiplus may still charge the remaining headroom).
+//   - headroomA < 0: solar alone already exceeds the limit, so force MinDischarge of the excess
+//     (−headroomA × voltage) to relieve MPPT throttling.
+// Returns no constraint when voltage is unavailable (0V at startup).
 func cclOverflowConstraint(solar3A, solar4A, ccl, voltage float64) DynamicModeConstraint {
-	overflowA := (solar3A + solar4A) - (ccl - cclOverflowHeadroomA)
-	overflowW := max(0, overflowA) * voltage
+	if voltage <= 0 {
+		return DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
+	}
+	headroomA := (ccl - cclOverflowHeadroomA) - (solar3A + solar4A)
+	headroomW := headroomA * voltage
 	return DynamicModeConstraint{
-		MinDischarge: min(overflowW, dynamicMaxDischargeW),
+		MinDischarge: min(max(0, -headroomW), dynamicMaxDischargeW),
 		MaxDischarge: dynamicMaxDischargeW,
-		MaxCharge:    dynamicMaxChargeW,
+		MaxCharge:    min(max(0, headroomW), dynamicMaxChargeW),
 	}
 }
 
@@ -416,6 +425,7 @@ func calculateDynamicSetpoint(
 		Safety:          isSafety,
 		CarCharging:     carStatus,
 		CCLOverflowW:    cclOF.MinDischarge,
+		CCLChargeMaxW:   cclOF.MaxCharge,
 		CVLOverflowW:    cvlOF.MinDischarge,
 		B3ChargeMaxW:    socLimit.MaxCharge,
 		B3DischargeMaxW: dischargeLimit.MaxDischarge,

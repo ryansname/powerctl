@@ -25,6 +25,10 @@ const (
 	deviceManufacturerCustom = "Custom"
 	deviceIDBattery3         = "battery_3"
 	deviceNameBattery3       = "Battery 3"
+	deviceIDInverter10       = "powerhouse_inverter_10"
+	deviceNameInverter10     = "Powerhouse Inverter 10"
+	deviceModelMultiplus2    = "Multiplus II 48/5000/70"
+	deviceClassCurrent       = "current"
 	deviceIDPowerctl         = "powerctl"
 	deviceIDWaterTanks       = "water_tanks"
 	deviceNameWaterTanks     = "Water Tanks"
@@ -515,9 +519,9 @@ func (s *MQTTSender) CreateInverter10ACSetpointEntity() error {
 		Step:          10,
 		Mode:          "slider",
 		Device: haDeviceConfig{
-			Identifiers: []string{"powerhouse_inverter_10"},
-			Name:        "Powerhouse Inverter 10",
-			Model:       "Multiplus II 48/5000/70",
+			Identifiers: []string{deviceIDInverter10},
+			Name:        deviceNameInverter10,
+			Model:       deviceModelMultiplus2,
 		},
 	}
 
@@ -564,9 +568,9 @@ func (s *MQTTSender) CreateMultiplusACPowerEntity() error {
 		DeviceClass:   "power",
 		StateClass:    stateClassMeasurement,
 		Device: haDeviceConfig{
-			Identifiers: []string{"powerhouse_inverter_10"},
-			Name:        "Powerhouse Inverter 10",
-			Model:       "Multiplus II 48/5000/70",
+			Identifiers: []string{deviceIDInverter10},
+			Name:        deviceNameInverter10,
+			Model:       deviceModelMultiplus2,
 		},
 	}
 
@@ -577,6 +581,57 @@ func (s *MQTTSender) CreateMultiplusACPowerEntity() error {
 
 	s.Send(MQTTMessage{
 		Topic:   "homeassistant/sensor/powerhouse_inverter_10_ac_power/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
+// CreateMultiplusDCCurrentEntity creates the Multiplus II DC current sensor entity via MQTT discovery.
+// Reads the inverter's own DC (battery-side) current from the Cerbo vebus topic — the Multiplus's
+// contribution to battery current, distinct from battery_3_dc_current (system total).
+func (s *MQTTSender) CreateMultiplusDCCurrentEntity() error {
+	type haDeviceConfig struct {
+		Identifiers []string `json:"identifiers"`
+		Name        string   `json:"name"`
+		Model       string   `json:"model,omitempty"`
+	}
+
+	type haSensorConfig struct {
+		Name          string         `json:"name"`
+		UniqueId      string         `json:"unique_id"`
+		StateTopic    string         `json:"state_topic"`
+		ValueTemplate string         `json:"value_template"`
+		UnitOfMeasure string         `json:"unit_of_measurement"`
+		DeviceClass   string         `json:"device_class"`
+		StateClass    string         `json:"state_class"`
+		Device        haDeviceConfig `json:"device"`
+	}
+
+	config := haSensorConfig{
+		Name:          "DC Current",
+		UniqueId:      "powerhouse_inverter_10_dc_current",
+		StateTopic:    TopicMultiplusDCCurrent,
+		ValueTemplate: valueTemplateJSONValue,
+		UnitOfMeasure: "A",
+		DeviceClass:   deviceClassCurrent,
+		StateClass:    stateClassMeasurement,
+		Device: haDeviceConfig{
+			Identifiers: []string{deviceIDInverter10},
+			Name:        deviceNameInverter10,
+			Model:       deviceModelMultiplus2,
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/sensor/powerhouse_inverter_10_dc_current/config",
 		Payload: payload,
 		QoS:     2,
 		Retain:  true,
@@ -657,7 +712,7 @@ func (s *MQTTSender) CreateBattery3CurrentEntity() error {
 		StateTopic:    TopicCerboBatteryCurrent,
 		ValueTemplate: valueTemplateJSONValue,
 		UnitOfMeasure: "A",
-		DeviceClass:   "current",
+		DeviceClass:   deviceClassCurrent,
 		StateClass:    stateClassMeasurement,
 		Device: haDeviceConfig{
 			Identifiers: []string{deviceIDBattery3},
@@ -704,7 +759,7 @@ func (s *MQTTSender) CreateBattery3CCLEntity() error {
 		StateTopic:    TopicCerboBatteryCCL,
 		ValueTemplate: valueTemplateJSONValue,
 		UnitOfMeasure: "A",
-		DeviceClass:   "current",
+		DeviceClass:   deviceClassCurrent,
 		StateClass:    stateClassMeasurement,
 		Device: haDeviceConfig{
 			Identifiers: []string{deviceIDBattery3},
