@@ -467,6 +467,46 @@ func TestCalculateDynamic_CCLChargeCap_HiddenWhenNotBinding(t *testing.T) {
 	assert.InDelta(t, dynamicMaxChargeW, debug.CCLChargeMaxW, 0.001) // not binding → hidden
 }
 
+func TestCalculateDynamic_CCLChargeCap_ShownWhenNear(t *testing.T) {
+	// CCL charge cap = 1855W. Charge intent only 1600W (set by house-side headroom), so the cap
+	// isn't binding — but the setpoint is within 25% of it (255W < 463W) → still surfaced.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 0
+	input.Solar1Power = 1600 // surplus charge intent + house-side charge headroom
+	input.Solar3BatteryCurrent = 20
+	input.Solar4BatteryCurrent = 20
+	input.Battery3CCL = 80
+	input.Battery3Voltage = 53
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, 1600.0, setpoint, 0.001)
+	assert.InDelta(t, 1855.0, debug.CCLChargeMaxW, 0.001) // within 25% → shown
+}
+
+func TestCalculateDynamic_Headroom_HiddenWhenAmple(t *testing.T) {
+	// Plenty of transfer headroom and not discharging near it → Headroom row hidden.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+
+	_, debug := calculateDynamicSetpoint(input, state)
+	assert.False(t, debug.HeadroomActive)
+}
+
+func TestCalculateDynamic_Headroom_ShownWhenDischargeNearCap(t *testing.T) {
+	// busLoad=4000 → headroom=500, capping discharge at 500W. Supply wants more → setpoint=-500,
+	// sitting on the headroom cap → Headroom row active.
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 3000
+	input.Solar1Power = 0
+	input.PowerhouseNetPower = 4000
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.InDelta(t, -500.0, setpoint, 0.001)
+	assert.True(t, debug.HeadroomActive)
+}
+
 // --- CVL overflow integration in calculateDynamicSetpoint ---
 
 func TestCalculateDynamic_CVLOverflow_SwitchesChargeToDischarge(t *testing.T) {

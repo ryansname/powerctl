@@ -35,10 +35,10 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 		mode = dynamic.Priority
 	}
 	rows = append(rows, [2]string{"**B3**", mode})
-	rows = append(rows,
-		[2]string{"Setpoint", fmt.Sprintf("%.0fW", dynamic.Setpoint)},
-		[2]string{"Headroom", fmt.Sprintf("%.0fW", dynamic.Headroom)},
-	)
+	rows = append(rows, [2]string{"Setpoint", fmt.Sprintf("%.0fW", dynamic.Setpoint)})
+	if dynamic.HeadroomActive {
+		rows = append(rows, [2]string{"Headroom", fmt.Sprintf("%.0fW", dynamic.Headroom)})
+	}
 	if dynamic.CarCharging != "" {
 		rows = append(rows, [2]string{"Car", dynamic.CarCharging})
 	}

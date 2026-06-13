@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"time"
 
 	"github.com/ryansname/powerctl/src/governor"
@@ -37,6 +38,10 @@ const (
 	// b3SolarEndThresholdKw is the (pre-multiplier Solcast) generation above which a forecast
 	// period still counts as "solar producing" when locating the end of the solar day.
 	b3SolarEndThresholdKw = 0.05
+
+	// constraintProximity is how close (as a fraction of its limit) the setpoint must be to a
+	// constraint for that constraint to be surfaced in the debug table.
+	constraintProximity = 0.25
 
 	// b3DischargeLimitZeroSOC / b3DischargeLimitFullSOC define the Battery 3 SOC window over
 	// which max discharge is tapered for low-SOC protection. At/below Zero, MaxDischarge is 0;
@@ -91,6 +96,7 @@ type DynamicDebugInfo struct {
 	Priority     string
 	Setpoint     float64
 	Headroom     float64
+	HeadroomActive bool // true when the transfer-limit headroom is near/binding the setpoint
 	Battery3SOC  float64
 	Safety       bool
 	CarCharging  string  // "" = disabled, "active", or gate reason (e.g. "gated: soc")
@@ -415,47 +421,50 @@ func calculateDynamicSetpoint(
 		MaxDischarge: dynamicMaxDischargeW,
 		MaxCharge:    max(0, input.Solar1Power+input.Inverter1to9Power),
 	}
-	combined := intent.add(sfty).add(tl).add(cclOF).add(cvlOF).add(socLimit).add(dischargeLimit).add(phChargeLimit)
-	setpoint := combined.Setpoint()
+	setpoint := intent.add(sfty).add(tl).add(cclOF).add(cvlOF).add(socLimit).add(dischargeLimit).add(phChargeLimit).Setpoint()
 
-	// Surface a constraint in the debug output only when it is the bound actually holding the
-	// setpoint: a MaxCharge cap binds when setpoint sits at the combined ceiling, a MinDischarge
-	// floor when it sits at the forced-discharge level, a MaxDischarge cap at the combined floor.
-	// Non-binding constraints are reported at their inactive sentinel so the table hides them.
-	hi := combined.MaxCharge
-	if combined.MinDischarge > 0 {
-		hi = min(hi, -combined.MinDischarge)
+	// Surface a constraint in the debug output only when the setpoint is within
+	// constraintProximity of its limit — i.e. it is binding or close to binding. Constraints
+	// further away are reported at their inactive sentinel so the table hides them.
+	nearCap := func(capW float64) bool { // MaxCharge ceiling (positive)
+		return capW < dynamicMaxChargeW && math.Abs(setpoint-capW) <= constraintProximity*capW
 	}
-	lo := combined.MinCharge - combined.MaxDischarge
-	chargeCapBinds := setpoint >= 0 && setpoint == hi
-	floorBinds := combined.MinDischarge > 0 && setpoint < 0 && setpoint == -combined.MinDischarge
-	dischargeCapBinds := setpoint < 0 && setpoint == lo
+	nearDischargeCap := func(maxDisW float64) bool { // MaxDischarge floor (negative side)
+		return maxDisW < dynamicMaxDischargeW && math.Abs(setpoint+maxDisW) <= constraintProximity*maxDisW
+	}
+	nearFloor := func(minDisW float64) bool { // MinDischarge forced discharge
+		return minDisW > 0 && math.Abs(setpoint+minDisW) <= constraintProximity*minDisW
+	}
 
 	cclOverflowW := 0.0
-	if floorBinds && cclOF.MinDischarge == combined.MinDischarge {
+	if nearFloor(cclOF.MinDischarge) {
 		cclOverflowW = cclOF.MinDischarge
 	}
 	cvlOverflowW := 0.0
-	if floorBinds && cvlOF.MinDischarge == combined.MinDischarge {
+	if nearFloor(cvlOF.MinDischarge) {
 		cvlOverflowW = cvlOF.MinDischarge
 	}
 	cclChargeMaxW := dynamicMaxChargeW
-	if chargeCapBinds && cclOF.MaxCharge == combined.MaxCharge {
+	if nearCap(cclOF.MaxCharge) {
 		cclChargeMaxW = cclOF.MaxCharge
 	}
 	b3ChargeMaxW := dynamicMaxChargeW
-	if chargeCapBinds && socLimit.MaxCharge == combined.MaxCharge {
+	if nearCap(socLimit.MaxCharge) {
 		b3ChargeMaxW = socLimit.MaxCharge
 	}
 	b3DischargeMaxW := dynamicMaxDischargeW
-	if dischargeCapBinds && dischargeLimit.MaxDischarge == combined.MaxDischarge {
+	if nearDischargeCap(dischargeLimit.MaxDischarge) {
 		b3DischargeMaxW = dischargeLimit.MaxDischarge
 	}
+	// Transfer-limit headroom counts as a constraint too: show it when discharge is near the
+	// headroom cap, or when over the limit (forcing charge).
+	headroomActive := nearDischargeCap(tl.MaxDischarge) || tl.MinCharge > 0
 
 	return setpoint, DynamicDebugInfo{
 		Priority:        priority,
 		Setpoint:        setpoint,
 		Headroom:        headroom,
+		HeadroomActive:  headroomActive,
 		Battery3SOC:     input.Battery3SOC,
 		Safety:          isSafety,
 		CarCharging:     carStatus,
