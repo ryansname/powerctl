@@ -449,6 +449,24 @@ func TestCalculateDynamic_CCLChargeCap_LimitsCharge(t *testing.T) {
 	assert.InDelta(t, 1855.0, debug.CCLChargeMaxW, 0.001)
 }
 
+func TestCalculateDynamic_CCLChargeCap_HiddenWhenNotBinding(t *testing.T) {
+	// CCL charge headroom caps MaxCharge at 1855W, but the house is discharging (supply intent),
+	// so the cap isn't holding the setpoint → debug reports the inactive sentinel (hidden).
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 2000
+	input.Solar1Power = 0
+	input.Solar3BatteryCurrent = 20
+	input.Solar4BatteryCurrent = 20
+	input.Battery3CCL = 80
+	input.Battery3Voltage = 53
+
+	setpoint, debug := calculateDynamicSetpoint(input, state)
+	assert.Equal(t, "Supply", debug.Priority)
+	assert.InDelta(t, -2000.0, setpoint, 0.001)
+	assert.InDelta(t, dynamicMaxChargeW, debug.CCLChargeMaxW, 0.001) // not binding → hidden
+}
+
 // --- CVL overflow integration in calculateDynamicSetpoint ---
 
 func TestCalculateDynamic_CVLOverflow_SwitchesChargeToDischarge(t *testing.T) {

@@ -415,7 +415,42 @@ func calculateDynamicSetpoint(
 		MaxDischarge: dynamicMaxDischargeW,
 		MaxCharge:    max(0, input.Solar1Power+input.Inverter1to9Power),
 	}
-	setpoint := intent.add(sfty).add(tl).add(cclOF).add(cvlOF).add(socLimit).add(dischargeLimit).add(phChargeLimit).Setpoint()
+	combined := intent.add(sfty).add(tl).add(cclOF).add(cvlOF).add(socLimit).add(dischargeLimit).add(phChargeLimit)
+	setpoint := combined.Setpoint()
+
+	// Surface a constraint in the debug output only when it is the bound actually holding the
+	// setpoint: a MaxCharge cap binds when setpoint sits at the combined ceiling, a MinDischarge
+	// floor when it sits at the forced-discharge level, a MaxDischarge cap at the combined floor.
+	// Non-binding constraints are reported at their inactive sentinel so the table hides them.
+	hi := combined.MaxCharge
+	if combined.MinDischarge > 0 {
+		hi = min(hi, -combined.MinDischarge)
+	}
+	lo := combined.MinCharge - combined.MaxDischarge
+	chargeCapBinds := setpoint >= 0 && setpoint == hi
+	floorBinds := combined.MinDischarge > 0 && setpoint < 0 && setpoint == -combined.MinDischarge
+	dischargeCapBinds := setpoint < 0 && setpoint == lo
+
+	cclOverflowW := 0.0
+	if floorBinds && cclOF.MinDischarge == combined.MinDischarge {
+		cclOverflowW = cclOF.MinDischarge
+	}
+	cvlOverflowW := 0.0
+	if floorBinds && cvlOF.MinDischarge == combined.MinDischarge {
+		cvlOverflowW = cvlOF.MinDischarge
+	}
+	cclChargeMaxW := dynamicMaxChargeW
+	if chargeCapBinds && cclOF.MaxCharge == combined.MaxCharge {
+		cclChargeMaxW = cclOF.MaxCharge
+	}
+	b3ChargeMaxW := dynamicMaxChargeW
+	if chargeCapBinds && socLimit.MaxCharge == combined.MaxCharge {
+		b3ChargeMaxW = socLimit.MaxCharge
+	}
+	b3DischargeMaxW := dynamicMaxDischargeW
+	if dischargeCapBinds && dischargeLimit.MaxDischarge == combined.MaxDischarge {
+		b3DischargeMaxW = dischargeLimit.MaxDischarge
+	}
 
 	return setpoint, DynamicDebugInfo{
 		Priority:        priority,
@@ -424,11 +459,11 @@ func calculateDynamicSetpoint(
 		Battery3SOC:     input.Battery3SOC,
 		Safety:          isSafety,
 		CarCharging:     carStatus,
-		CCLOverflowW:    cclOF.MinDischarge,
-		CCLChargeMaxW:   cclOF.MaxCharge,
-		CVLOverflowW:    cvlOF.MinDischarge,
-		B3ChargeMaxW:    socLimit.MaxCharge,
-		B3DischargeMaxW: dischargeLimit.MaxDischarge,
+		CCLOverflowW:    cclOverflowW,
+		CCLChargeMaxW:   cclChargeMaxW,
+		CVLOverflowW:    cvlOverflowW,
+		B3ChargeMaxW:    b3ChargeMaxW,
+		B3DischargeMaxW: b3DischargeMaxW,
 		PWOffsetW:       pwOffset,
 		// Projected EOD energy if only battery-side solar charges B3 (no powerhouse charging):
 		// current stored energy + smoothed forecast solar, in kWh.
