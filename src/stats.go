@@ -300,6 +300,10 @@ var preSeededTopics = []SensorMessage{
 	// Ryan's lights brightness is null (statestream may not publish) while the
 	// light is off; seed 0 so the lights worker's dim doesn't block startup.
 	{Topic: TopicLightRyansBrightness, Value: "0"},
+	// Car-charging B3 SOC cutoff: a powerctl-owned number whose retained value
+	// may not arrive after connect. 20% is a placeholder default; not ideal.
+	// TODO: revisit — likely remove or rework how this cutoff is sourced.
+	{Topic: TopicCarChargingBattery3CutoffState, Value: "20"},
 }
 
 // Topics that should be initialized to 0.0 if not received within timeout
