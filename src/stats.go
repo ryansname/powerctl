@@ -304,6 +304,11 @@ var preSeededTopics = []SensorMessage{
 	// may not arrive after connect. 20% is a placeholder default; not ideal.
 	// TODO: revisit — likely remove or rework how this cutoff is sourced.
 	{Topic: TopicCarChargingBattery3CutoffState, Value: "20"},
+	// Cerbo battery SOC may not arrive until the keepalive is acknowledged.
+	// Seed 50% rather than letting it default to 0: at 0 the controller treats
+	// B3 as empty and refuses to discharge, which strands it overnight when the
+	// SOC can't update. Real Cerbo values override this on connect.
+	{Topic: TopicCerboBatterySOC, Value: "50"},
 }
 
 // Topics that should be initialized to 0.0 if not received within timeout
@@ -315,8 +320,9 @@ var selfPublishedFloatTopics = []string{
 	"homeassistant/sensor/battery_3_state_of_charge/state",
 	// Solar 2 inverter goes unavailable at night; default to 0 so startup isn't blocked
 	topicSolar2ACPower,
-	// Cerbo GX SOC topic — may not arrive until Cerbo keepalive is acknowledged
-	TopicCerboBatterySOC,
+	// Cerbo GX SOC topic is pre-seeded to 50% instead (see preSeededTopics):
+	// a 0.0 default strands B3 overnight because the controller won't discharge
+	// what it thinks is an empty battery.
 }
 
 // String topics that should be initialized to a default if not received within timeout
