@@ -60,7 +60,11 @@ func (s *MQTTSender) Send(msg MQTTMessage) {
 	s.ch <- msg
 }
 
-// CallService sends a Home Assistant service call via the Node-RED proxy
+// TopicCallServiceProxy is the MQTT topic an HA automation listens on to make
+// service calls on powerctl's behalf (replaces the old nodered/proxy flow).
+const TopicCallServiceProxy = "powerctl/ha/call_service"
+
+// CallService sends a Home Assistant service call via the MQTT call_service proxy
 func (s *MQTTSender) CallService(domain, service, entityID string, data map[string]any) {
 	payload := map[string]any{
 		"domain":  domain,
@@ -75,7 +79,7 @@ func (s *MQTTSender) CallService(domain, service, entityID string, data map[stri
 	payloadBytes, _ := json.Marshal(payload)
 
 	s.ch <- MQTTMessage{
-		Topic:   "nodered/proxy/call_service",
+		Topic:   TopicCallServiceProxy,
 		Payload: payloadBytes,
 		QoS:     1,
 		Retain:  false,
@@ -1127,7 +1131,7 @@ func mqttSenderWorker(
 
 			// Change detection: skip if payload unchanged and recently sent.
 			// Service calls and Victron read/write topics are commands that must always be forwarded.
-			if msg.Topic != "nodered/proxy/call_service" &&
+			if msg.Topic != TopicCallServiceProxy &&
 				!strings.HasPrefix(msg.Topic, "powerhouse_3/W/") &&
 				!strings.HasPrefix(msg.Topic, "powerhouse_3/R/") {
 				if last, ok := lastSent[msg.Topic]; ok {
