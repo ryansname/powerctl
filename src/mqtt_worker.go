@@ -42,7 +42,7 @@ func mqttWorker(
 
 	// Set up connection handler
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
-		log.Printf("Connected to MQTT broker at %s\n", broker)
+		log.Printf("Connected to MQTT broker at %s\n", broker) //nolint:gosec // broker host from operator-set env config, not untrusted input
 
 		// Send the new client to the sender worker
 		select {
@@ -88,7 +88,7 @@ func mqttWorker(
 	client := mqtt.NewClient(opts)
 
 	// Connect to broker
-	log.Printf("Connecting to MQTT broker at %s...\n", broker)
+	log.Printf("Connecting to MQTT broker at %s...\n", broker) //nolint:gosec // broker host from operator-set env config, not untrusted input
 	if token := client.Connect(); token.Wait() && token.Error() != nil {
 		log.Printf("Failed to connect to MQTT broker: %v\n", token.Error())
 		return
