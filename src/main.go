@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -216,6 +217,22 @@ func main() {
 	mqttClientID := os.Getenv("MQTT_CLIENT_ID")
 	if mqttClientID == "" {
 		mqttClientID = deviceIDPowerctl
+	}
+
+	// Get MQTT host from environment, default to "homeassistant.lan"
+	mqttHost := os.Getenv("MQTT_HOST")
+	if mqttHost == "" {
+		mqttHost = "homeassistant.lan"
+	}
+
+	// Get MQTT port from environment, default to 1883
+	mqttPort := 1883
+	if portStr := os.Getenv("MQTT_PORT"); portStr != "" {
+		p, err := strconv.Atoi(portStr)
+		if err != nil {
+			log.Fatalf("MQTT_PORT must be a valid integer: %v", err)
+		}
+		mqttPort = p
 	}
 
 	// Create context for lifecycle management
@@ -766,7 +783,7 @@ func main() {
 
 	// Launch MQTT worker
 	SafeGo(ctx, cancel, "mqtt-worker", func(ctx context.Context) {
-		mqttWorker(ctx, "homeassistant.lan", []TopicRoute{
+		mqttWorker(ctx, mqttHost, mqttPort, []TopicRoute{
 			{Topics: haTopics, Channel: msgChan},
 			{Topics: []string{TopicSleepRyanPress}, Channel: sleepRyanChan},
 		}, mqttUsername, mqttPassword, mqttClientID, mqttClientChan)

@@ -21,13 +21,14 @@ type TopicRoute struct {
 func mqttWorker(
 	ctx context.Context,
 	broker string,
+	port int,
 	routes []TopicRoute,
 	username, password, clientID string,
 	clientChan chan<- mqtt.Client,
 ) {
 	// Connect to MQTT broker
 	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tcp://%s:1883", broker))
+	opts.AddBroker(fmt.Sprintf("tcp://%s:%d", broker, port))
 	opts.SetClientID(clientID)
 	opts.SetUsername(username)
 	opts.SetPassword(password)
