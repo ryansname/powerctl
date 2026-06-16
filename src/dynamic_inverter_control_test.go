@@ -12,7 +12,7 @@ func makeTestDynamicState() *DynamicInverterState {
 	return &DynamicInverterState{
 		houseLoadMax:        governor.NewRollingMinMaxSeconds(60),
 		houseSideGeneration: governor.NewRollingMinMaxSeconds(60),
-		cvlVoltageMax:       governor.NewRollingMinMaxSeconds(10),
+		cvlVoltageEMA:       governor.NewEMA(cvlVoltageEMATau),
 	}
 }
 
@@ -602,8 +602,8 @@ func TestCalculateDynamic_Headroom(t *testing.T) {
 func TestForecastSmoothing_RunningMinWithinDay(t *testing.T) {
 	s := &DynamicInverterState{}
 	day := time.Date(2026, 6, 13, 9, 0, 0, 0, time.Local)
-	assert.InDelta(t, 5000.0, s.updateForecastSmoothing(5000, day), 0.001)                // first → set
-	assert.InDelta(t, 3000.0, s.updateForecastSmoothing(3000, day.Add(time.Hour)), 0.001) // lower → tracks down
+	assert.InDelta(t, 5000.0, s.updateForecastSmoothing(5000, day), 0.001)                  // first → set
+	assert.InDelta(t, 3000.0, s.updateForecastSmoothing(3000, day.Add(time.Hour)), 0.001)   // lower → tracks down
 	assert.InDelta(t, 3000.0, s.updateForecastSmoothing(8000, day.Add(2*time.Hour)), 0.001) // higher → held
 }
 

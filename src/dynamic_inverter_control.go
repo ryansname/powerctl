@@ -70,6 +70,12 @@ const (
 	// point. Steady state settles at CVL - targetOffset.
 	cvlOverflowTargetOffsetV = 0.02
 
+	// cvlVoltageEMATau is the smoothing time constant for the Battery 3 voltage feeding
+	// the CVL overflow ramp. An EMA (not a rolling max) is used: the max rode the top of
+	// the measurement noise, biasing the ramp high and latching transient spikes. ~8s
+	// roughly halves discharge jitter while staying ~2-3s responsive.
+	cvlVoltageEMATau = 8 * time.Second
+
 	priorityCarCharge = "CarCharge"
 	priorityCharge    = "Charge"
 	prioritySafety    = "Safety"
@@ -84,7 +90,7 @@ type DynamicInverterConfig struct {
 type DynamicInverterState struct {
 	houseLoadMax        governor.RollingMinMax // 1-min max of house load
 	houseSideGeneration governor.RollingMinMax // 1-min tracking of solar_1 + inverter_1_9
-	cvlVoltageMax       governor.RollingMinMax // 10s rolling max of Battery 3 voltage; smooths CVL ramp input
+	cvlVoltageEMA       governor.EMA           // EMA-smoothed Battery 3 voltage; CVL ramp input
 
 	smoothedForecastWh float64   // running daily-min of remaining-solar forecast (Wh)
 	forecastResetDate  time.Time // calendar day the smoothing was last reset
@@ -92,21 +98,21 @@ type DynamicInverterState struct {
 
 // DynamicDebugInfo contains mode states for the dynamic controller debug output.
 type DynamicDebugInfo struct {
-	Auto         bool
-	Priority     string
-	Setpoint     float64
-	Headroom     float64
-	HeadroomActive bool // true when the transfer-limit headroom is near/binding the setpoint
-	Battery3SOC  float64
-	Safety       bool
-	CarCharging  string  // "" = disabled, "active", or gate reason (e.g. "gated: soc")
-	CCLOverflowW    float64 // watts the CCL-overflow constraint requires as minimum discharge
-	CCLChargeMaxW   float64 // max charge W the CCL headroom allows (dynamicMaxChargeW when unrestricted)
-	CVLOverflowW    float64 // watts the CVL-overflow constraint requires as minimum discharge
-	B3ChargeMaxW    float64 // max charge W from forecast charge limit (dynamicMaxChargeW when unrestricted)
+	Auto               bool
+	Priority           string
+	Setpoint           float64
+	Headroom           float64
+	HeadroomActive     bool // true when the transfer-limit headroom is near/binding the setpoint
+	Battery3SOC        float64
+	Safety             bool
+	CarCharging        string  // "" = disabled, "active", or gate reason (e.g. "gated: soc")
+	CCLOverflowW       float64 // watts the CCL-overflow constraint requires as minimum discharge
+	CCLChargeMaxW      float64 // max charge W the CCL headroom allows (dynamicMaxChargeW when unrestricted)
+	CVLOverflowW       float64 // watts the CVL-overflow constraint requires as minimum discharge
+	B3ChargeMaxW       float64 // max charge W from forecast charge limit (dynamicMaxChargeW when unrestricted)
 	B3ExpectedFinalKwh float64 // projected EOD B3 energy from current SOC + forecast battery-side solar (no powerhouse charging)
-	B3DischargeMaxW float64 // max discharge W from B3 low-SOC taper (dynamicMaxDischargeW when unrestricted)
-	PWOffsetW       float64 // extra discharge W added to intent from the Powerwall-low offset
+	B3DischargeMaxW    float64 // max discharge W from B3 low-SOC taper (dynamicMaxDischargeW when unrestricted)
+	PWOffsetW          float64 // extra discharge W added to intent from the Powerwall-low offset
 }
 
 // DynamicModeConstraint encodes a mode's desired setpoint and its allowed range.
@@ -216,6 +222,7 @@ func cvlOverflowConstraint(voltage, cvl, solar34W float64) DynamicModeConstraint
 //     the limit (the Multiplus may still charge the remaining headroom).
 //   - headroomA < 0: solar alone already exceeds the limit, so force MinDischarge of the excess
 //     (−headroomA × voltage) to relieve MPPT throttling.
+//
 // Returns no constraint when voltage is unavailable (0V at startup).
 func cclOverflowConstraint(solar3A, solar4A, ccl, voltage float64) DynamicModeConstraint {
 	if voltage <= 0 {
@@ -373,7 +380,7 @@ func calculateDynamicSetpoint(
 ) (float64, DynamicDebugInfo) {
 	state.houseLoadMax.Update(input.HouseLoad)
 	state.houseSideGeneration.Update(input.Solar1Power + input.Inverter1to9Power)
-	state.cvlVoltageMax.Update(input.Battery3Voltage)
+	state.cvlVoltageEMA.Update(input.Battery3Voltage)
 
 	busLoad := input.PowerhouseNetPower + input.MultiplusACPower
 	headroom := dynamicTransferLimit - busLoad
@@ -396,7 +403,7 @@ func calculateDynamicSetpoint(
 	tl := transferLimitConstraint(busLoad)
 	sfty := safetyConstraint(isSafety)
 	cclOF := cclOverflowConstraint(input.Solar3BatteryCurrent, input.Solar4BatteryCurrent, input.Battery3CCL, input.Battery3Voltage)
-	cvlOF := cvlOverflowConstraint(state.cvlVoltageMax.Max(), input.Battery3CVL, input.Solar34Power)
+	cvlOF := cvlOverflowConstraint(state.cvlVoltageEMA.Value(), input.Battery3CVL, input.Solar34Power)
 	dischargeLimit := b3SOCDischargeLimit(input.Battery3SOC)
 	if isSafety {
 		priority = prioritySafety
@@ -494,7 +501,7 @@ func dynamicInverterControl(
 	state := &DynamicInverterState{
 		houseLoadMax:        governor.NewRollingMinMaxSeconds(60),
 		houseSideGeneration: governor.NewRollingMinMaxSeconds(60),
-		cvlVoltageMax:       governor.NewRollingMinMaxSeconds(10),
+		cvlVoltageEMA:       governor.NewEMA(cvlVoltageEMATau),
 	}
 
 	var lastSetpoint float64
