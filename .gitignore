@@ -16,3 +16,6 @@ powerctl
 
 # Nix build output
 result
+
+# macOS
+.DS_Store
