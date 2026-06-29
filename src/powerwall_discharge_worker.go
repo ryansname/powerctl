@@ -496,14 +496,14 @@ func sendTOUTariff(sender *MQTTSender) {
 	})
 }
 
-// buildTOUTariff creates a tariff_content_v2 structure with ON_PEAK for ~90 minutes
+// buildTOUTariff creates a tariff_content_v2 structure with ON_PEAK for ~60 minutes
 // from the current time and SUPER_OFF_PEAK for the remaining hours.
-// Start rounds down to nearest 30min, end rounds to nearest 30min from now+90min.
+// Start rounds down to nearest 30min, end rounds to nearest 30min from now+60min.
 // Wrapping (toHour < fromHour) is valid and covers the full 24 hours.
 func buildTOUTariff(now time.Time) map[string]any {
 	totalMin := now.Hour()*60 + now.Minute()
 	startMin := totalMin / 30 * 30
-	endMin := (totalMin + 90 + 15) / 30 * 30
+	endMin := (totalMin + 60 + 15) / 30 * 30
 	onPeakStartHour := (startMin / 60) % 24
 	onPeakStartMin := startMin % 60
 	onPeakEndHour := (endMin / 60) % 24
@@ -557,7 +557,7 @@ func buildTOUTariff(now time.Time) map[string]any {
 
 	sellRates := map[string]any{
 		bandALL:       map[string]any{tariffKeyRates: map[string]any{bandALL: 0}},
-		seasonAllYear: map[string]any{tariffKeyRates: map[string]any{bandOnPeak: 0.30, bandSuperOffPeak: 0.07}},
+		seasonAllYear: map[string]any{tariffKeyRates: map[string]any{bandOnPeak: 3.0, bandSuperOffPeak: 0.07}},
 	}
 
 	return map[string]any{
