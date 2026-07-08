@@ -241,6 +241,49 @@ func TestCVLOverflow_Safety_NoForcedDischarge(t *testing.T) {
 	assert.InDelta(t, 0.0, got, 0.001)
 }
 
+// --- cvlCompensatedVoltage tests ---
+
+func TestCVLCompensatedVoltage_Charging_LowersVAdj(t *testing.T) {
+	// Charging (+1500W) lifts terminal voltage via IR; V_adj strips it back out.
+	got := cvlCompensatedVoltage(55.0, 1500)
+	assert.InDelta(t, 55.0-(1500.0/55.0)*cvlIRCompOhms, got, 1e-9)
+	assert.Less(t, got, 55.0)
+}
+
+func TestCVLCompensatedVoltage_Discharging_RaisesVAdj(t *testing.T) {
+	// Discharging (-1500W) sags terminal voltage; V_adj corrects it upward (symmetry).
+	got := cvlCompensatedVoltage(55.0, -1500)
+	assert.InDelta(t, 55.0+(1500.0/55.0)*cvlIRCompOhms, got, 1e-9)
+	assert.Greater(t, got, 55.0)
+}
+
+func TestCVLCompensatedVoltage_ZeroVolt_NoOp(t *testing.T) {
+	assert.InDelta(t, 0.0, cvlCompensatedVoltage(0, 1500), 1e-9)
+}
+
+// --- cvlOverflowConstraint MaxCharge taper tests ---
+
+func TestCVLOverflow_ChargeTaper_FullBelowBand(t *testing.T) {
+	// Below the taper band (rampStart - band): charging unrestricted.
+	c := cvlOverflowConstraint(55.2-cvlOverflowRampStartV-cvlChargeTaperBandV-0.01, 55.2, 500)
+	assert.InDelta(t, dynamicMaxChargeW, c.MaxCharge, 0.001)
+}
+
+func TestCVLOverflow_ChargeTaper_HalfMidBand(t *testing.T) {
+	// Halfway through the taper band: MaxCharge at half.
+	v := 55.2 - cvlOverflowRampStartV - cvlChargeTaperBandV/2
+	c := cvlOverflowConstraint(v, 55.2, 500)
+	assert.InDelta(t, 0.5*dynamicMaxChargeW, c.MaxCharge, 0.001)
+	assert.InDelta(t, 0.0, c.MinDischarge, 0.001) // no discharge floor yet
+}
+
+func TestCVLOverflow_ChargeTaper_ZeroAtRampStart(t *testing.T) {
+	// At the discharge ramp start, voluntary charging is fully tapered off.
+	c := cvlOverflowConstraint(55.2-cvlOverflowRampStartV, 55.2, 500)
+	assert.InDelta(t, 0.0, c.MaxCharge, 0.001)
+	assert.InDelta(t, 0.0, c.MinDischarge, 0.001)
+}
+
 // --- calculateDynamicSetpoint tests ---
 
 func TestCalculateDynamic_Safety_HighFreq_PreventsDischarge(t *testing.T) {

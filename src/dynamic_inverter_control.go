@@ -76,6 +76,21 @@ const (
 	// roughly halves discharge jitter while staying ~2-3s responsive.
 	cvlVoltageEMATau = 8 * time.Second
 
+	// cvlIRCompOhms strips the Multiplus's own IR contribution out of the measured terminal
+	// voltage before it feeds the CVL ramp: V_adj = V_term - I_mp*R, with I_mp ≈ Multiplus
+	// AC power / voltage (charging positive; inverter efficiency folds into R). Without this
+	// the ramp reacts to a voltage the Multiplus itself moves — charging lifts V_term over the
+	// ramp knee, the floor forces discharge, V_term collapses, the floor releases, and it
+	// limit-cycles. V_adj = V_oc + I_solar*R is independent of the setpoint, breaking the loop.
+	// ~1.5mΩ from observed ΔV/ΔI (~0.04V per ~27A swing).
+	cvlIRCompOhms = 0.0015
+
+	// cvlChargeTaperBandV is the width of the voltage band ending at the discharge ramp start
+	// (CVL - cvlOverflowRampStartV) over which MaxCharge is tapered from full to zero. It hands
+	// voluntary charging → 0 → discharge over continuously as V_adj rises, so the setpoint no
+	// longer steps ~1.5kW when the discharge floor first engages.
+	cvlChargeTaperBandV = 0.10
+
 	priorityCarCharge = "CarCharge"
 	priorityCharge    = "Charge"
 	prioritySafety    = "Safety"
@@ -90,7 +105,7 @@ type DynamicInverterConfig struct {
 type DynamicInverterState struct {
 	houseLoadMax        governor.RollingMinMax // 1-min max of house load
 	houseSideGeneration governor.RollingMinMax // 1-min tracking of solar_1 + inverter_1_9
-	cvlVoltageEMA       governor.EMA           // EMA-smoothed Battery 3 voltage; CVL ramp input
+	cvlVoltageEMA       governor.EMA           // EMA-smoothed IR-compensated Battery 3 voltage (V_adj); CVL ramp input
 
 	smoothedForecastWh float64   // running daily-min of remaining-solar forecast (Wh)
 	forecastResetDate  time.Time // calendar day the smoothing was last reset
@@ -195,11 +210,31 @@ func safetyConstraint(active bool) DynamicModeConstraint {
 	return DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
 }
 
-// cvlOverflowConstraint returns a MinDischarge floor of (fraction * solar34W). The fraction
-// ramps from 0 at (CVL - rampStartV) up to 1 at (CVL - targetOffsetV), then continues to
-// grow past 1 between (CVL - targetOffsetV) and CVL. The over-correction above the target
-// voltage drags voltage back down; equilibrium settles at exactly (CVL - targetOffsetV).
-// Returns no-op when CVL is unknown.
+// cvlCompensatedVoltage strips the Multiplus's own IR contribution out of the measured terminal
+// voltage so the CVL ramp reacts to battery state rather than to its own setpoint:
+//
+//	V_adj = V_term - I_mp*R,  I_mp ≈ multiplusACPower / V_term  (charging positive)
+//
+// V_adj = V_oc + I_solar*R is independent of the setpoint, which is what breaks the CVL
+// charge/discharge limit cycle. See cvlIRCompOhms. No-op at 0V.
+func cvlCompensatedVoltage(vTerm, multiplusACPower float64) float64 {
+	if vTerm <= 0 {
+		return vTerm
+	}
+	impA := multiplusACPower / vTerm
+	return vTerm - impA*cvlIRCompOhms
+}
+
+// cvlOverflowConstraint shapes charging and discharging around the CVL as a single continuous
+// curve in the (IR-compensated, smoothed) voltage:
+//   - Below the discharge ramp start (CVL - rampStartV), MaxCharge tapers from full to 0 over
+//     cvlChargeTaperBandV, so voluntary charging winds down before the discharge floor engages.
+//   - From (CVL - rampStartV) the MinDischarge floor is (fraction * solar34W): fraction ramps
+//     0→1 up to (CVL - targetOffsetV), then past 1 toward CVL. The over-correction drags voltage
+//     back down; equilibrium settles at exactly (CVL - targetOffsetV).
+//
+// The taper→floor handoff is continuous (charge → 0 → discharge, no step). Returns no-op when
+// CVL is unknown.
 func cvlOverflowConstraint(voltage, cvl, solar34W float64) DynamicModeConstraint {
 	base := DynamicModeConstraint{
 		MaxDischarge: dynamicMaxDischargeW,
@@ -208,8 +243,15 @@ func cvlOverflowConstraint(voltage, cvl, solar34W float64) DynamicModeConstraint
 	if cvl <= 0 {
 		return base
 	}
+	rampStart := cvl - cvlOverflowRampStartV
+
+	// Taper MaxCharge to zero over the band ending at rampStart for a smooth charge→discharge
+	// handoff. Full charge below the band; zero at/above rampStart (the discharge regime).
+	chargeFrac := clamp((rampStart-voltage)/cvlChargeTaperBandV, 0, 1)
+	base.MaxCharge = chargeFrac * dynamicMaxChargeW
+
 	rampWidth := cvlOverflowRampStartV - cvlOverflowTargetOffsetV
-	fraction := max(0, (voltage-(cvl-cvlOverflowRampStartV))/rampWidth)
+	fraction := max(0, (voltage-rampStart)/rampWidth)
 	base.MinDischarge = min(fraction*solar34W, dynamicMaxDischargeW)
 	return base
 }
@@ -380,7 +422,7 @@ func calculateDynamicSetpoint(
 ) (float64, DynamicDebugInfo) {
 	state.houseLoadMax.Update(input.HouseLoad)
 	state.houseSideGeneration.Update(input.Solar1Power + input.Inverter1to9Power)
-	state.cvlVoltageEMA.Update(input.Battery3Voltage)
+	state.cvlVoltageEMA.Update(cvlCompensatedVoltage(input.Battery3Voltage, input.MultiplusACPower))
 
 	busLoad := input.PowerhouseNetPower + input.MultiplusACPower
 	headroom := dynamicTransferLimit - busLoad
