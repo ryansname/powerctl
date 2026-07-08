@@ -300,6 +300,12 @@ var preSeededTopics = []SensorMessage{
 	// Ryan's lights brightness is null (statestream may not publish) while the
 	// light is off; seed 0 so the lights worker's dim doesn't block startup.
 	{Topic: TopicLightRyansBrightness, Value: "0"},
+	// Battery 3 available energy is powerctl-published (no retained value on cold
+	// start); seed 0 for instant init rather than a 20s selfPublished default.
+	{Topic: TopicBattery3Energy, Value: "0"},
+	// Primo 5.0 (Solar 2) AC power goes unavailable at night; seed 0 so it inits
+	// immediately instead of waiting out the selfPublished timeout.
+	{Topic: topicSolar2ACPower, Value: "0"},
 	// The powerctl-owned control entities (enabled/inverter/dynamic-auto/
 	// car-charging switches, PW2 discharge mode, car-charging B3 cutoff) are
 	// seeded from the TOML state file instead — see durableTopics / LoadStateSeeds.
@@ -315,12 +321,11 @@ var preSeededTopics = []SensorMessage{
 var selfPublishedFloatTopics = []string{
 	TopicBattery2Energy,
 	"homeassistant/sensor/battery_2_state_of_charge/state",
-	TopicBattery3Energy,
-	// battery_3_state_of_charge is pre-seeded to 50% instead (see preSeededTopics):
-	// a 0.0 default strands B3 because the controller won't discharge what it
-	// thinks is an empty battery.
-	// Solar 2 inverter goes unavailable at night; default to 0 so startup isn't blocked
-	topicSolar2ACPower,
+	// battery_3_available_energy and primo_5_0_ac_power (Solar 2) are pre-seeded to
+	// 0 instead for instant init (see preSeededTopics).
+	// battery_3_state_of_charge is pre-seeded to 50% (see preSeededTopics): a 0.0
+	// default strands B3 because the controller won't discharge what it thinks is
+	// an empty battery.
 }
 
 // String topics that should be initialized to a default if not received within timeout
