@@ -88,6 +88,8 @@ Goroutine-based with message passing via channels. All source code in `src/`.
 
 18. **pumpControlWorker** (src/pump_control_worker.go) - Header tank pump control: daily start check during the 11:00 hour only (<75%, or <15% in flush mode = days 1-14 of Jan/Apr/Jul/Oct), <5% start floor any time, ≥90% stop any time. Starts `timer.pump_time_remaining` (3h) — HA automations own pump on/off. Spec: `specs/water-tanks.md`
 
+19. **stateStoreWorker** (src/state_store.go) - Persists powerctl-owned control entities (the switches, PW2 discharge-mode select, car-charging cutoff number — `durableTopics`) to a TOML file (`<data-dir>/state.toml`) on change, and republishes their state (retain=false) so HA stays in sync. The file is the cross-restart source of truth, **not** MQTT retention. On every MQTT (re)connect and on the HA birth message (`homeassistant/status`=online) the `announce` closure re-runs `announceDiscovery` (src/discovery.go) and restores state from the file — covering powerctl, broker, and HA restarts (the birth trigger closes the HA-only-restart gap since the broker is separate). Restore publishes are retain=false and bypass the enabled-gate + change-detection in mqttSenderWorker (`isControlStateTopic`). Discovery configs stay retained (entity definition); only state moved off retention. A one-time retained clear purges stale retained state (e.g. car_charging's old OFF).
+
 ### Data Structures
 
 **DisplayData** (broadcast to all workers):
@@ -169,11 +171,12 @@ data.GetString(stateTopic)   // selects
 
 ### Configuration
 
-MQTT credentials in `.env` (see `.env.example`): `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_CLIENT_ID`
+MQTT credentials in `.env` (see `.env.example`): `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_CLIENT_ID`. Persistent-state dir via `--data-dir` or `POWERCTL_DATA_DIR` (default: cwd); holds `state.toml`.
 
 **Flags:**
 - `--force-enable`: Bypass enabled switches (local dev)
 - `--debug`: Interactive debug worker
+- `--data-dir`: Directory for `state.toml` persistent control state (default `$POWERCTL_DATA_DIR` or cwd)
 
 ## Code Style
 

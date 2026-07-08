@@ -300,10 +300,9 @@ var preSeededTopics = []SensorMessage{
 	// Ryan's lights brightness is null (statestream may not publish) while the
 	// light is off; seed 0 so the lights worker's dim doesn't block startup.
 	{Topic: TopicLightRyansBrightness, Value: "0"},
-	// Car-charging B3 SOC cutoff: a powerctl-owned number whose retained value
-	// may not arrive after connect. 20% is a placeholder default; not ideal.
-	// TODO: revisit — likely remove or rework how this cutoff is sourced.
-	{Topic: TopicCarChargingBattery3CutoffState, Value: "20"},
+	// The powerctl-owned control entities (enabled/inverter/dynamic-auto/
+	// car-charging switches, PW2 discharge mode, car-charging B3 cutoff) are
+	// seeded from the TOML state file instead — see durableTopics / LoadStateSeeds.
 	// Battery 3 SOC comes from the Cerbo via an HA entity (statestream may not
 	// republish promptly, and the Cerbo can go quiet overnight). Seed 50% rather
 	// than letting it default to 0: at 0 the controller treats B3 as empty and
@@ -326,17 +325,15 @@ var selfPublishedFloatTopics = []string{
 
 // String topics that should be initialized to a default if not received within timeout
 var selfPublishedStringTopics = map[string]string{
-	TopicMinerWorkmode:    WorkmodeOff,          // dump_load_enabler controls this; default to off
-	TopicPW2DischargeMode: PW2DischargeModeAuto, // arbiter delegates to automation by default
+	TopicMinerWorkmode: WorkmodeOff, // dump_load_enabler controls this; default to off
+	// TopicPW2DischargeMode is a powerctl-owned control entity, seeded from the
+	// TOML state file instead — see durableTopics.
 }
 
-// Boolean topics that should be initialized to true if not received within timeout
-var selfPublishedBoolTopics = []string{
-	TopicPowerctlEnabledState,
-	TopicPowerhouseInvertersEnabledState,
-	TopicExpectingPowerCutsState,
-	TopicDynamicAutoState,
-}
+// Boolean topics that should be initialized to true if not received within timeout.
+// The powerctl-owned switches (enabled/inverter/expecting-power-cuts/dynamic-auto)
+// are seeded from the TOML state file instead — see durableTopics / LoadStateSeeds.
+var selfPublishedBoolTopics = []string{}
 
 // statsWorker receives messages, maintains statistics, and sends to output channel
 func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan chan<- DisplayData, expectedTopics []string) {

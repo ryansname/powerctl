@@ -561,11 +561,13 @@ func dynamicInverterControl(
 
 	disableCarCharging := func(reason string) {
 		log.Printf("Car charging auto-disable: %s\n", reason)
+		// retain=false: durability of control state lives in the TOML state file +
+		// re-announce, not in a retained MQTT message (see state_store.go).
 		sender.Send(MQTTMessage{
 			Topic:   TopicCarChargingEnabledState,
 			Payload: []byte("OFF"),
 			QoS:     1,
-			Retain:  true,
+			Retain:  false,
 		})
 	}
 

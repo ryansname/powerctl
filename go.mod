@@ -3,6 +3,7 @@ module github.com/ryansname/powerctl
 go 1.25.4
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/chzyer/readline v1.5.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/joho/godotenv v1.5.1

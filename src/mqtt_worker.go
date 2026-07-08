@@ -25,6 +25,7 @@ func mqttWorker(
 	routes []TopicRoute,
 	username, password, clientID string,
 	clientChan chan<- mqtt.Client,
+	onConnect func(),
 ) {
 	// Connect to MQTT broker
 	opts := mqtt.NewClientOptions()
@@ -61,7 +62,9 @@ func mqttWorker(
 
 					// Skip invalid values from HA - sensor has dropped out
 					// TODO: Track how long sensors have been invalid and send notification
-					if value == "Undefined" || value == "unavailable" || value == "unknown" {
+					// An empty payload is a retained-message delete (e.g. the state
+					// store's one-time retained clear), not a real reading.
+					if value == "" || value == "Undefined" || value == "unavailable" || value == "unknown" {
 						return
 					}
 
@@ -82,6 +85,14 @@ func mqttWorker(
 					log.Printf("Subscribed to topic: %s\n", topic)
 				}
 			}
+		}
+
+		// Subscriptions are live: run the on-connect hook (re-announce discovery,
+		// restore durable state). Run in a goroutine so its publishes can't block
+		// the paho callback. The state restore loops back through our own
+		// subscriptions above.
+		if onConnect != nil {
+			go onConnect()
 		}
 	})
 

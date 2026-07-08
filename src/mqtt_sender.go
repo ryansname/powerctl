@@ -1122,16 +1122,19 @@ func mqttSenderWorker(
 				continue
 			}
 
-			// Check if message should be published
-			isEnabled := forceEnable || enabled || isDiscoveryTopic(msg.Topic)
+			// Check if message should be published. Discovery configs and powerctl's
+			// own control-entity state (reporting, not device control) always go out.
+			isEnabled := forceEnable || enabled || isDiscoveryTopic(msg.Topic) || isControlStateTopic(msg.Topic)
 			if !isEnabled {
 				log.Printf("Powerctl disabled, dropping message to %s\n", msg.Topic)
 				continue
 			}
 
 			// Change detection: skip if payload unchanged and recently sent.
-			// Service calls and Victron read/write topics are commands that must always be forwarded.
+			// Service calls, Victron read/write topics, and control-state restores
+			// (which must reach HA on birth even when unchanged) always forward.
 			if msg.Topic != TopicCallServiceProxy &&
+				!isControlStateTopic(msg.Topic) &&
 				!strings.HasPrefix(msg.Topic, "powerhouse_3/W/") &&
 				!strings.HasPrefix(msg.Topic, "powerhouse_3/R/") {
 				if last, ok := lastSent[msg.Topic]; ok {

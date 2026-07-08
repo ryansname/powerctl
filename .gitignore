@@ -1,6 +1,10 @@
 # Environment variables
 .env
 
+# Persistent control state (written at runtime; see stateStoreWorker)
+state.toml
+state.toml.tmp
+
 # Claude Code settings
 .claude/
 

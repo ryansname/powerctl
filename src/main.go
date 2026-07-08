@@ -8,9 +8,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -188,6 +190,7 @@ func main() {
 	forceEnable := flag.Bool("force-enable", false, "Bypass powerctl_enabled switch")
 	debugMode := flag.Bool("debug", false, "Enable debug introspection worker")
 	multiplusOnly := flag.Bool("multiplus-only", false, "Drop all outgoing MQTT messages whose topic is not under powerhouse_3/")
+	dataDir := flag.String("data-dir", "", "Directory for persistent state (state.toml). Defaults to $POWERCTL_DATA_DIR, else the current directory.")
 	flag.Parse()
 
 	log.Println("Starting powerctl...")
@@ -204,6 +207,20 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Printf("Warning: Error loading .env file: %v\n", err)
 	}
+
+	// Resolve the persistent-state directory (flag > $POWERCTL_DATA_DIR > cwd).
+	resolvedDataDir := *dataDir
+	if resolvedDataDir == "" {
+		resolvedDataDir = os.Getenv("POWERCTL_DATA_DIR")
+	}
+	if resolvedDataDir == "" {
+		resolvedDataDir = "."
+	}
+	if err := os.MkdirAll(resolvedDataDir, 0o750); err != nil { //nolint:gosec // path from operator-set --data-dir/env, not untrusted input
+		log.Fatalf("Cannot create data dir %s: %v", resolvedDataDir, err) //nolint:gosec // operator-set path
+	}
+	stateFilePath := filepath.Join(resolvedDataDir, "state.toml")
+	log.Printf("Persistent state file: %s\n", stateFilePath) //nolint:gosec // operator-set path
 
 	// Get MQTT credentials from environment
 	mqttUsername := os.Getenv("MQTT_USERNAME")
@@ -389,169 +406,24 @@ func main() {
 	// Create MQTT sender for workers
 	mqttSender := NewMQTTSender(mqttOutgoingChan)
 
-	// Create Home Assistant battery entities
-	log.Println("Creating Home Assistant entities...")
-
-	for _, b := range batteries {
-		if b.CerboSOCTopic != "" {
-			err := mqttSender.CreateBatterySOCEntityFromCerbo(b.Name, b.CapacityKWh, b.Manufacturer, b.CerboSOCTopic)
-			if err != nil {
-				cancel()
-				log.Fatalf("Failed to create %s State of Charge entity: %v", b.Name, err)
+	// announce (re)publishes every HA discovery config and restores the durable
+	// control state from the TOML state file. It runs on each MQTT (re)connect
+	// (after the subscribe loop, so the retain=false state restore loops back to
+	// our own subscriptions) and on an HA birth message — covering powerctl,
+	// broker, and HA restarts. The one-time clear purges any stale retained state
+	// (e.g. car_charging's historical retained OFF) so nothing fights the file.
+	var clearRetainedOnce sync.Once
+	announce := func() {
+		clearRetainedOnce.Do(func() {
+			for _, m := range clearRetainedStateMessages() {
+				mqttSender.Send(m)
 			}
-		} else {
-			err := mqttSender.CreateBatteryEntity(
-				b.Name, b.CapacityKWh, b.Manufacturer,
-				"State of Charge", "battery", "%", "percentage", 1,
-			)
-			if err != nil {
-				cancel()
-				log.Fatalf("Failed to create %s State of Charge entity: %v", b.Name, err)
-			}
-		}
-
-		err := mqttSender.CreateBatteryEntity(
-			b.Name, b.CapacityKWh, b.Manufacturer,
-			"Available Energy", "energy", "Wh", "available_wh", 0,
-		)
-		if err != nil {
-			cancel()
-			log.Fatalf("Failed to create %s Available Energy entity: %v", b.Name, err)
+		})
+		announceDiscovery(mqttSender, batteries)
+		for _, m := range stateRestoreMessages(resolvedValues(LoadStateValues(stateFilePath))) {
+			mqttSender.Send(m)
 		}
 	}
-
-	// Create powerctl enabled switch
-	err := mqttSender.CreatePowerctlSwitch()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create powerctl switch: %v", err)
-	}
-
-	// Create powerhouse inverters enabled switch
-	err = mqttSender.CreatePowerhouseInvertersSwitch()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create powerhouse inverters switch: %v", err)
-	}
-
-	// Clean up any HA entities that have been renamed or retired.
-	mqttSender.DeleteOldEntities()
-
-	// Create PW2 discharge mode select (Auto / Force On / Force Off).
-	err = mqttSender.CreatePW2DischargeModeSelect()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create PW2 discharge mode select: %v", err)
-	}
-
-	// Create expecting power cuts switch
-	err = mqttSender.CreateExpectingPowerCutsSwitch()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create expecting power cuts switch: %v", err)
-	}
-
-	// Create inverter 10 (Multiplus) AC setpoint number entity
-	err = mqttSender.CreateInverter10ACSetpointEntity()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create inverter 10 AC setpoint entity: %v", err)
-	}
-
-	// Create the "Sleep Ryan" button (triggers the slow dim of Ryan's lights)
-	err = mqttSender.createButton(
-		"powerctl_sleep_ryan",
-		"Sleep Ryan",
-		"mdi:weather-night",
-		TopicSleepRyanPress,
-	)
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create sleep ryan button: %v", err)
-	}
-
-	// Create inverter 10 (Multiplus) AC power sensor entity
-	err = mqttSender.CreateMultiplusACPowerEntity()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create inverter 10 AC power entity: %v", err)
-	}
-
-	// Create inverter 10 (Multiplus) DC current sensor entity (Cerbo vebus DC current)
-	err = mqttSender.CreateMultiplusDCCurrentEntity()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create inverter 10 DC current entity: %v", err)
-	}
-
-	// Create Solar 3 & 4 MPPT mode sensor entities (Cerbo solarcharger topics)
-	err = mqttSender.CreateSolarMpptModeEntity("Solar 3", TopicSolarcharger279MppMode)
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create Solar 3 MPPT mode entity: %v", err)
-	}
-	err = mqttSender.CreateSolarMpptModeEntity("Solar 4", TopicSolarcharger278MppMode)
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create Solar 4 MPPT mode entity: %v", err)
-	}
-
-	// Create Battery 3 DC power sensor entity (Cerbo system battery power)
-	err = mqttSender.CreateBattery3DCPowerEntity()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create Battery 3 DC power entity: %v", err)
-	}
-
-	// Create Battery 3 DC current and CCL entities (Cerbo system battery current/limit)
-	err = mqttSender.CreateBattery3CurrentEntity()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create Battery 3 DC current entity: %v", err)
-	}
-	err = mqttSender.CreateBattery3CCLEntity()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create Battery 3 CCL entity: %v", err)
-	}
-	err = mqttSender.CreateBattery3CVLEntity()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create Battery 3 CVL entity: %v", err)
-	}
-
-	// Create dynamic auto switch (controls auto vs manual Multiplus setpoint)
-	err = mqttSender.CreateDynamicAutoSwitch()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create dynamic auto switch: %v", err)
-	}
-
-	// Create car charging switch and Battery 3 SOC cutoff number entity
-	err = mqttSender.CreateCarChargingSwitch()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create car charging switch: %v", err)
-	}
-	err = mqttSender.CreateCarChargingBattery3CutoffEntity()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create car charging cutoff entity: %v", err)
-	}
-
-	// Create water tank fill sensors and flush mode binary sensor
-	err = mqttSender.CreateWaterTankEntities()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create water tank entities: %v", err)
-	}
-	err = mqttSender.CreateTankFlushModeBinarySensor()
-	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create tank flush mode binary sensor: %v", err)
-	}
-
-	log.Println("Home Assistant entities created")
 
 	// Launch sankey config worker (generates and publishes sankey configurations)
 	SafeGo(ctx, cancel, "sankey-worker", func(ctx context.Context) {
@@ -573,9 +445,14 @@ func main() {
 	})
 	log.Println("Stats worker started")
 
-	// Pre-seed topics (see preSeededTopics in stats.go) so statsWorker doesn't
-	// block on first startup. Real broker values override these on connection.
+	// Seed the durable control state from the TOML state file (fallbacks apply on
+	// first run), then the ephemeral pre-seeds (see preSeededTopics in stats.go),
+	// so statsWorker doesn't block on first startup. The on-connect restore
+	// republishes these anyway; this just populates our view immediately.
 	// Sent after the stats worker launch so the seeds can't outgrow the channel buffer.
+	for _, msg := range LoadStateSeeds(stateFilePath) {
+		msgChan <- msg
+	}
 	for _, msg := range preSeededTopics {
 		msgChan <- msg
 	}
@@ -763,6 +640,33 @@ func main() {
 		cerboKeepaliveWorker(ctx, mqttSender)
 	})
 
+	// Launch state store worker (persists durable control state to state.toml
+	// and republishes it to keep HA in sync).
+	stateStoreChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, stateStoreChan)
+	SafeGo(ctx, cancel, "state-store-worker", func(ctx context.Context) {
+		stateStoreWorker(ctx, stateStoreChan, stateFilePath, mqttSender)
+	})
+
+	// Watch the HA birth message: when HA (re)connects it publishes "online",
+	// which re-announces discovery + restores state so an HA-only restart doesn't
+	// leave the powerctl entities reset. Runs on its own MQTT route so it can't
+	// gate statsWorker (the birth message is not retained and may never arrive).
+	haStatusChan := make(chan SensorMessage, 10)
+	SafeGo(ctx, cancel, "ha-birth-worker", func(ctx context.Context) {
+		for {
+			select {
+			case msg := <-haStatusChan:
+				if strings.EqualFold(msg.Value, "online") {
+					log.Println("HA birth message received: re-announcing entities and restoring state")
+					announce()
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
+
 	// Add senderDataChan to downstream channels for mqttSenderWorker to receive enabled state
 	downstreamChans = append(downstreamChans, senderDataChan)
 
@@ -781,12 +685,15 @@ func main() {
 	})
 	log.Println("Broadcast worker started")
 
-	// Launch MQTT worker
+	// Launch MQTT worker. onConnect runs after the subscribe loop on every
+	// (re)connect: re-announce discovery and restore durable state (retain=false),
+	// which then loops back through our own subscriptions.
 	SafeGo(ctx, cancel, "mqtt-worker", func(ctx context.Context) {
 		mqttWorker(ctx, mqttHost, mqttPort, []TopicRoute{
 			{Topics: haTopics, Channel: msgChan},
 			{Topics: []string{TopicSleepRyanPress}, Channel: sleepRyanChan},
-		}, mqttUsername, mqttPassword, mqttClientID, mqttClientChan)
+			{Topics: []string{TopicHAStatus}, Channel: haStatusChan},
+		}, mqttUsername, mqttPassword, mqttClientID, mqttClientChan, announce)
 	})
 	log.Println("MQTT worker started")
 
