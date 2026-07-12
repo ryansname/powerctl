@@ -28,8 +28,8 @@ failsafe that bounds every pump run.
 - **PUMP-CHECK-1** — A daily start check fires at 11:00am local time (the first evaluation with valid tank data during the 11:00 hour), at most once per calendar day.
 - **PUMP-CHECK-2** — The daily check happens only at 11:00am: if the system isn't running (or tank data is invalid) for the whole 11:00 hour, that day's check is skipped — there is no catch-up later in the day and no persistence across restarts.
 - **PUMP-START-1** — At the daily check, outside flush mode: the pump starts when the header tank is below 75%.
-- **PUMP-START-2** — At the daily check, in flush mode: the pump starts only when the header tank is below 15% (deep drain).
-- **PUMP-START-3** — At any time of day: the pump starts when the header tank is below 5%.
+- **PUMP-START-2** — At the daily check, in flush mode: the pump starts only when the header tank is below 40% (deep drain).
+- **PUMP-START-3** — At any time of day: the pump starts when the header tank is below 15%.
 - **PUMP-STOP-1** — At any time of day: when the pump is on and the header tank is at/above 90%, the pump is turned off.
 - **PUMP-FLUSH-1** — Flush mode is purely date-derived: the first 14 days of every third month (January, April, July, October). It is exposed to HA as the `Tank Flush Mode` binary sensor.
 - **PUMP-GATE-1** — "Start" means starting `timer.pump_time_remaining` for 03:00:00, and only when `switch.pump` is off; HA automations own turning the pump on/off from there.
@@ -39,6 +39,6 @@ failsafe that bounds every pump run.
 ## Worked workflows
 
 - **Normal day** — Header at 68% at 11:00, not flush: daily check starts the timer; HA runs the pump; at 90% powerctl turns the pump off; the 3 h timer would have stopped it anyway. (PUMP-CHECK-1, PUMP-START-1, PUMP-STOP-1, PUMP-GATE-1)
-- **Flush deep-drain** — July 3rd, header at 60% at 11:00: no start (below-15% required). Days later within the fortnight, header hits 14% at 11:00: pump starts and refills to 90%. (PUMP-FLUSH-1, PUMP-START-2)
-- **Critical low during flush** — Header drops to 4% at 20:00 on July 3rd: pump starts immediately despite flush mode. (PUMP-START-3)
-- **Sensor outage** — ADC offline all morning; entities go unavailable; readings return at 13:00 — the day's check is skipped, and the below-5% floor remains the safety net. (TANK-VALID-1, PUMP-INVALID-1, PUMP-CHECK-2, PUMP-START-3)
+- **Flush deep-drain** — July 3rd, header at 60% at 11:00: no start (below-40% required). Days later within the fortnight, header hits 39% at 11:00: pump starts and refills to 90%. (PUMP-FLUSH-1, PUMP-START-2)
+- **Critical low during flush** — Header drops to 14% at 20:00 on July 3rd: pump starts immediately despite flush mode. (PUMP-START-3)
+- **Sensor outage** — ADC offline all morning; entities go unavailable; readings return at 13:00 — the day's check is skipped, and the below-15% floor remains the safety net. (TANK-VALID-1, PUMP-INVALID-1, PUMP-CHECK-2, PUMP-START-3)

@@ -69,11 +69,11 @@ func TestEvaluatePump_FlushModeUsesDeepDrainThreshold(t *testing.T) {
 
 	state := &PumpControlState{}
 	assert.Empty(t, EvaluatePump(state, makePumpInput(60, false), flushDay),
-		"60% is below 75 but flush requires below 15")
+		"60% is below 75 but flush requires below 40")
 
 	state = &PumpControlState{}
 	assert.Equal(t, []PumpAction{ActionStartPumpTimer},
-		EvaluatePump(state, makePumpInput(14.9, false), flushDay))
+		EvaluatePump(state, makePumpInput(39.9, false), flushDay))
 }
 
 // covers: PUMP-FLUSH-1 (fortnight boundary within a flush month)

@@ -19,8 +19,8 @@ const (
 
 	pumpStopHeaderPercent       = 90.0 // stop pumping at/above this level (any time)
 	pumpStartHeaderPercent      = 75.0 // daily-check start threshold (normal)
-	pumpStartFlushHeaderPercent = 15.0 // daily-check start threshold (flush mode)
-	pumpStartFloorHeaderPercent = 5.0  // start below this level (any time)
+	pumpStartFlushHeaderPercent = 40.0 // daily-check start threshold (flush mode)
+	pumpStartFloorHeaderPercent = 15.0 // start below this level (any time)
 
 	dailyPumpCheckHour = 11 // daily check fires only during the 11:00 hour, local time
 
