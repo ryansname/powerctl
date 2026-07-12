@@ -289,7 +289,7 @@ var preSeededTopics = []SensorMessage{
 	// republishes input_numbers on change, so they may never arrive after connect.
 	// TODO: fetch the live input_number values from HA at startup instead of hardcoding.
 	{Topic: TopicHeaderTankFullVoltage, Value: "4.76"},
-	{Topic: TopicHeaderTankEmptyVoltage, Value: "0.0"},
+	{Topic: TopicHeaderTankEmptyVoltage, Value: "0.33"},
 	{Topic: TopicStorageTankFullVoltage, Value: "4.86"},
 	{Topic: TopicStorageTankEmptyVoltage, Value: "0.2"},
 	// Header tank level sentinel: powerctl's own publishes aren't retained, and
