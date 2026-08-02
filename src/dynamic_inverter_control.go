@@ -26,7 +26,11 @@ const (
 
 	dynamicMaxDischargeW = 3000.0
 	dynamicMaxChargeW    = 3500.0
-	dynamicTransferLimit = 4500.0
+
+	// powerhouseTransferLimitW is the powerhouse cable's rating, shared by both
+	// controllers so they cannot drift apart — the baseline one sizes its coarse
+	// 255W inverter steps against it, the dynamic one trims the remainder.
+	powerhouseTransferLimitW = 4500.0
 
 	// dynamicExportLimit caps total sell-back at the grid meter, the whole-house
 	// analogue of the powerhouse cable's transfer limit above. Unlike that one it
@@ -295,7 +299,7 @@ func clamp(v, lo, hi float64) float64 { return max(lo, min(hi, v)) }
 // includes MP2's current output. Adding MultiplusACPower (negative when inverting)
 // strips MP2 back out so its own discharge doesn't reduce the headroom available to itself.
 func transferLimitConstraint(busLoadExcludingMP2 float64) DynamicModeConstraint {
-	headroom := dynamicTransferLimit - busLoadExcludingMP2
+	headroom := powerhouseTransferLimitW - busLoadExcludingMP2
 	if headroom < 0 {
 		return DynamicModeConstraint{
 			MinCharge:    min(-headroom, dynamicMaxChargeW),
@@ -592,7 +596,7 @@ func carChargingSetpoint(input DynamicInput) (float64, string) {
 	if !solarProducing && (input.CarBattery3Cutoff <= 0 || input.Battery3SOC < input.CarBattery3Cutoff) {
 		return 0, "gated: no production"
 	}
-	headroom := dynamicTransferLimit - (input.PowerhouseNetPower + input.MultiplusACPower)
+	headroom := powerhouseTransferLimitW - (input.PowerhouseNetPower + input.MultiplusACPower)
 	if headroom < carChargingMinHeadroom {
 		return 0, "gated: headroom"
 	}
@@ -650,7 +654,7 @@ func calculateDynamicSetpoint(
 	state.cvlVoltageEMA.Update(cvlCompensatedVoltage(input.Battery3Voltage, input.MultiplusACPower))
 
 	busLoad := input.PowerhouseNetPower + input.MultiplusACPower
-	headroom := dynamicTransferLimit - busLoad
+	headroom := powerhouseTransferLimitW - busLoad
 
 	// Safety: high frequency or grid-off with high Powerwall → no discharge.
 	// Charging is still allowed so excess generation is absorbed rather than wasted.

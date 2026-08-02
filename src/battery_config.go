@@ -158,7 +158,7 @@ func BuildBaselineInverterConfig(battery2 BatteryConfig) BaselineInverterConfig 
 		Input:                   input,
 		Battery2:                group,
 		WattsPerInverter:        255.0,
-		MaxTransferPower:        5000.0,
+		MaxTransferPower:        powerhouseTransferLimitW,
 		MaxBaselineWatts:        500.0,
 		OverflowSOCTurnOffStart: 98.5,
 		OverflowSOCTurnOffEnd:   95.0,
