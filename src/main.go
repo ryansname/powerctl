@@ -191,7 +191,16 @@ func main() {
 	debugMode := flag.Bool("debug", false, "Enable debug introspection worker")
 	multiplusOnly := flag.Bool("multiplus-only", false, "Drop all outgoing MQTT messages whose topic is not under powerhouse_3/")
 	dataDir := flag.String("data-dir", "", "Directory for persistent state (state.toml). Defaults to $POWERCTL_DATA_DIR, else the current directory.")
+	heartbeatDir := flag.String("heartbeat-dir", "", "Directory for the liveness heartbeat file. Defaults to $POWERCTL_HEARTBEAT_DIR, else the data dir. Should be ephemeral scratch, not durable storage.")
+	healthcheck := flag.Bool("healthcheck", false, "Exit 0 if powerctl has published to MQTT recently, non-zero otherwise, then exit. Used as the container liveness probe.")
 	flag.Parse()
+
+	// --healthcheck is a second, short-lived process run by the k8s exec probe
+	// inside the running container: it only reads the heartbeat file the main
+	// process writes, so it must return before any of the startup below.
+	if *healthcheck {
+		os.Exit(runHealthcheck(resolveHeartbeatDir(*heartbeatDir, *dataDir)))
+	}
 
 	log.Println("Starting powerctl...")
 
@@ -209,18 +218,22 @@ func main() {
 	}
 
 	// Resolve the persistent-state directory (flag > $POWERCTL_DATA_DIR > cwd).
-	resolvedDataDir := *dataDir
-	if resolvedDataDir == "" {
-		resolvedDataDir = os.Getenv("POWERCTL_DATA_DIR")
-	}
-	if resolvedDataDir == "" {
-		resolvedDataDir = "."
-	}
+	resolvedDataDir := resolveDir(*dataDir, "POWERCTL_DATA_DIR", ".")
 	if err := os.MkdirAll(resolvedDataDir, 0o750); err != nil { //nolint:gosec // path from operator-set --data-dir/env, not untrusted input
 		log.Fatalf("Cannot create data dir %s: %v", resolvedDataDir, err) //nolint:gosec // operator-set path
 	}
 	stateFilePath := filepath.Join(resolvedDataDir, "state.toml")
 	log.Printf("Persistent state file: %s\n", stateFilePath) //nolint:gosec // operator-set path
+
+	// Liveness heartbeat, written from the publish path (see heartbeat.go) and
+	// read back by --healthcheck. Defaults into the data dir so a bare run works,
+	// but deployments point it at ephemeral scratch.
+	resolvedHeartbeatDir := resolveHeartbeatDir(*heartbeatDir, *dataDir)
+	if err := os.MkdirAll(resolvedHeartbeatDir, 0o750); err != nil { //nolint:gosec // path from operator-set --heartbeat-dir/env, not untrusted input
+		log.Fatalf("Cannot create heartbeat dir %s: %v", resolvedHeartbeatDir, err) //nolint:gosec // operator-set path
+	}
+	heartbeat := NewHeartbeat(resolvedHeartbeatDir)
+	log.Printf("Liveness heartbeat file: %s\n", filepath.Join(resolvedHeartbeatDir, heartbeatFileName)) //nolint:gosec // operator-set path
 
 	// Get MQTT credentials from environment
 	mqttUsername := os.Getenv("MQTT_USERNAME")
@@ -397,9 +410,15 @@ func main() {
 	mqttClientChan := make(chan mqtt.Client, 1)         // Buffered to prevent blocking onConnect
 	senderDataChan := make(chan DisplayData, 10)        // For mqttSenderWorker to receive enabled state
 
+	// Launch the heartbeat writer: flushes the publish mark to disk on a timer
+	// so the exec liveness probe has something to read.
+	SafeGo(ctx, cancel, "heartbeat-writer", func(ctx context.Context) {
+		heartbeat.Run(ctx)
+	})
+
 	// Launch MQTT sender worker (receives client updates via channel)
 	SafeGo(ctx, cancel, "mqtt-sender-worker", func(ctx context.Context) {
-		mqttSenderWorker(ctx, mqttOutgoingChan, mqttClientChan, senderDataChan, *forceEnable, *multiplusOnly)
+		mqttSenderWorker(ctx, mqttOutgoingChan, mqttClientChan, senderDataChan, *forceEnable, *multiplusOnly, heartbeat)
 	})
 	log.Println("MQTT sender worker started")
 
