@@ -34,6 +34,10 @@ const (
 	// topicSitePower is whole-house flow at the grid meter: +ve importing, -ve
 	// exporting. Feeds the dynamic controller's export limit.
 	topicSitePower = "homeassistant/sensor/home_sweet_home_site_power/state"
+	// topicBattery3CCL is the Battery 3 BMS charge current limit. Both controllers
+	// read it: the dynamic one to size CCL overflow, the baseline one to tell
+	// whether the Multiplus can still absorb powerhouse solar.
+	topicBattery3CCL = "homeassistant/sensor/battery_3_charge_current_limit/state"
 )
 
 // Topics that report in kW or kWh and need conversion to W or Wh (multiply by 1000)

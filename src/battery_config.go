@@ -124,7 +124,7 @@ func buildInverterGroup(b BatteryConfig, availableEnergyTopic string) BatteryInv
 }
 
 // BuildBaselineInverterConfig creates configuration for the baseline inverter controller.
-func BuildBaselineInverterConfig(battery2, battery3 BatteryConfig) BaselineInverterConfig {
+func BuildBaselineInverterConfig(battery2 BatteryConfig) BaselineInverterConfig {
 	group := buildInverterGroup(battery2, TopicBattery2Energy)
 	deviceID2 := strings.ReplaceAll(strings.ToLower(battery2.Name), " ", "_")
 
@@ -149,7 +149,7 @@ func BuildBaselineInverterConfig(battery2, battery3 BatteryConfig) BaselineInver
 		ForecastRemainingTopic:   TopicSolcastForecastRemaining,
 		DetailedForecastTopic:    TopicSolcastDetailedForecast,
 		InverterStateTopics:      inverterStateTopics,
-		Battery3SOCTopic:         "homeassistant/sensor/" + strings.ReplaceAll(strings.ToLower(battery3.Name), " ", "_") + "_state_of_charge/state",
+		Battery3CCLTopic:         topicBattery3CCL,
 		PowerwallSOCTopic:        "homeassistant/sensor/home_sweet_home_charge/state",
 		ExpectingPowerCutsTopic:  TopicExpectingPowerCutsState,
 	}
@@ -210,7 +210,7 @@ func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverte
 			CarBattery3CutoffTopic:    TopicCarChargingBattery3CutoffState,
 			Solar34PowerTopics:        battery3.InflowPowerTopics,
 			Battery3DCCurrentTopic:    "homeassistant/sensor/battery_3_dc_current/state",
-			Battery3CCLTopic:          "homeassistant/sensor/battery_3_charge_current_limit/state",
+			Battery3CCLTopic:          topicBattery3CCL,
 			Battery3CVLTopic:          "homeassistant/sensor/battery_3_charge_voltage_limit/state",
 			Battery3VoltageTopic:      "homeassistant/sensor/solar_3_battery_voltage/state",
 			Solar3BatteryCurrentTopic: "homeassistant/sensor/solar_3_battery_current/state",

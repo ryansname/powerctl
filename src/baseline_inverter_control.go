@@ -7,6 +7,12 @@ import (
 	"github.com/ryansname/powerctl/src/governor"
 )
 
+// b3AbsorbingCCLAmps is the Battery 3 charge current limit below which the BMS is
+// judged to be tapering rather than accepting charge freely. Above it the
+// Multiplus has somewhere to put powerhouse solar and the transfer limit is not
+// needed; below it the cable has to carry the surplus and the limit applies.
+const b3AbsorbingCCLAmps = 100.0
+
 // BaselineInverterConfig holds configuration for the baseline inverter controller.
 type BaselineInverterConfig struct {
 	Input    BaselineInputConfig
@@ -138,8 +144,13 @@ func selectBaselineMode(
 	maxB2 := maxInvertersForSOC(input.Battery2SOC, state.socLimit2)
 	selectedCount = min(selectedCount, maxB2)
 
-	// Powerhouse transfer limit — skipped when Battery 3 SOC < 94% so the Multiplus can absorb
-	if input.Battery3SOC >= 94.0 {
+	// Powerhouse transfer limit — skipped while Battery 3 will still take charge,
+	// so the Multiplus can absorb the powerhouse solar instead of the cable having
+	// to carry it. The BMS charge current limit says that directly; SOC was only
+	// ever a proxy for it, and a poor one, since the taper point moves with cell
+	// balance and temperature. A missing reading parses as 0, which limits — the
+	// safe direction for a cable rating.
+	if input.Battery3CCL < b3AbsorbingCCLAmps {
 		limit := powerhouseTransferLimit(input.Solar1P90_15Min, config.MaxTransferPower)
 		limitCount := int(limit.Watts / config.WattsPerInverter)
 		if limitCount < 0 {

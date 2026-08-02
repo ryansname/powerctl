@@ -16,7 +16,7 @@ type BaselineInputConfig struct {
 	ForecastRemainingTopic   string
 	DetailedForecastTopic    string
 	InverterStateTopics      []string
-	Battery3SOCTopic         string
+	Battery3CCLTopic         string
 	PowerwallSOCTopic        string
 	ExpectingPowerCutsTopic  string
 }
@@ -37,7 +37,7 @@ type BaselineInput struct {
 	ForecastRemainingWh float64
 	DetailedForecast    governor.ForecastPeriods
 	InverterStates      []bool
-	Battery3SOC         float64
+	Battery3CCL         float64 // A, BMS charge current limit for Battery 3
 	PowerwallSOC        float64
 	ExpectingPowerCuts  bool
 }
@@ -56,7 +56,7 @@ func (c BaselineInputConfig) Topics() []string {
 		c.ACFrequencyTopic,
 		c.ForecastRemainingTopic,
 		c.DetailedForecastTopic,
-		c.Battery3SOCTopic,
+		c.Battery3CCLTopic,
 		c.PowerwallSOCTopic,
 		c.ExpectingPowerCutsTopic,
 	}
@@ -92,7 +92,7 @@ func ExtractBaselineInput(data DisplayData, config BaselineInputConfig) Baseline
 		ForecastRemainingWh: data.GetFloat(config.ForecastRemainingTopic).Current,
 		DetailedForecast:    forecast,
 		InverterStates:      states,
-		Battery3SOC:         data.GetFloat(config.Battery3SOCTopic).Current,
+		Battery3CCL:         data.GetFloat(config.Battery3CCLTopic).Current,
 		PowerwallSOC:        data.GetFloat(config.PowerwallSOCTopic).Current,
 		ExpectingPowerCuts:  expectingPowerCuts,
 	}

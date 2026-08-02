@@ -357,7 +357,7 @@ func main() {
 	haTopics = append(haTopics, PowerExcessTopics()...)
 
 	// Build inverter controller configs and add their topics
-	baselineConfig := BuildBaselineInverterConfig(battery2, battery3)
+	baselineConfig := BuildBaselineInverterConfig(battery2)
 	dynamicConfig := BuildDynamicInverterConfig(battery2, battery3)
 	haTopics = append(haTopics, baselineConfig.Input.Topics()...)
 	haTopics = append(haTopics, dynamicConfig.Input.Topics()...)

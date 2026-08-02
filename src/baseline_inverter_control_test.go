@@ -84,7 +84,7 @@ func makeBaselineInput() BaselineInput {
 		ForecastRemainingWh: 0,
 		DetailedForecast:    governor.ForecastPeriods{},
 		InverterStates:      []bool{false, false, false},
-		Battery3SOC:         90.0,
+		Battery3CCL:         150.0,
 		PowerwallSOC:        50.0,
 		ExpectingPowerCuts:  false,
 	}
@@ -205,7 +205,7 @@ func TestSelectBaselineMode_TransferLimitApplied(t *testing.T) {
 	input := makeBaselineInput()
 	input.Battery2ChargeState = floatChargingState
 	input.Battery2SOC = 100.0      // Overflow → 3 inverters desired
-	input.Battery3SOC = 100.0      // transfer limit applies
+	input.Battery3CCL = 50.0       // B3 tapering → transfer limit applies
 	input.Solar1P90_15Min = 4500.0 // limit = 5000-4500 = 500W → int(500/255) = 1
 
 	count, _ := selectBaselineMode(input, config, state)
@@ -218,7 +218,7 @@ func TestSelectBaselineMode_TransferLimitSkipped(t *testing.T) {
 	input := makeBaselineInput()
 	input.Battery2ChargeState = floatChargingState
 	input.Battery2SOC = 100.0      // Overflow → 3 inverters desired
-	input.Battery3SOC = 80.0       // <85% → transfer limit skipped
+	input.Battery3CCL = 150.0      // B3 still absorbing → transfer limit skipped
 	input.Solar1P90_15Min = 4500.0 // Would normally cap to 1, but skipped
 
 	count, _ := selectBaselineMode(input, config, state)

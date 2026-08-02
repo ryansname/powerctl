@@ -20,6 +20,7 @@ const (
 	testTopicB2Energy = "b2energy"
 	testTopicGrid     = "grid"
 	testTopicB3SOC    = "b3soc"
+	testTopicB3CCL    = "b3ccl"
 	testTopicSolar1   = "solar1"
 	testTopicSolar2   = "solar2"
 	testTopicLoad     = "load"
@@ -41,7 +42,7 @@ func makeBaselineDisplayData() (DisplayData, BaselineInputConfig) {
 		ForecastRemainingTopic:   "forecastwh",
 		DetailedForecastTopic:    "forecast",
 		InverterStateTopics:      []string{"inv1", "inv2", "inv3"},
-		Battery3SOCTopic:         testTopicB3SOC,
+		Battery3CCLTopic:         testTopicB3CCL,
 		PowerwallSOCTopic:        testTopicPWSOC,
 		ExpectingPowerCutsTopic:  "powercuts",
 	}
@@ -64,7 +65,7 @@ func makeBaselineDisplayData() (DisplayData, BaselineInputConfig) {
 			"inv1":            makeBoolTopic(true, "on"),
 			"inv2":            makeBoolTopic(false, "off"),
 			"inv3":            makeBoolTopic(true, "on"),
-			testTopicB3SOC:    makeFloatTopic(72.0),
+			testTopicB3CCL:    makeFloatTopic(120.0),
 			testTopicPWSOC:    makeFloatTopic(45.0),
 			"powercuts":       makeBoolTopic(false, "off"),
 		},
@@ -94,7 +95,7 @@ func TestExtractBaselineInput(t *testing.T) {
 	assert.InDelta(t, 12000.0, input.ForecastRemainingWh, 0.001)
 	assert.Empty(t, input.DetailedForecast)
 	assert.Equal(t, []bool{true, false, true}, input.InverterStates)
-	assert.InDelta(t, 72.0, input.Battery3SOC, 0.001)
+	assert.InDelta(t, 120.0, input.Battery3CCL, 0.001)
 	assert.InDelta(t, 45.0, input.PowerwallSOC, 0.001)
 	assert.False(t, input.ExpectingPowerCuts)
 }
