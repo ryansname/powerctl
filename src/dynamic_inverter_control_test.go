@@ -1015,6 +1015,32 @@ func newVoltageState() *DynamicInverterState {
 	return &DynamicInverterState{mp2VoltageEMA: governor.NewEMA(mp2VoltageEMATau)}
 }
 
+// The integrator steps by measured time, not by the keepalive tick: the
+// controller recalculates on every inbound reading, so assuming dynamicTick would
+// slew the ceiling several times faster than the rates allow.
+func TestVoltageCapDt_MeasuresElapsed(t *testing.T) {
+	state := newVoltageState()
+	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Nothing to measure against yet, so the first step advances by nothing.
+	assert.InDelta(t, 0.0, voltageCapDt(state, t0), 0.001)
+	assert.InDelta(t, 1.0, voltageCapDt(state, t0.Add(time.Second)), 0.001)
+}
+
+// A long gap (dropped inputs, a stalled process) must not cash in as one huge
+// step — that would move the ceiling further than the slew rate permits.
+func TestVoltageCapDt_ClampsStallAndBackwardsClock(t *testing.T) {
+	state := newVoltageState()
+	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	voltageCapDt(state, t0)
+
+	assert.InDelta(t, voltageCapMaxDtSeconds, voltageCapDt(state, t0.Add(10*time.Minute)), 0.001)
+
+	// A clock that jumps backwards must not integrate in reverse.
+	voltageCapDt(state, t0.Add(time.Hour))
+	assert.InDelta(t, 0.0, voltageCapDt(state, t0), 0.001)
+}
+
 // Over target, the ceiling walks down at the shed rate and no faster. The rate is
 // the whole stability argument, so it is asserted exactly.
 func TestVoltageCap_ShedsAtRateWhenOverTarget(t *testing.T) {

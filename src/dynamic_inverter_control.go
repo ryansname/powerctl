@@ -102,11 +102,12 @@ const (
 	// longer steps ~1.5kW when the discharge floor first engages.
 	cvlChargeTaperBandV = 0.10
 
-	// dynamicTickSeconds is the controller's cadence: the setpoint is recalculated
-	// and published to the Cerbo this often, and it is the dt the voltage
-	// integrator steps by. Declared in seconds and scaled up to a Duration, so a
-	// fractional tick stays exact — deriving it the other way round would be
-	// integer division on a Duration and would truncate.
+	// dynamicTickSeconds is the setpoint keepalive interval: the last setpoint is
+	// republished to the Cerbo this often even when nothing changed. It is not the
+	// compute cadence — the setpoint is recalculated on every inbound reading.
+	// Declared in seconds and scaled up to a Duration, so a fractional tick stays
+	// exact — deriving it the other way round would be integer division on a
+	// Duration and would truncate.
 	dynamicTickSeconds = 5.0
 	dynamicTick        = dynamicTickSeconds * time.Second
 
@@ -156,6 +157,13 @@ const (
 	voltageShedRateWps    = 15.0
 	voltageRecoverRateWps = 5.0
 
+	// voltageCapMaxDtSeconds bounds one integrator step. The controller runs off
+	// inbound readings, not a ticker, and the bridge feeding it drops updates when
+	// its channel backs up — so a gap can be arbitrarily long. Without a bound, one
+	// step after a stall would move the ceiling further than the slew rate is
+	// allowed to, which is the bang-bang behaviour the rates exist to prevent.
+	voltageCapMaxDtSeconds = 5.0
+
 	// mp2VoltageEMATau smooths the Multiplus reading. Its ~0.9875V quantisation
 	// dithers between adjacent levels, and the duty cycle of that dither encodes
 	// the true voltage, so averaging recovers well under the quantum: ~6 samples
@@ -192,6 +200,9 @@ type DynamicInverterState struct {
 	// discharge, not at a 0W ceiling that would block all export until the
 	// integrator recovered it.
 	voltageCapInit bool
+	// voltageCapAt is when the integrator last stepped, so the next step can use
+	// the real elapsed time.
+	voltageCapAt time.Time
 }
 
 // DynamicDebugInfo contains mode states for the dynamic controller debug output.
@@ -363,8 +374,23 @@ func estimateBusVoltage(state *DynamicInverterState, mp2V, shellyAvg float64) fl
 	return shellyAvg
 }
 
-// updateVoltageCap advances the discharge-ceiling integrator one tick and returns
-// the resulting constraint. dt is the controller's tick interval.
+// voltageCapDt returns the seconds elapsed since the integrator last stepped and
+// records now as the new step time. The controller recalculates on every inbound
+// reading (~1s, and skippable when the input bridge drops one) rather than on
+// dynamicTick, so the interval has to be measured rather than assumed. The first
+// step has no predecessor to measure against and so advances by nothing; the
+// clamp also absorbs a backwards clock.
+func voltageCapDt(state *DynamicInverterState, now time.Time) float64 {
+	prev := state.voltageCapAt
+	state.voltageCapAt = now
+	if prev.IsZero() {
+		return 0
+	}
+	return clamp(now.Sub(prev).Seconds(), 0, voltageCapMaxDtSeconds)
+}
+
+// updateVoltageCap advances the discharge-ceiling integrator by dt seconds and
+// returns the resulting constraint.
 //
 // Charging is never restricted: drawing power pulls voltage down, so it is the
 // remedy for over-voltage rather than a cause of it.
@@ -643,7 +669,7 @@ func calculateDynamicSetpoint(
 	// export limit above — that one bounds how much power leaves the site, this
 	// one bounds the voltage rise that exporting causes.
 	vEst := estimateBusVoltage(state, input.MultiplusACInVoltage, input.InverterVoltageAvg)
-	volt := updateVoltageCap(state, vEst, dynamicTickSeconds)
+	volt := updateVoltageCap(state, vEst, voltageCapDt(state, time.Now()))
 	sfty := safetyConstraint(isSafety)
 	cclOF := cclOverflowConstraint(input.Solar3BatteryCurrent, input.Solar4BatteryCurrent, input.Battery3CCL, input.Battery3Voltage)
 	cvlOF := cvlOverflowConstraint(state.cvlVoltageEMA.Value(), input.Battery3CVL, input.Solar34Power)

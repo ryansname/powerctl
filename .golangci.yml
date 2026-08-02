@@ -14,6 +14,14 @@ linters:
     - nilerr
     - unparam
 
+  exclusions:
+    rules:
+      # Repeated literals in tests are usually fixture data, not a missing
+      # constant — naming them makes the table harder to read, not easier.
+      - path: _test\.go
+        linters:
+          - goconst
+
 linters-settings:
   gocritic:
     enabled-tags:
