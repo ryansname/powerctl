@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	testSourcePeak   = "peak-power"
-	testReasonSOC92  = "SOC 92%"
+	testSourcePeak  = "peak-power"
+	testReasonSOC92 = "SOC 92%"
 )
 
 // covers: DISCHARGE-USER-3

@@ -1008,3 +1008,126 @@ func TestExportLimit_ChargeIntentAlwaysPassesThrough(t *testing.T) {
 	got := DynamicModeConstraint{Target: 1000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(exp).Setpoint()
 	assert.InDelta(t, 1000.0, got, 0.001)
 }
+
+// --- voltage discharge limit (integrator) tests ---
+
+func newVoltageState() *DynamicInverterState {
+	return &DynamicInverterState{mp2VoltageEMA: governor.NewEMA(mp2VoltageEMATau)}
+}
+
+// Over target, the ceiling walks down at the shed rate and no faster. The rate is
+// the whole stability argument, so it is asserted exactly.
+func TestVoltageCap_ShedsAtRateWhenOverTarget(t *testing.T) {
+	state := newVoltageState()
+	over := voltageTargetV + voltageDeadbandV + 1.0
+
+	c := updateVoltageCap(state, over, dynamicTickSeconds)
+	assert.InDelta(t, dynamicMaxDischargeW-voltageShedRateWps*dynamicTickSeconds, c.MaxDischarge, 0.001)
+
+	updateVoltageCap(state, over, dynamicTickSeconds)
+	assert.InDelta(t, dynamicMaxDischargeW-2*voltageShedRateWps*dynamicTickSeconds, state.voltageCapW, 0.001)
+}
+
+// Under target it recovers, and deliberately slower than it sheds.
+func TestVoltageCap_RecoversSlowerThanItSheds(t *testing.T) {
+	state := newVoltageState()
+	state.voltageCapInit = true
+	state.voltageCapW = 1000
+
+	updateVoltageCap(state, voltageTargetV-voltageDeadbandV-1.0, dynamicTickSeconds)
+	assert.InDelta(t, 1000+voltageRecoverRateWps*dynamicTickSeconds, state.voltageCapW, 0.001)
+	assert.Less(t, voltageRecoverRateWps, voltageShedRateWps)
+}
+
+// Inside the deadband nothing moves — this is what stops the Multiplus's ~1V
+// quantisation nudging the ceiling every single tick.
+func TestVoltageCap_DeadbandHolds(t *testing.T) {
+	state := newVoltageState()
+	state.voltageCapInit = true
+	state.voltageCapW = 1500
+
+	for _, v := range []float64{voltageTargetV, voltageTargetV + voltageDeadbandV*0.9, voltageTargetV - voltageDeadbandV*0.9} {
+		updateVoltageCap(state, v, dynamicTickSeconds)
+		assert.InDelta(t, 1500.0, state.voltageCapW, 0.001, "moved at %.2fV", v)
+	}
+}
+
+// Clamped at both ends; clamping is the anti-windup, so sustained over-voltage
+// must not drive the ceiling negative and bank curtailment it can't use.
+func TestVoltageCap_ClampsBothEnds(t *testing.T) {
+	state := newVoltageState()
+	for i := 0; i < 500; i++ {
+		updateVoltageCap(state, 260, dynamicTickSeconds)
+	}
+	assert.InDelta(t, 0.0, state.voltageCapW, 0.001)
+
+	for i := 0; i < 5000; i++ {
+		updateVoltageCap(state, 240, dynamicTickSeconds)
+	}
+	assert.InDelta(t, dynamicMaxDischargeW, state.voltageCapW, 0.001)
+}
+
+// A fresh state must start at full discharge, not at the zero value.
+func TestVoltageCap_StartsAtFullDischarge(t *testing.T) {
+	state := newVoltageState()
+	c := updateVoltageCap(state, 0, dynamicTickSeconds) // no reading
+	assert.InDelta(t, dynamicMaxDischargeW, c.MaxDischarge, 0.001)
+}
+
+// No reading holds the ceiling. Integrating up on absent data would silently
+// disable the limit, which is the failure mode that matters here.
+func TestVoltageCap_NoReadingHolds(t *testing.T) {
+	state := newVoltageState()
+	state.voltageCapInit = true
+	state.voltageCapW = 800
+
+	updateVoltageCap(state, 0, dynamicTickSeconds)
+	assert.InDelta(t, 800.0, state.voltageCapW, 0.001)
+}
+
+// Charging is never restricted: it pulls voltage down, so it is the remedy.
+func TestVoltageCap_NeverLimitsCharging(t *testing.T) {
+	state := newVoltageState()
+	for i := 0; i < 500; i++ {
+		updateVoltageCap(state, 260, dynamicTickSeconds)
+	}
+	c := updateVoltageCap(state, 260, dynamicTickSeconds)
+	assert.InDelta(t, dynamicMaxChargeW, c.MaxCharge, 0.001)
+
+	got := DynamicModeConstraint{Target: 1000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(c).Setpoint()
+	assert.InDelta(t, 1000.0, got, 0.001)
+}
+
+// The Shelly average calibrates the Multiplus's bias out of the estimate.
+func TestEstimateBusVoltage_ShellyCalibratesMP2Bias(t *testing.T) {
+	state := newVoltageState()
+	// MP2 reads 2V low against the accurate reference.
+	v := estimateBusVoltage(state, 250.0, 252.0)
+	assert.InDelta(t, 252.0, v, 0.001)
+	assert.InDelta(t, 2.0, state.voltageOffsetV, 0.001)
+}
+
+// Between bursts the fast source still drives the estimate, carrying the offset.
+func TestEstimateBusVoltage_FastSourceDrivesBetweenBursts(t *testing.T) {
+	state := newVoltageState()
+	estimateBusVoltage(state, 250.0, 252.0) // burst: learn +2.0 offset
+
+	// No Shelly reading; MP2 rises. EMA lags, so assert the direction and that
+	// the learned offset is still applied rather than an exact value.
+	v := estimateBusVoltage(state, 254.0, 0)
+	assert.Greater(t, v, 252.0)
+	assert.InDelta(t, 2.0, state.voltageOffsetV, 0.001)
+}
+
+// With neither source reporting the estimate is 0, which updateVoltageCap treats
+// as "unknown" and holds on.
+func TestEstimateBusVoltage_NoSources(t *testing.T) {
+	state := newVoltageState()
+	assert.InDelta(t, 0.0, estimateBusVoltage(state, 0, 0), 0.001)
+}
+
+// Falls back to the slow source alone when the Multiplus topic never arrives.
+func TestEstimateBusVoltage_ShellyOnlyFallback(t *testing.T) {
+	state := newVoltageState()
+	assert.InDelta(t, 251.5, estimateBusVoltage(state, 0, 251.5), 0.001)
+}

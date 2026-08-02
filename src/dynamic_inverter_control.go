@@ -102,6 +102,67 @@ const (
 	// longer steps ~1.5kW when the discharge floor first engages.
 	cvlChargeTaperBandV = 0.10
 
+	// dynamicTickSeconds is the controller's cadence: the setpoint is recalculated
+	// and published to the Cerbo this often, and it is the dt the voltage
+	// integrator steps by. Declared in seconds and scaled up to a Duration, so a
+	// fractional tick stays exact — deriving it the other way round would be
+	// integer division on a Duration and would truncate.
+	dynamicTickSeconds = 5.0
+	dynamicTick        = dynamicTickSeconds * time.Second
+
+	// --- voltage discharge limit ---------------------------------------------
+	//
+	// Exporting raises grid voltage, and the Multiplus is a strong actuator: a
+	// step test measured ~3.3 V/kW at the bottom of the range (0W→245.2V,
+	// 1kW→248.5V, 2kW→251.3V), so its full 3kW swings the bus ~10V. That rules
+	// out a proportional voltage→power ramp. Such a ramp would need
+	// dW/dV < 1/(dV/dW) ≈ 300 W/V to be stable, i.e. ~10V of band for 3kW —
+	// wider than the entire usable window between normal operation and the trip
+	// threshold. Anything narrower has loop gain > 1 and bang-bangs between full
+	// export and zero, which is worse than no control at all because it
+	// periodically drives voltage higher than leaving it alone would.
+	//
+	// So the limit is an integrator instead: a discharge ceiling that creeps down
+	// while voltage is over target and back up while it is under. Its stability
+	// does not depend on the plant gain at all — only on the slew rate — which
+	// matters because the measured gain is not even constant (3.3 V/kW over the
+	// first kW, 2.8 over the second, as other inverters begin self-curtailing).
+	// A proportional design would have to be tuned for the worst case and
+	// retuned whenever the fleet changes; this one does not.
+
+	// voltageTargetV is the bus voltage the limit holds. Chosen below the point
+	// where the rest of the fleet's over-voltage protection starts tripping —
+	// losing an inverter entirely is far worse than shaving export off this one.
+	//
+	// The target is not the ceiling: the integrator only sheds above
+	// target+deadband and the shed rate allows ~0.5V of overshoot, so the real
+	// worst case sits ~0.8V above this. 251 therefore peaks around 251.8 and
+	// keeps a ~1.2V buffer under the 253 limit, where 252 would reach ~252.8 and
+	// leave none. Costs ~330W of export against a 252 target.
+	voltageTargetV = 251.0
+
+	// voltageDeadbandV stops the integrator hunting on sensor quantisation: the
+	// Multiplus reading moves in ~0.9875V steps, so without a deadband the
+	// ceiling would be nudged every single tick. At the measured sensitivity this
+	// band is worth ~90W of ceiling, which is the settling accuracy.
+	voltageDeadbandV = 0.3
+
+	// voltageShedRateWps / voltageRecoverRateWps set how fast the ceiling moves.
+	// This is where stability lives: overshoot ≈ rate × measurement lag × dV/dW.
+	// With the smoothed Multiplus reading (~10s of lag) and the worst-case
+	// 3.3 V/kW, 15 W/s costs ~0.5V of overshoot. Recovery is deliberately slower
+	// than shedding — an asymmetry that is safe here precisely because both rates
+	// are bounded, unlike a proportional response.
+	voltageShedRateWps    = 15.0
+	voltageRecoverRateWps = 5.0
+
+	// mp2VoltageEMATau smooths the Multiplus reading. Its ~0.9875V quantisation
+	// dithers between adjacent levels, and the duty cycle of that dither encodes
+	// the true voltage, so averaging recovers well under the quantum: ~6 samples
+	// at its ~2s cadence gives roughly 0.2V. Deliberately not cvlVoltageEMATau,
+	// which is tuned for a much faster DC sensor.
+	mp2VoltageEMATau = 10 * time.Second
+
 	priorityCarCharge = "CarCharge"
 	priorityCharge    = "Charge"
 	prioritySafety    = "Safety"
@@ -120,6 +181,17 @@ type DynamicInverterState struct {
 
 	smoothedForecastWh float64   // running daily-min of remaining-solar forecast (Wh)
 	forecastResetDate  time.Time // calendar day the smoothing was last reset
+
+	mp2VoltageEMA  governor.EMA // EMA-smoothed Multiplus AC-in voltage; recovers sub-quantum resolution
+	voltageOffsetV float64      // InverterVoltageAvg - mp2VoltageEMA; corrects the Multiplus's calibration bias
+	// voltageCapW is the integrator: the current discharge ceiling in W. Persists
+	// across ticks — it is the controller's only memory of how much curtailment
+	// the bus currently needs. Starts at full discharge and integrates down.
+	voltageCapW float64
+	// voltageCapInit guards the zero value: a fresh state must start at full
+	// discharge, not at a 0W ceiling that would block all export until the
+	// integrator recovered it.
+	voltageCapInit bool
 }
 
 // DynamicDebugInfo contains mode states for the dynamic controller debug output.
@@ -243,6 +315,73 @@ func exportLimitConstraint(exportExcludingMP2 float64) DynamicModeConstraint {
 	}
 	return DynamicModeConstraint{
 		MaxDischarge: min(headroom, dynamicMaxDischargeW),
+		MaxCharge:    dynamicMaxChargeW,
+	}
+}
+
+// estimateBusVoltage fuses the two voltage sources into one estimate.
+//
+// They are complementary rather than redundant. The Multiplus reading is fast
+// (~2s) but coarse and biased; the Shelly average is precise and spatially
+// averaged but arrives in a single burst once a minute. For a closed loop the
+// latency matters more than the bias — the achievable slew rate is inversely
+// proportional to measurement lag, so a 60s-lagged input would force the
+// integrator roughly 6x slower — while the bias is fully correctable. So the
+// slow source calibrates and the fast source controls:
+//
+//	offset = shellyAvg - mp2EMA   (updated whenever a burst lands)
+//	vEst   = mp2EMA + offset      (fast, and unbiased between bursts)
+//
+// Returns 0 when neither source has reported, which callers treat as "unknown"
+// and must not act on.
+func estimateBusVoltage(state *DynamicInverterState, mp2V, shellyAvg float64) float64 {
+	// Only fold in a real reading; 0 means the topic has never arrived.
+	if mp2V > 0 {
+		state.mp2VoltageEMA.Update(mp2V)
+	}
+	smoothed := state.mp2VoltageEMA.Value()
+
+	// Re-derive the offset on each Shelly burst. Comparing against the smoothed
+	// Multiplus value (not the raw one) keeps its quantisation out of the offset.
+	if shellyAvg > 0 && smoothed > 0 {
+		state.voltageOffsetV = shellyAvg - smoothed
+	}
+
+	if smoothed > 0 {
+		return smoothed + state.voltageOffsetV
+	}
+	// No Multiplus reading yet: fall back to the slow source alone rather than
+	// running blind.
+	return shellyAvg
+}
+
+// updateVoltageCap advances the discharge-ceiling integrator one tick and returns
+// the resulting constraint. dt is the controller's tick interval.
+//
+// Charging is never restricted: drawing power pulls voltage down, so it is the
+// remedy for over-voltage rather than a cause of it.
+func updateVoltageCap(state *DynamicInverterState, vEst, dt float64) DynamicModeConstraint {
+	if !state.voltageCapInit {
+		state.voltageCapW = dynamicMaxDischargeW
+		state.voltageCapInit = true
+	}
+
+	// No voltage reading at all: hold the ceiling where it is rather than
+	// drifting. Integrating up on absent data would quietly disable the limit.
+	if vEst > 0 {
+		switch {
+		case vEst > voltageTargetV+voltageDeadbandV:
+			state.voltageCapW -= voltageShedRateWps * dt
+		case vEst < voltageTargetV-voltageDeadbandV:
+			state.voltageCapW += voltageRecoverRateWps * dt
+		}
+		// Clamping is the anti-windup: the ceiling *is* the output, so it can
+		// never accumulate beyond the range it will actually be used over.
+		state.voltageCapW = clamp(state.voltageCapW, 0, dynamicMaxDischargeW)
+	}
+
+	return DynamicModeConstraint{
+		MaxDischarge: state.voltageCapW,
 		MaxCharge:    dynamicMaxChargeW,
 	}
 }
@@ -492,6 +631,11 @@ func calculateDynamicSetpoint(
 	// Whole-house sell-back cap, independent of the powerhouse cable limit above:
 	// the cable can be well within rating while the site as a whole over-exports.
 	exp := exportLimitConstraint(input.MultiplusACPower - input.SitePower)
+	// Voltage ceiling: integrates against measured bus voltage. Distinct from the
+	// export limit above — that one bounds how much power leaves the site, this
+	// one bounds the voltage rise that exporting causes.
+	vEst := estimateBusVoltage(state, input.MultiplusACInVoltage, input.InverterVoltageAvg)
+	volt := updateVoltageCap(state, vEst, dynamicTickSeconds)
 	sfty := safetyConstraint(isSafety)
 	cclOF := cclOverflowConstraint(input.Solar3BatteryCurrent, input.Solar4BatteryCurrent, input.Battery3CCL, input.Battery3Voltage)
 	cvlOF := cvlOverflowConstraint(state.cvlVoltageEMA.Value(), input.Battery3CVL, input.Solar34Power)
@@ -519,7 +663,7 @@ func calculateDynamicSetpoint(
 		MaxDischarge: dynamicMaxDischargeW,
 		MaxCharge:    max(0, input.Solar1Power+input.Inverter1to9Power),
 	}
-	setpoint := intent.add(sfty).add(tl).add(exp).add(cclOF).add(cvlOF).add(socLimit).add(dischargeLimit).add(phChargeLimit).Setpoint()
+	setpoint := intent.add(sfty).add(tl).add(exp).add(volt).add(cclOF).add(cvlOF).add(socLimit).add(dischargeLimit).add(phChargeLimit).Setpoint()
 
 	// Surface a constraint in the debug output only when the setpoint is within
 	// constraintProximity of its limit — i.e. it is binding or close to binding. Constraints
@@ -593,6 +737,7 @@ func dynamicInverterControl(
 		houseLoadMax:        governor.NewRollingMinMaxSeconds(60),
 		houseSideGeneration: governor.NewRollingMinMaxSeconds(60),
 		cvlVoltageEMA:       governor.NewEMA(cvlVoltageEMATau),
+		mp2VoltageEMA:       governor.NewEMA(mp2VoltageEMATau),
 	}
 
 	var lastSetpoint float64
@@ -600,7 +745,7 @@ func dynamicInverterControl(
 	var carChargingActiveSeen bool
 	var prevCarChargingEnabled bool
 
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(dynamicTick)
 	defer ticker.Stop()
 
 	send := func(setpoint float64) {

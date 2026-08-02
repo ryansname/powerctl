@@ -642,6 +642,58 @@ func (s *MQTTSender) CreateMultiplusACPowerEntity() error {
 	return nil
 }
 
+// CreateMultiplusACInVoltageEntity creates the Multiplus II AC input (grid) voltage
+// sensor entity via MQTT discovery. powerctl consumes the voltage back off HA's
+// statestream rather than parsing the Cerbo's {"value":N} payload itself — same
+// round-trip as AC Power above, which keeps it a plain float on the control path.
+func (s *MQTTSender) CreateMultiplusACInVoltageEntity() error {
+	type haDeviceConfig struct {
+		Identifiers []string `json:"identifiers"`
+		Name        string   `json:"name"`
+		Model       string   `json:"model,omitempty"`
+	}
+
+	type haSensorConfig struct {
+		Name          string         `json:"name"`
+		UniqueId      string         `json:"unique_id"`
+		StateTopic    string         `json:"state_topic"`
+		ValueTemplate string         `json:"value_template"`
+		UnitOfMeasure string         `json:"unit_of_measurement"`
+		DeviceClass   string         `json:"device_class"`
+		StateClass    string         `json:"state_class"`
+		Device        haDeviceConfig `json:"device"`
+	}
+
+	config := haSensorConfig{
+		Name:          "AC In Voltage",
+		UniqueId:      "powerhouse_inverter_10_ac_in_voltage",
+		StateTopic:    TopicMultiplusACInVoltage,
+		ValueTemplate: valueTemplateJSONValue,
+		UnitOfMeasure: "V",
+		DeviceClass:   "voltage",
+		StateClass:    stateClassMeasurement,
+		Device: haDeviceConfig{
+			Identifiers: []string{deviceIDInverter10},
+			Name:        deviceNameInverter10,
+			Model:       deviceModelMultiplus2,
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/sensor/powerhouse_inverter_10_ac_in_voltage/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
 // CreateMultiplusDCCurrentEntity creates the Multiplus II DC current sensor entity via MQTT discovery.
 // Reads the inverter's own DC (battery-side) current from the Cerbo vebus topic — the Multiplus's
 // contribution to battery current, distinct from battery_3_dc_current (system total).
