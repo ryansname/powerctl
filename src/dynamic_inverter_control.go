@@ -28,6 +28,17 @@ const (
 	dynamicMaxChargeW    = 3500.0
 	dynamicTransferLimit = 4500.0
 
+	// dynamicExportLimit caps total sell-back at the grid meter, the whole-house
+	// analogue of the powerhouse cable's transfer limit above. Unlike that one it
+	// is not a conductor rating — it bounds what the whole site pushes back to the
+	// grid, so the Multiplus stops discharging (and is eventually forced to absorb)
+	// once the house as a whole is exporting this much.
+	//
+	// Starting deliberately above the nominal 5kW: this constraint is new, so the
+	// first pass is set to bind only on genuine over-export rather than to trim
+	// normal operation. Lower it toward 5000 once its behaviour is confirmed.
+	dynamicExportLimit = 5500.0
+
 	// carChargingMinHeadroom requires at least this much transfer-limit headroom to engage.
 	carChargingMinHeadroom = 1500.0
 
@@ -188,6 +199,41 @@ func clamp(v, lo, hi float64) float64 { return max(lo, min(hi, v)) }
 // strips MP2 back out so its own discharge doesn't reduce the headroom available to itself.
 func transferLimitConstraint(busLoadExcludingMP2 float64) DynamicModeConstraint {
 	headroom := dynamicTransferLimit - busLoadExcludingMP2
+	if headroom < 0 {
+		return DynamicModeConstraint{
+			MinCharge:    min(-headroom, dynamicMaxChargeW),
+			MaxDischarge: 0,
+			MaxCharge:    dynamicMaxChargeW,
+		}
+	}
+	return DynamicModeConstraint{
+		MaxDischarge: min(headroom, dynamicMaxDischargeW),
+		MaxCharge:    dynamicMaxChargeW,
+	}
+}
+
+// exportLimitConstraint returns the range constraint enforcing the whole-house
+// sell-back limit. Structurally identical to transferLimitConstraint: when over
+// the limit, MaxDischarge=0 and MinCharge>0 (must absorb the excess); when under,
+// MaxDischarge is capped to the remaining export headroom.
+//
+// exportExcludingMP2 = MultiplusACPower - SitePower, i.e. what the house would be
+// exporting (positive) if the Multiplus were idle.
+//
+// The sign juggling matters. SitePower is +ve importing / -ve exporting, so raw
+// export is -SitePower. SitePower already contains the Multiplus's own output
+// (MultiplusACPower, -ve when inverting), which must be stripped back out or the
+// inverter eats its own headroom: every watt it exports would appear as less
+// headroom, and it would throttle itself to a standstill well short of the limit.
+// Removing its contribution gives -(SitePower - MultiplusACPower), the expression
+// above.
+//
+// Deliberately NOT clamped at zero. When the house is importing, exportExcludingMP2
+// goes negative and the headroom correctly exceeds dynamicExportLimit — the
+// Multiplus may discharge that much before any of it reaches the grid. This mirrors
+// transferLimitConstraint, which likewise takes its bus load signed.
+func exportLimitConstraint(exportExcludingMP2 float64) DynamicModeConstraint {
+	headroom := dynamicExportLimit - exportExcludingMP2
 	if headroom < 0 {
 		return DynamicModeConstraint{
 			MinCharge:    min(-headroom, dynamicMaxChargeW),
@@ -443,6 +489,9 @@ func calculateDynamicSetpoint(
 	}
 
 	tl := transferLimitConstraint(busLoad)
+	// Whole-house sell-back cap, independent of the powerhouse cable limit above:
+	// the cable can be well within rating while the site as a whole over-exports.
+	exp := exportLimitConstraint(input.MultiplusACPower - input.SitePower)
 	sfty := safetyConstraint(isSafety)
 	cclOF := cclOverflowConstraint(input.Solar3BatteryCurrent, input.Solar4BatteryCurrent, input.Battery3CCL, input.Battery3Voltage)
 	cvlOF := cvlOverflowConstraint(state.cvlVoltageEMA.Value(), input.Battery3CVL, input.Solar34Power)
@@ -470,7 +519,7 @@ func calculateDynamicSetpoint(
 		MaxDischarge: dynamicMaxDischargeW,
 		MaxCharge:    max(0, input.Solar1Power+input.Inverter1to9Power),
 	}
-	setpoint := intent.add(sfty).add(tl).add(cclOF).add(cvlOF).add(socLimit).add(dischargeLimit).add(phChargeLimit).Setpoint()
+	setpoint := intent.add(sfty).add(tl).add(exp).add(cclOF).add(cvlOF).add(socLimit).add(dischargeLimit).add(phChargeLimit).Setpoint()
 
 	// Surface a constraint in the debug output only when the setpoint is within
 	// constraintProximity of its limit — i.e. it is binding or close to binding. Constraints

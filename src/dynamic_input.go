@@ -13,6 +13,7 @@ type DynamicInputConfig struct {
 	Solar2PowerTopic          string
 	Inverter1to9PowerTopics   []string
 	MultiplusACPowerTopic     string
+	SitePowerTopic            string
 	Battery3SOCTopic          string
 	GridStatusTopic           string
 	ACFrequencyTopic          string
@@ -64,6 +65,11 @@ type DynamicInput struct {
 	Solar3BatteryCurrent  float64 // A
 	Solar4BatteryCurrent  float64 // A
 	PowerhouseNetPower    float64 // W, actual flow across the powerhouse↔house cable
+	// SitePower is whole-house flow at the grid meter: POSITIVE = importing,
+	// NEGATIVE = exporting (the convention sankey/config.go already encodes, where
+	// "Selling Back" is this sensor multiplied by -1). Includes the Multiplus's own
+	// output; exportLimitConstraint strips that back out.
+	SitePower float64 // W, grid meter (+ve import, -ve export)
 	ForecastRemainingWh   float64 // Wh of solar forecast remaining today (statsWorker converts kWh→Wh)
 	DetailedForecast      governor.ForecastPeriods
 	Battery3CapacityWh    float64 // static config
@@ -132,6 +138,7 @@ func (c DynamicInputConfig) Topics() []string {
 		c.Solar1PowerTopic,
 		c.Solar2PowerTopic,
 		c.MultiplusACPowerTopic,
+		c.SitePowerTopic,
 		c.Battery3SOCTopic,
 		c.GridStatusTopic,
 		c.ACFrequencyTopic,
@@ -193,6 +200,8 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		Solar3BatteryCurrent:  data.GetFloat(config.Solar3BatteryCurrentTopic).Current,
 		Solar4BatteryCurrent:  data.GetFloat(config.Solar4BatteryCurrentTopic).Current,
 		PowerhouseNetPower:    data.GetFloat(config.PowerhouseNetPowerTopic).Current,
+		// Already in W: statsWorker converts this topic via kiloToBaseUnitTopics.
+		SitePower: data.GetFloat(config.SitePowerTopic).Current,
 		// Already in Wh: statsWorker converts this topic via kiloToBaseUnitTopics.
 		ForecastRemainingWh: data.GetFloat(config.ForecastRemainingTopic).Current,
 		DetailedForecast:    forecast,

@@ -180,6 +180,7 @@ func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverte
 			Solar2PowerTopic:          topicSolar2ACPower,
 			Inverter1to9PowerTopics:   battery2.OutflowPowerTopics,
 			MultiplusACPowerTopic:     "homeassistant/sensor/powerhouse_inverter_10_ac_power/state",
+			SitePowerTopic:            topicSitePower,
 			Battery3SOCTopic:          "homeassistant/sensor/" + strings.ReplaceAll(strings.ToLower(battery3.Name), " ", "_") + "_state_of_charge/state",
 			GridStatusTopic:           "homeassistant/binary_sensor/home_sweet_home_grid_status_2/state",
 			ACFrequencyTopic:          topicACFrequency,

@@ -31,6 +31,9 @@ const (
 	topicHouseLoadPower2 = "homeassistant/sensor/home_sweet_home_load_power_2/state"
 	topicACFrequency     = "homeassistant/sensor/lounge_ac_frequency/state"
 	topicSolar2ACPower   = "homeassistant/sensor/primo_5_0_ac_power/state"
+	// topicSitePower is whole-house flow at the grid meter: +ve importing, -ve
+	// exporting. Feeds the dynamic controller's export limit.
+	topicSitePower = "homeassistant/sensor/home_sweet_home_site_power/state"
 )
 
 // Topics that report in kW or kWh and need conversion to W or Wh (multiply by 1000)
@@ -38,8 +41,8 @@ const (
 var kiloToBaseUnitTopics = map[string]bool{
 	// Power sensors (kW → W)
 	"homeassistant/sensor/home_sweet_home_battery_power_2/state": true,
-	"homeassistant/sensor/home_sweet_home_site_power/state":      true,
 	topicHouseLoadPower2: true,
+	topicSitePower:       true,
 	// Energy sensors (kWh → Wh)
 	"homeassistant/sensor/home_sweet_home_tg118095000r1a_battery_remaining/state": true,
 	"homeassistant/sensor/solcast_pv_forecast_forecast_today/state":               true,

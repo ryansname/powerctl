@@ -943,3 +943,68 @@ func TestDynamicOverflowScenario(t *testing.T) {
 	setpoint, debug := calculateDynamicSetpoint(input, state)
 	t.Logf("%-10.0f  %-10.0f  %-12s", setpoint, debug.CCLOverflowW, debug.Priority)
 }
+
+// --- exportLimitConstraint tests ---
+//
+// Inputs are stated as the raw sensor pair (SitePower, MultiplusACPower) and
+// converted with the same expression the controller uses, so these tests would
+// catch a sign-convention regression in either direction.
+// Reminder: SitePower +ve = importing, -ve = exporting; MultiplusACPower -ve = inverting.
+
+func exportExcludingMP2(sitePower, multiplusACPower float64) float64 {
+	return multiplusACPower - sitePower
+}
+
+func TestExportLimit_Importing_FullDischargeAllowed(t *testing.T) {
+	// House importing 2kW with MP2 idle: nothing is reaching the grid, so the
+	// intent passes through untouched.
+	exp := exportLimitConstraint(exportExcludingMP2(2000, 0))
+	got := DynamicModeConstraint{Target: -1000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(exp).Setpoint()
+	assert.InDelta(t, -1000.0, got, 0.001)
+}
+
+func TestExportLimit_MP2OutputDoesNotEatOwnHeadroom(t *testing.T) {
+	// The regression this guards: house exporting 3kW, but 3kW of that IS the
+	// Multiplus. Excluding its own output the house exports 0, so the full
+	// discharge intent must still pass. Were MP2 not stripped out, headroom would
+	// read 2500 and the inverter would throttle itself for no reason.
+	exp := exportLimitConstraint(exportExcludingMP2(-3000, -3000))
+	got := DynamicModeConstraint{Target: -3000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(exp).Setpoint()
+	assert.InDelta(t, -3000.0, got, 0.001)
+}
+
+func TestExportLimit_DischargeCapAtHeadroom(t *testing.T) {
+	// House exporting 5kW with MP2 idle → headroom = 5500-5000 = 500W.
+	exp := exportLimitConstraint(exportExcludingMP2(-5000, 0))
+	got := DynamicModeConstraint{Target: -2000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(exp).Setpoint()
+	assert.InDelta(t, -500.0, got, 0.001)
+}
+
+func TestExportLimit_OverLimit_ForcesAbsorption(t *testing.T) {
+	// Exporting 6kW from solar/Powerwall alone → 500W over. MP2 must charge to
+	// soak it up even with no charge intent.
+	exp := exportLimitConstraint(exportExcludingMP2(-6000, 0))
+	got := DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(exp).Setpoint()
+	assert.InDelta(t, 500.0, got, 0.001)
+}
+
+func TestExportLimit_OverLimit_LargeExcess_CapsAtMaxCharge(t *testing.T) {
+	// Wildly over: forced absorption is still bounded by the charge rating.
+	exp := exportLimitConstraint(exportExcludingMP2(-12000, 0))
+	got := DynamicModeConstraint{MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(exp).Setpoint()
+	assert.InDelta(t, dynamicMaxChargeW, got, 0.001)
+}
+
+func TestExportLimit_ImportingAllowsMoreThanTheLimit(t *testing.T) {
+	// Importing 4kW: MP2 could discharge 9.5kW before export reached 5.5kW, so the
+	// constraint must not bind at all — the discharge rating is the only cap.
+	exp := exportLimitConstraint(exportExcludingMP2(4000, 0))
+	assert.InDelta(t, dynamicMaxDischargeW, exp.MaxDischarge, 0.001)
+}
+
+func TestExportLimit_ChargeIntentAlwaysPassesThrough(t *testing.T) {
+	// Charging reduces export, so it is never restricted by this constraint.
+	exp := exportLimitConstraint(exportExcludingMP2(-6000, 0))
+	got := DynamicModeConstraint{Target: 1000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(exp).Setpoint()
+	assert.InDelta(t, 1000.0, got, 0.001)
+}
