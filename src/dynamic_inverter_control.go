@@ -136,11 +136,17 @@ const (
 	// losing an inverter entirely is far worse than shaving export off this one.
 	//
 	// The target is not the ceiling: the integrator only sheds above
-	// target+deadband and the shed rate allows ~0.5V of overshoot, so the real
-	// worst case sits ~0.8V above this. 251 therefore peaks around 251.8 and
-	// keeps a ~1.2V buffer under the 253 limit, where 252 would reach ~252.8 and
-	// leave none. Costs ~330W of export against a 252 target.
-	voltageTargetV = 251.0
+	// target+deadband and the shed rate allows ~0.5V of overshoot, so the paper
+	// worst case sits ~0.8V above this — 252.8 against the 253 limit.
+	//
+	// That worst case has not been observed. Running at a 251 target the limiter
+	// engaged and held the bus at 251.1, i.e. it caught the rise within the
+	// deadband rather than anywhere near the predicted 251.8 peak, so the 0.8V
+	// figure is pessimistic. 252 buys ~330W of export against that. It does spend
+	// most of the paper margin, so the thing to watch is a peak above ~252.5:
+	// that would mean the overshoot estimate is real after all, and the target
+	// should come back down rather than the shed rate go up.
+	voltageTargetV = 252.0
 
 	// voltageDeadbandV stops the integrator hunting on sensor quantisation: the
 	// Multiplus reading moves in ~0.9875V steps, so without a deadband the
