@@ -211,6 +211,14 @@ type DynamicDebugInfo struct {
 	B3ExpectedFinalKwh float64 // projected EOD B3 energy from current SOC + forecast battery-side solar (no powerhouse charging)
 	B3DischargeMaxW    float64 // max discharge W from B3 low-SOC taper (dynamicMaxDischargeW when unrestricted)
 	PWOffsetW          float64 // extra discharge W added to intent from the Powerwall-low offset
+	ExportCapW         float64 // max discharge W the whole-house export limit allows (dynamicMaxDischargeW when unrestricted)
+	// BusVoltage is the fused voltage estimate driving VoltageCapW, and
+	// VoltageCapW is the integrator's current discharge ceiling. Unlike the other
+	// fields these are reported unconditionally: the ceiling is stateful, so
+	// hiding it while it happens not to bind would make it impossible to tell a
+	// limit that is settling from one that is hunting.
+	BusVoltage  float64 // V, estimate the voltage integrator is acting on (0 = no reading)
+	VoltageCapW float64 // W, current discharge ceiling from the voltage integrator
 }
 
 // DynamicModeConstraint encodes a mode's desired setpoint and its allowed range.
@@ -698,6 +706,13 @@ func calculateDynamicSetpoint(
 	if nearDischargeCap(dischargeLimit.MaxDischarge) {
 		b3DischargeMaxW = dischargeLimit.MaxDischarge
 	}
+	// Export limit: same near-or-binding treatment as the other caps. Its forced
+	// absorption (MinCharge, when the site is already over-exporting) surfaces via
+	// the same rule the transfer limit uses.
+	exportCapW := dynamicMaxDischargeW
+	if nearDischargeCap(exp.MaxDischarge) || exp.MinCharge > 0 {
+		exportCapW = exp.MaxDischarge
+	}
 	// Transfer-limit headroom counts as a constraint too: show it when discharge is near the
 	// headroom cap, or when over the limit (forcing charge).
 	headroomActive := nearDischargeCap(tl.MaxDischarge) || tl.MinCharge > 0
@@ -716,6 +731,9 @@ func calculateDynamicSetpoint(
 		B3ChargeMaxW:    b3ChargeMaxW,
 		B3DischargeMaxW: b3DischargeMaxW,
 		PWOffsetW:       pwOffset,
+		ExportCapW:      exportCapW,
+		BusVoltage:      vEst,
+		VoltageCapW:     state.voltageCapW,
 		// Projected EOD energy if only battery-side solar charges B3 (no powerhouse charging):
 		// current stored energy + smoothed forecast solar, in kWh.
 		B3ExpectedFinalKwh: (input.Battery3SOC/100*input.Battery3CapacityWh + input.SolarMultiplier*smoothedForecastWh) / 1000,

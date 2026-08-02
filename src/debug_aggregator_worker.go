@@ -61,6 +61,20 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 	if dynamic.PWOffsetW > 0 {
 		rows = append(rows, [2]string{"PW+", fmt.Sprintf("%.0fW", dynamic.PWOffsetW)})
 	}
+	if dynamic.ExportCapW < dynamicMaxDischargeW {
+		rows = append(rows, [2]string{"Export Limit", fmt.Sprintf("%.0fW", dynamic.ExportCapW)})
+	}
+	// Voltage rows appear only once the integrator has actually curtailed, i.e.
+	// the ceiling has come off its maximum. A ceiling pinned at max is not
+	// constraining anything, and the bus voltage is displayed better elsewhere,
+	// so neither earns a row until this limit is the one biting. Once it is, the
+	// pair moving together is what distinguishes settling from hunting.
+	if dynamic.VoltageCapW < dynamicMaxDischargeW {
+		if dynamic.BusVoltage > 0 {
+			rows = append(rows, [2]string{"Bus V", fmt.Sprintf("%.1fV", dynamic.BusVoltage)})
+		}
+		rows = append(rows, [2]string{"Volt Limit", fmt.Sprintf("%.0fW", dynamic.VoltageCapW)})
+	}
 
 	var sb strings.Builder
 	sb.WriteString("| B2 | Value |\n")

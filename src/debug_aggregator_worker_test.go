@@ -77,3 +77,74 @@ func TestFormatCombinedDebug_LowVoltage(t *testing.T) {
 		t.Error("expected voltage reading in output")
 	}
 }
+
+// The common case: bus healthy, ceiling at max, nothing constrained. Neither
+// voltage row should take up space — the voltage is displayed better elsewhere.
+func TestFormatCombinedDebug_VoltageRowsHiddenWhenNotCurtailing(t *testing.T) {
+	dynamic := DynamicDebugInfo{
+		Auto:        true,
+		Priority:    "Default Supply",
+		BusVoltage:  230.0, // ordinary voltage, nowhere near the limit
+		VoltageCapW: dynamicMaxDischargeW,
+		ExportCapW:  dynamicMaxDischargeW,
+	}
+
+	out := formatCombinedDebug(BaselineDebugInfo{}, dynamic)
+
+	if strings.Contains(out, "Bus V") || strings.Contains(out, "230.0V") {
+		t.Errorf("expected bus voltage hidden while not curtailing, got:\n%s", out)
+	}
+	if strings.Contains(out, "Volt Limit") {
+		t.Errorf("expected voltage ceiling hidden at max, got:\n%s", out)
+	}
+	if strings.Contains(out, "Export Limit") {
+		t.Errorf("export limit should be hidden when unrestricted, got:\n%s", out)
+	}
+}
+
+// Once the integrator curtails, both rows appear so the ceiling can be watched
+// settling or hunting against the voltage driving it.
+func TestFormatCombinedDebug_VoltageRowsShownWhenCurtailing(t *testing.T) {
+	dynamic := DynamicDebugInfo{
+		Auto:        true,
+		Priority:    "Default Supply",
+		BusVoltage:  251.4,
+		VoltageCapW: 1800,
+		ExportCapW:  dynamicMaxDischargeW,
+	}
+
+	out := formatCombinedDebug(BaselineDebugInfo{}, dynamic)
+
+	if !strings.Contains(out, "Bus V") || !strings.Contains(out, "251.4V") {
+		t.Errorf("expected bus voltage while curtailing, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Volt Limit") || !strings.Contains(out, "1800W") {
+		t.Errorf("expected voltage ceiling while curtailing, got:\n%s", out)
+	}
+}
+
+// If the sensor dies while curtailed the ceiling holds, so the limit still shows
+// — but an absent reading must not render as a plausible-looking 0.0V.
+func TestFormatCombinedDebug_CurtailingWithNoReadingHidesVoltage(t *testing.T) {
+	dynamic := DynamicDebugInfo{Auto: true, Priority: "Default Supply", VoltageCapW: 1200}
+
+	out := formatCombinedDebug(BaselineDebugInfo{}, dynamic)
+
+	if strings.Contains(out, "Bus V") || strings.Contains(out, "0.0V") {
+		t.Errorf("expected no bus voltage row without a reading, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Volt Limit") {
+		t.Errorf("expected voltage ceiling still shown, got:\n%s", out)
+	}
+}
+
+// The export limit shows once it actually restricts discharge.
+func TestFormatCombinedDebug_ExportLimitShownWhenBinding(t *testing.T) {
+	dynamic := DynamicDebugInfo{Auto: true, Priority: "Default Supply", ExportCapW: 500}
+
+	out := formatCombinedDebug(BaselineDebugInfo{}, dynamic)
+
+	if !strings.Contains(out, "Export Limit") || !strings.Contains(out, "500W") {
+		t.Errorf("expected export limit in output, got:\n%s", out)
+	}
+}
