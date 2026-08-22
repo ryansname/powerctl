@@ -395,6 +395,7 @@ func main() {
 	haTopics = append(haTopics, TankTopics()...)
 	haTopics = append(haTopics, PumpTopics()...)
 	haTopics = append(haTopics, LightsTopics()...)
+	haTopics = append(haTopics, LoungeACTopics()...)
 
 	// Sort and dedupe HA topics list
 	slices.Sort(haTopics)
@@ -641,6 +642,14 @@ func main() {
 
 	SafeGo(ctx, cancel, "pump-control-worker", func(ctx context.Context) {
 		pumpControlWorker(ctx, pumpControlChan, mqttSender)
+	})
+
+	// Launch lounge AC worker (IR re-send, WiFi-confirmed, WiFi fallback)
+	loungeACChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, loungeACChan)
+
+	SafeGo(ctx, cancel, "lounge-ac-worker", func(ctx context.Context) {
+		loungeACWorker(ctx, loungeACChan, mqttSender)
 	})
 
 	// Launch lights worker (outside auto-off, kitchen↔mum, garage mirror, sleep dim).

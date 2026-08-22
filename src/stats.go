@@ -321,6 +321,19 @@ var preSeededTopics = []SensorMessage{
 	// than letting it default to 0: at 0 the controller treats B3 as empty and
 	// refuses to discharge, stranding it. Real values override this on connect.
 	{Topic: "homeassistant/sensor/battery_3_state_of_charge/state", Value: "50"},
+	// The SmartIR lounge AC entity. Subscribing is the same as requiring (haTopics is
+	// statsWorker's expectedTopics) and statestream publishes on change without
+	// retaining, so a topic that stays quiet holds the startup gate shut and takes the
+	// inverters with it. SmartIR is optimistic with no feedback, so its state changes
+	// only when someone commands the AC — potentially days apart. These sentinels read
+	// as invalid, so the worker sees "no data" rather than a command to chase (see
+	// LoungeACSetting.Valid).
+	//
+	// The climate.lounge topics need no seed: the Daikin reports current_temperature
+	// constantly, statestream publishes state and attributes on the same event, and the
+	// tile worker already depends on its state topic arriving.
+	{Topic: TopicLoungeACIRState, Value: hvacModeUnknown},
+	{Topic: TopicLoungeACIRTemp, Value: "-1000"},
 }
 
 // Topics that should be initialized to 0.0 if not received within timeout
