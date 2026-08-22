@@ -1,16 +1,43 @@
 package main
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
-// A fresh Heartbeat is healthy: NewHeartbeat seeds the mark with the start time
-// so the process gets a full deadline of grace before the probe can fail on it.
-func TestHeartbeatFreshIsHealthy(t *testing.T) {
+// A process that has never broadcast is not healthy. Seeding the mark at
+// construction used to pass every fresh process for a full deadline whether or
+// not it ever worked, which hid a startup wedge indefinitely.
+func TestHeartbeatUnmarkedIsUnhealthy(t *testing.T) {
 	dir := t.TempDir()
 	hb := NewHeartbeat(dir)
+
+	if got := hb.last.Load(); got != 0 {
+		t.Errorf("new heartbeat pre-marked with %d, want 0", got)
+	}
+
+	// The writer leaves the file absent until the first Mark, and a missing file
+	// is exactly what the probe reads as "never finished starting".
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	hb.Run(ctx)
+
+	if _, err := os.Stat(hb.path); !os.IsNotExist(err) {
+		t.Errorf("unmarked heartbeat wrote a file (stat err = %v)", err)
+	}
+	if code := runHealthcheck(dir); code == 0 {
+		t.Error("runHealthcheck exited 0 for a process that never broadcast")
+	}
+}
+
+// Once a broadcast has been marked, the probe passes.
+func TestHeartbeatMarkedIsHealthy(t *testing.T) {
+	dir := t.TempDir()
+	hb := NewHeartbeat(dir)
+	hb.Mark()
 	if err := writeHeartbeatFile(hb.path, hb.last.Load()); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -24,11 +51,12 @@ func TestHeartbeatFreshIsHealthy(t *testing.T) {
 	}
 }
 
-// The whole point: once publishes stop for longer than the deadline, the probe
+// The whole point: once broadcasts stop for longer than the deadline, the probe
 // must fail so kubelet restarts the pod.
 func TestHeartbeatGoesStale(t *testing.T) {
 	dir := t.TempDir()
 	hb := NewHeartbeat(dir)
+	hb.Mark()
 	if err := writeHeartbeatFile(hb.path, hb.last.Load()); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -66,9 +94,8 @@ func TestHeartbeatMarkRefreshes(t *testing.T) {
 	}
 }
 
-// A missing file is unhealthy, not a pass. The writer creates it at startup, so
-// its absence means the process never got that far — failing open here would
-// make the probe useless during exactly the startup wedge it should catch.
+// A missing file is unhealthy, not a pass. Failing open here would make the
+// probe useless during exactly the startup wedge it should catch.
 func TestHeartbeatMissingFileIsUnhealthy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), heartbeatFileName)
 	if _, _, err := checkHeartbeat(path, time.Now()); err == nil {

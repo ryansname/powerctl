@@ -74,6 +74,8 @@ Goroutine-based with message passing via channels. All source code in `src/`.
 
 11. **mqttSenderWorker** (src/mqtt_sender.go) - Outgoing MQTT with 100-msg buffer, filters based on `powerctl_enabled` switch
 
+11b. **healthWorker** (src/health_worker.go) - Owns liveness: marks the heartbeat on each DisplayData broadcast, which happens only once every expected topic has arrived and the loop is turning. Read back by `--healthcheck` (exec liveness probe); unmarked until the first broadcast, so a pod that never becomes ready CrashLoops instead of reporting healthy. Do **not** move this signal back onto MQTT publishes — cerboKeepaliveWorker publishes on its own timer with no DisplayData dependency and kept the probe green through a total outage.
+
 12. **mqttInterceptorWorker** (src/mqtt_interceptor.go) - Filters inverter messages via `powerctl_inverter_enabled` switch
 
 13. **mqttWorker** (src/mqtt_worker.go) - Connects to MQTT broker, subscribes to topics, forwards to statsWorker

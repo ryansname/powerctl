@@ -411,7 +411,7 @@ func main() {
 	mqttClientChan := make(chan mqtt.Client, 1)         // Buffered to prevent blocking onConnect
 	senderDataChan := make(chan DisplayData, 10)        // For mqttSenderWorker to receive enabled state
 
-	// Launch the heartbeat writer: flushes the publish mark to disk on a timer
+	// Launch the heartbeat writer: flushes the broadcast mark to disk on a timer
 	// so the exec liveness probe has something to read.
 	SafeGo(ctx, cancel, "heartbeat-writer", func(ctx context.Context) {
 		heartbeat.Run(ctx)
@@ -419,7 +419,7 @@ func main() {
 
 	// Launch MQTT sender worker (receives client updates via channel)
 	SafeGo(ctx, cancel, "mqtt-sender-worker", func(ctx context.Context) {
-		mqttSenderWorker(ctx, mqttOutgoingChan, mqttClientChan, senderDataChan, *forceEnable, *multiplusOnly, heartbeat)
+		mqttSenderWorker(ctx, mqttOutgoingChan, mqttClientChan, senderDataChan, *forceEnable, *multiplusOnly)
 	})
 	log.Println("MQTT sender worker started")
 
@@ -642,6 +642,15 @@ func main() {
 
 	SafeGo(ctx, cancel, "pump-control-worker", func(ctx context.Context) {
 		pumpControlWorker(ctx, pumpControlChan, mqttSender)
+	})
+
+	// Launch health worker: marks the liveness heartbeat on each broadcast, which is
+	// the one event that happens only while powerctl is actually running.
+	healthChan := make(chan DisplayData, 10)
+	downstreamChans = append(downstreamChans, healthChan)
+
+	SafeGo(ctx, cancel, "health-worker", func(ctx context.Context) {
+		healthWorker(ctx, healthChan, heartbeat)
 	})
 
 	// Launch lounge AC worker (IR re-send, WiFi-confirmed, WiFi fallback)

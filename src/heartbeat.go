@@ -15,24 +15,33 @@ import (
 // Liveness heartbeat.
 //
 // powerctl listens on no port, so from the outside a healthy process and one
-// that is wedged — connected but deaf, or with a stage stuck — look identical.
-// The usual failure is an MQTT subscription that stops delivering: paho stays
-// "connected", nothing errors, and powerctl quietly stops controlling anything.
+// that is wedged look identical. Liveness is therefore defined as *the control
+// loop turning*, and the event that proves it is statsWorker's DisplayData
+// broadcast: it is gated on every expected topic having arrived, so it stops
+// while powerctl is still starting, stops if the loop wedges, and is unaffected
+// by whether powerctl_enabled happens to be on.
 //
-// So liveness is defined as *work observed recently*, not as a socket being
-// open, and the work we watch is outgoing publishes. That single signal is
-// enough: inverter-10 has to be fed continuously to keep running, so powerctl
-// publishes every few seconds in normal operation. Anything that wedges the
-// process — dead subscription starving the control loop, stuck worker, broker
-// gone — stops those publishes, whatever the cause. Watching the inbound side
-// separately would add a second thing to tune for no extra coverage.
+// It used to be defined as outgoing publishes, reasoning that inverter-10 must
+// be fed continuously so publishes prove the loop is turning. That was wrong.
+// cerboKeepaliveWorker publishes every 50s from its own ticker with no
+// DisplayData dependency — it has to, or the Cerbo stops reporting voltage — so
+// it refreshed the mark twice per deadline forever while every other worker sat
+// starved on an empty channel. One topic that never arrived left powerctl
+// reporting healthy indefinitely while controlling nothing. A signal produced as
+// a side effect of unrelated code cannot fail closed; an owned one can, which is
+// why healthWorker (health_worker.go) now does the marking.
 //
-// The publish path marks a timestamp in memory; a writer goroutine snapshots it
-// to heartbeatFileName every heartbeatWriteInterval, and a second process
-// (`powerctl --healthcheck`, run as the k8s exec liveness probe) reads the file
-// back and fails if the mark has gone stale. It is a separate process because
-// the from-scratch container image has no shell — there is no `test`/`stat` to
-// point a probe at, so the binary has to be able to check itself.
+// A writer goroutine snapshots the mark to heartbeatFileName every
+// heartbeatWriteInterval, and a second process (`powerctl --healthcheck`, run as
+// the k8s exec liveness probe) reads the file back and fails if the mark has
+// gone stale or was never written. It is a separate process because the
+// from-scratch container image has no shell — there is no `test`/`stat` to point
+// a probe at, so the binary has to be able to check itself.
+//
+// Nothing is stamped before the first broadcast, so a process that never becomes
+// ready never satisfies the probe and kubelet restarts it. That is deliberate:
+// the usual cause is a topic that will not arrive on its own, and a loud
+// CrashLoopBackOff is worth far more than a pod that quietly controls nothing.
 
 // heartbeatFileName is the snapshot the writer produces and --healthcheck reads.
 // It lives under the heartbeat dir (see main), which is expected to be
@@ -73,25 +82,26 @@ func resolveHeartbeatDir(heartbeatFlag, dataDirFlag string) string {
 		resolveDir(dataDirFlag, "POWERCTL_DATA_DIR", "."))
 }
 
-// Heartbeat records the last time powerctl published to the broker.
+// Heartbeat records the last time powerctl broadcast a DisplayData.
 type Heartbeat struct {
 	path string
-	// unix seconds of the last publish; atomic because Mark is called from the
-	// publish hot path while Run reads it on a timer.
+	// unix seconds of the last broadcast, 0 if there has never been one; atomic
+	// because Mark is called from healthWorker while Run reads it on a timer.
 	last atomic.Int64
 }
 
-// NewHeartbeat seeds the mark with the current time, so process start doubles
-// as the startup grace period: powerctl gets a full heartbeatDeadline to make
-// its first publish before the probe can fail on it.
+// NewHeartbeat returns an unmarked heartbeat: nothing is written until powerctl
+// has actually broadcast. This used to seed the mark with the start time, which
+// handed every fresh process a full heartbeatDeadline of health whether or not
+// it ever worked — and silently defeated the probe during exactly the startup
+// wedge it exists to catch. The probe's initialDelaySeconds is the startup
+// grace, and is the right place for it.
 func NewHeartbeat(dir string) *Heartbeat {
-	h := &Heartbeat{path: filepath.Join(dir, heartbeatFileName)}
-	h.last.Store(time.Now().Unix())
-	return h
+	return &Heartbeat{path: filepath.Join(dir, heartbeatFileName)}
 }
 
-// Mark records a publish. Called on the hot path, so it only touches memory —
-// the file is written on a timer by Run.
+// Mark records a broadcast. Only touches memory — the file is written on a timer
+// by Run.
 func (h *Heartbeat) Mark() {
 	if h == nil {
 		return
@@ -107,12 +117,19 @@ func (h *Heartbeat) Run(ctx context.Context) {
 	defer ticker.Stop()
 
 	write := func() {
-		if err := writeHeartbeatFile(h.path, h.last.Load()); err != nil {
+		last := h.last.Load()
+		if last == 0 {
+			// Never broadcast. Leave the file absent rather than writing a zero
+			// stamp: absence is precisely what --healthcheck reads as "powerctl
+			// never finished starting".
+			return
+		}
+		if err := writeHeartbeatFile(h.path, last); err != nil {
 			log.Printf("Heartbeat write failed: %v\n", err)
 		}
 	}
 
-	// Write immediately so the file exists before the probe's first check.
+	// Try immediately; a no-op until the first broadcast marks the heartbeat.
 	write()
 
 	for {
@@ -168,9 +185,9 @@ func runHealthcheck(dir string) int {
 
 	silence, stale, err := checkHeartbeat(path, time.Now())
 	if err != nil {
-		// Includes "file missing", which is the correct failure: the writer
-		// creates it at startup, so its absence means the process never got
-		// that far. initialDelaySeconds on the probe covers the boot window.
+		// Includes "file missing", which is the correct failure: nothing is
+		// written until the first broadcast, so absence means powerctl never
+		// finished starting. initialDelaySeconds covers the boot window.
 		fmt.Fprintf(os.Stderr, "unhealthy: cannot read heartbeat %s: %v\n", path, err)
 		return 1
 	}

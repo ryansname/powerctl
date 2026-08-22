@@ -1125,7 +1125,6 @@ func mqttSenderWorker(
 	dataChan <-chan DisplayData,
 	forceEnable bool,
 	multiplusOnly bool,
-	hb *Heartbeat,
 ) {
 	log.Println("MQTT sender worker started")
 
@@ -1203,12 +1202,6 @@ func mqttSenderWorker(
 				token.Wait()
 				if token.Error() != nil {
 					log.Printf("Failed to publish to %s: %v\n", msg.Topic, token.Error())
-				} else {
-					// Liveness: a publish that actually reached the broker is the
-					// one signal that powerctl is still doing its job end to end.
-					// Only on success — a client that accepts messages and fails
-					// every send is exactly the wedge we want the probe to catch.
-					hb.Mark()
 				}
 				lastSent[msg.Topic] = lastSentInfo{
 					payload: bytes.Clone(msg.Payload),
