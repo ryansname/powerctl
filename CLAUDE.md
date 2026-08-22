@@ -156,7 +156,7 @@ The baseline and dynamic controllers take typed input channels (`<-chan Baseline
 
 ### HA Service Calls
 
-Topic: `nodered/proxy/call_service`
+Topic: `powerctl/ha/call_service` (`TopicCallServiceProxy`)
 ```json
 {"domain": "switch", "service": "turn_on", "entity_id": "switch.example"}
 ```
