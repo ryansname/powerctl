@@ -14,10 +14,22 @@ func loungeACSetting(mode string, temp float64) LoungeACSetting {
 	return LoungeACSetting{Mode: mode, Temp: temp, HasTemp: true}
 }
 
+// tickLoungeAC runs the sequence from a desired change at loungeACT0 out to `until`,
+// evaluating once a second as the broadcast worker does, and returns every action in
+// order. Driving it on the real cadence is the point: the schedule is only ever sampled
+// at tick boundaries.
+func tickLoungeAC(state *LoungeACState, in LoungeACInput, until time.Duration) []LoungeACAction {
+	var got []LoungeACAction
+	for at := time.Duration(0); at <= until; at += time.Second {
+		got = append(got, EvaluateLoungeAC(state, in, loungeACT0.Add(at))...)
+	}
+	return got
+}
+
 // seededLoungeACState returns a state that has already taken desired as its baseline,
 // as it would be after the first evaluation following startup.
 func seededLoungeACState(desired LoungeACSetting) *LoungeACState {
-	return &LoungeACState{seeded: true, desired: desired, phase: loungeACIdle}
+	return &LoungeACState{seeded: true, desired: desired}
 }
 
 // covers: LAC-TRIGGER-2
@@ -33,23 +45,77 @@ func TestEvaluateLoungeAC_FirstReadingIsBaselineNotCommand(t *testing.T) {
 	assert.Empty(t, EvaluateLoungeAC(state, in, loungeACT0.Add(time.Hour)))
 }
 
-// covers: LAC-TRIGGER-1, LAC-RESEND-1
-func TestEvaluateLoungeAC_DesiredChangeResendsOnce(t *testing.T) {
+// covers: LAC-TRIGGER-1, LAC-SCHEDULE-1
+func TestEvaluateLoungeAC_RunsTheScheduleWhenTheUnitNeverAgrees(t *testing.T) {
 	state := seededLoungeACState(loungeACSetting(acStateCool, 21))
 	in := LoungeACInput{
 		Desired: loungeACSetting(acStateCool, 18),
 		Actual:  loungeACSetting(acStateHeat, 24),
 	}
 
-	// The change itself doesn't send: the first transfer needs to finish first.
-	assert.Empty(t, EvaluateLoungeAC(state, in, loungeACT0))
-	assert.Empty(t, EvaluateLoungeAC(state, in, loungeACT0.Add(time.Second)))
+	// Poll, re-send, poll again, then take the unit over directly — and nothing after.
+	got := tickLoungeAC(state, in, loungeACFallbackAt+5*time.Second)
+	assert.Equal(t, []LoungeACAction{
+		ActionLoungeACRefreshWiFi,
+		ActionLoungeACResendIR,
+		ActionLoungeACRefreshWiFi,
+		ActionLoungeACFallbackWiFi,
+	}, got)
+}
 
-	at := loungeACT0.Add(loungeACResendDelay)
-	assert.Equal(t, []LoungeACAction{ActionLoungeACResendIR}, EvaluateLoungeAC(state, in, at))
+// covers: LAC-SCHEDULE-1
+func TestEvaluateLoungeAC_StepsAreTimedFromTheChange(t *testing.T) {
+	desired := loungeACSetting(acStateCool, 18)
+	in := LoungeACInput{Desired: desired, Actual: loungeACSetting(acStateHeat, 24)}
 
-	// Exactly once.
-	assert.Empty(t, EvaluateLoungeAC(state, in, at.Add(time.Second)))
+	for i, tt := range []struct {
+		at   time.Duration
+		want LoungeACAction
+	}{
+		{loungeACFirstRefresh, ActionLoungeACRefreshWiFi},
+		{loungeACResendIRAt, ActionLoungeACResendIR},
+		{loungeACSecondRefresh, ActionLoungeACRefreshWiFi},
+		{loungeACFallbackAt, ActionLoungeACFallbackWiFi},
+	} {
+		state := seededLoungeACState(loungeACSetting(acStateCool, 21))
+		// Only the earlier steps have fired by the second before this one is due, and
+		// this one fires on the second it is due — no drift from the change.
+		before := tickLoungeAC(state, in, tt.at-time.Second)
+		at := EvaluateLoungeAC(state, in, loungeACT0.Add(tt.at))
+
+		assert.Len(t, before, i, "wrong number of steps before %v", tt.at)
+		assert.Equal(t, []LoungeACAction{tt.want}, at, "step due at %v", tt.at)
+	}
+}
+
+// covers: LAC-CONFIRM-1
+func TestEvaluateLoungeAC_AgreementAtAnyPointEndsTheSequence(t *testing.T) {
+	desired := loungeACSetting(acStateCool, 18)
+	// Whenever the unit is seen agreeing, every remaining step is abandoned — each one
+	// costs either a poll or a dozen Zigbee round trips, for a command already landed.
+	for _, agreesAt := range []time.Duration{
+		0,
+		loungeACFirstRefresh - time.Second,
+		loungeACResendIRAt - time.Second,
+		loungeACSecondRefresh - time.Second,
+		loungeACFallbackAt - time.Second,
+	} {
+		state := seededLoungeACState(loungeACSetting(acStateCool, 21))
+		miss := LoungeACInput{Desired: desired, Actual: loungeACSetting(acStateHeat, 24)}
+		tickLoungeAC(state, miss, agreesAt)
+
+		hit := LoungeACInput{Desired: desired, Actual: desired}
+		assert.Empty(t, EvaluateLoungeAC(state, hit, loungeACT0.Add(agreesAt)),
+			"agreement at %v must end it", agreesAt)
+		assert.False(t, state.running)
+
+		// And no later tick may resurrect the abandoned steps.
+		var after []LoungeACAction
+		for at := agreesAt; at <= loungeACFallbackAt*2; at += time.Second {
+			after = append(after, EvaluateLoungeAC(state, hit, loungeACT0.Add(at))...)
+		}
+		assert.Empty(t, after, "sequence resumed after agreeing at %v", agreesAt)
+	}
 }
 
 // covers: LAC-TRIGGER-1
@@ -64,48 +130,23 @@ func TestEvaluateLoungeAC_ActualChangeAloneDoesNothing(t *testing.T) {
 		{Mode: hvacModeOff},
 	} {
 		in := LoungeACInput{Desired: desired, Actual: actual}
-		assert.Empty(t, EvaluateLoungeAC(state, in, loungeACT0.Add(loungeACConfirmTimeout*2)),
+		assert.Empty(t, EvaluateLoungeAC(state, in, loungeACT0.Add(loungeACFallbackAt*2)),
 			"actual %v should not trigger anything", actual)
 	}
 }
 
-// covers: LAC-CONFIRM-1
-func TestEvaluateLoungeAC_ConfirmsAsSoonAsUnitAgrees(t *testing.T) {
-	desired := loungeACSetting(acStateCool, 18)
-	state := seededLoungeACState(loungeACSetting(acStateCool, 21))
-
-	miss := LoungeACInput{Desired: desired, Actual: loungeACSetting(acStateHeat, 24)}
-	EvaluateLoungeAC(state, miss, loungeACT0)
-	EvaluateLoungeAC(state, miss, loungeACT0.Add(loungeACResendDelay))
-
-	// The unit reports the new state well before the timeout would expire.
-	hit := LoungeACInput{Desired: desired, Actual: loungeACSetting(acStateCool, 18)}
-	assert.Empty(t, EvaluateLoungeAC(state, hit, loungeACT0.Add(30*time.Second)))
-	assert.Equal(t, loungeACIdle, state.phase)
-
-	// And the timeout passing later must not resurrect a fallback.
-	assert.Empty(t, EvaluateLoungeAC(state, hit, loungeACT0.Add(loungeACConfirmTimeout*2)))
-}
-
-// covers: LAC-CONFIRM-2, LAC-FALLBACK-1, LAC-TERMINAL-1
+// covers: LAC-FALLBACK-1, LAC-TERMINAL-1
 func TestEvaluateLoungeAC_FallsBackToWiFiThenStops(t *testing.T) {
 	desired := loungeACSetting(acStateCool, 18)
 	state := seededLoungeACState(loungeACSetting(acStateCool, 21))
 	in := LoungeACInput{Desired: desired, Actual: loungeACSetting(acStateHeat, 24)}
 
-	EvaluateLoungeAC(state, in, loungeACT0)
-	resendAt := loungeACT0.Add(loungeACResendDelay)
-	assert.Equal(t, []LoungeACAction{ActionLoungeACResendIR}, EvaluateLoungeAC(state, in, resendAt))
+	tickLoungeAC(state, in, loungeACFallbackAt)
 
-	// Still wrong just before the deadline: hold.
-	assert.Empty(t, EvaluateLoungeAC(state, in, resendAt.Add(loungeACConfirmTimeout-time.Second)))
-
-	deadline := resendAt.Add(loungeACConfirmTimeout)
-	assert.Equal(t, []LoungeACAction{ActionLoungeACFallbackWiFi}, EvaluateLoungeAC(state, in, deadline))
-
-	// Terminal: the WiFi path is the last escalation, so nothing more happens.
-	assert.Empty(t, EvaluateLoungeAC(state, in, deadline.Add(time.Hour)))
-	assert.Equal(t, loungeACIdle, state.phase)
+	// Terminal: the WiFi path is the last escalation, so nothing more happens — not even
+	// if the unit is still disagreeing an hour later.
+	assert.Empty(t, EvaluateLoungeAC(state, in, loungeACT0.Add(time.Hour)))
+	assert.False(t, state.running)
 }
 
 // covers: LAC-SUPERSEDE-1
@@ -114,17 +155,20 @@ func TestEvaluateLoungeAC_NewCommandRestartsSequence(t *testing.T) {
 	actual := loungeACSetting(acStateHeat, 24)
 
 	first := LoungeACInput{Desired: loungeACSetting(acStateCool, 18), Actual: actual}
-	EvaluateLoungeAC(state, first, loungeACT0)
-	EvaluateLoungeAC(state, first, loungeACT0.Add(loungeACResendDelay))
+	tickLoungeAC(state, first, loungeACResendIRAt)
 
-	// A new command mid-flight abandons the old sequence.
+	// A new command mid-flight abandons the old sequence and restarts the clock, so the
+	// superseded value's remaining steps never fire.
 	second := LoungeACInput{Desired: loungeACSetting(acStateCool, 19), Actual: actual}
-	changedAt := loungeACT0.Add(20 * time.Second)
-	assert.Empty(t, EvaluateLoungeAC(state, second, changedAt))
-	assert.Equal(t, loungeACAwaitingResend, state.phase)
+	changedAt := loungeACResendIRAt + time.Second
+	assert.Empty(t, EvaluateLoungeAC(state, second, loungeACT0.Add(changedAt)))
+	assert.Equal(t, 0, state.step)
 
-	// The old sequence's deadline must not fire a fallback for the superseded value.
-	assert.Empty(t, EvaluateLoungeAC(state, second, changedAt.Add(time.Second)))
+	// The old schedule's remaining steps were due within a few seconds of here.
+	for at := changedAt; at < changedAt+loungeACFirstRefresh; at += time.Second {
+		assert.Empty(t, EvaluateLoungeAC(state, second, loungeACT0.Add(at)),
+			"superseded schedule fired at %v", at)
+	}
 }
 
 // covers: LAC-SUPERSEDE-1
@@ -141,16 +185,21 @@ func TestEvaluateLoungeAC_RapidSteppingSendsOnlyTheFinalValue(t *testing.T) {
 	}
 	assert.Empty(t, during, "nothing goes out mid-drag: each step supersedes the last")
 
-	// Then it settles: one re-send, five seconds after the final change, carrying the
-	// value the user landed on rather than any of the ones they passed through.
+	// Then it settles and the schedule runs once, carrying the value the user landed on
+	// rather than any of the ones they passed through.
 	final := LoungeACInput{Desired: loungeACSetting(acStateCool, 22), Actual: actual}
 	lastChange := loungeACT0.Add(time.Duration(len(steps)-1) * time.Second)
 	var after []LoungeACAction
-	for i := range 11 {
-		after = append(after, EvaluateLoungeAC(state, final, lastChange.Add(time.Duration(i)*time.Second))...)
+	for at := time.Duration(0); at <= loungeACFallbackAt; at += time.Second {
+		after = append(after, EvaluateLoungeAC(state, final, lastChange.Add(at))...)
 	}
 
-	assert.Equal(t, []LoungeACAction{ActionLoungeACResendIR}, after)
+	assert.Equal(t, []LoungeACAction{
+		ActionLoungeACRefreshWiFi,
+		ActionLoungeACResendIR,
+		ActionLoungeACRefreshWiFi,
+		ActionLoungeACFallbackWiFi,
+	}, after)
 	assert.Equal(t, loungeACSetting(acStateCool, 22), state.desired)
 }
 
@@ -218,6 +267,25 @@ func TestCommandLoungeACWiFi_SetsModeThenFlooredSetpoint(t *testing.T) {
 	assert.Equal(t, 20.0, data["temperature"])
 }
 
+// covers: LAC-REFRESH-1
+func TestRefreshLoungeACWiFi_PollsWithoutCommanding(t *testing.T) {
+	ch := make(chan MQTTMessage, 4)
+	sender := NewMQTTSender(ch)
+
+	refreshLoungeACWiFi(sender)
+
+	msg := <-ch
+	var payload map[string]any
+	assert.NoError(t, json.Unmarshal(msg.Payload, &payload))
+	// Not a climate service: this drives the integration's own update, so it must not
+	// carry anything that could change what the unit is doing.
+	assert.Equal(t, "homeassistant", payload["domain"])
+	assert.Equal(t, "update_entity", payload["service"])
+	assert.Equal(t, loungeACWiFiEntityID, payload["entity_id"])
+	assert.Nil(t, payload["data"])
+	assert.Empty(t, ch)
+}
+
 // covers: LAC-RESEND-1
 func TestResendLoungeACIR_SendsWholeStateInOneCall(t *testing.T) {
 	ch := make(chan MQTTMessage, 4)
@@ -275,15 +343,14 @@ func TestEvaluateLoungeAC_SetpointChangeWhileOffIsNotACommand(t *testing.T) {
 // covers: LAC-VALID-1
 func TestEvaluateLoungeAC_InvalidDesiredNeverActs(t *testing.T) {
 	for _, desired := range []LoungeACSetting{
-		{Mode: hvacModeUnknown},          // the pre-seeded sentinel
-		{Mode: ""},                       // nothing published yet
-		{Mode: acStateCool},                   // a mode that needs a setpoint, without one
+		{Mode: hvacModeUnknown}, // the pre-seeded sentinel
+		{Mode: ""},              // nothing published yet
+		{Mode: acStateCool},     // a mode that needs a setpoint, without one
 	} {
 		state := seededLoungeACState(loungeACSetting(acStateCool, 21))
 		in := LoungeACInput{Desired: desired, Actual: loungeACSetting(acStateHeat, 24)}
 
-		assert.Empty(t, EvaluateLoungeAC(state, in, loungeACT0))
-		assert.Empty(t, EvaluateLoungeAC(state, in, loungeACT0.Add(loungeACConfirmTimeout*2)),
+		assert.Empty(t, tickLoungeAC(state, in, loungeACFallbackAt*2),
 			"desired %v should never act", desired)
 	}
 }
@@ -295,10 +362,13 @@ func TestEvaluateLoungeAC_UnusableActualSkipsFallback(t *testing.T) {
 	// The WiFi entity has told us nothing, so there is no evidence IR missed.
 	in := LoungeACInput{Desired: desired, Actual: LoungeACSetting{Mode: ""}}
 
-	EvaluateLoungeAC(state, in, loungeACT0)
-	resendAt := loungeACT0.Add(loungeACResendDelay)
-	assert.Equal(t, []LoungeACAction{ActionLoungeACResendIR}, EvaluateLoungeAC(state, in, resendAt))
-	assert.Empty(t, EvaluateLoungeAC(state, in, resendAt.Add(loungeACConfirmTimeout)))
+	// The IR half still runs — it costs the unit nothing to be told twice — but taking
+	// the unit over on no evidence does not.
+	assert.Equal(t, []LoungeACAction{
+		ActionLoungeACRefreshWiFi,
+		ActionLoungeACResendIR,
+		ActionLoungeACRefreshWiFi,
+	}, tickLoungeAC(state, in, loungeACFallbackAt+time.Second))
 }
 
 // covers: LAC-VALID-3
@@ -325,7 +395,7 @@ func TestReadLoungeACSetting_RejectsImplausibleSetpoint(t *testing.T) {
 	// `None` while the unit is off parses as a zero float, not as an error.
 	data := DisplayData{TopicData: map[string]any{
 		TopicLoungeACIRState: &StringTopicData{Current: "cool"},
-		TopicLoungeACIRTemp: &FloatTopicData{Current: 0},
+		TopicLoungeACIRTemp:  &FloatTopicData{Current: 0},
 	}}
 
 	got := readLoungeACSetting(data, TopicLoungeACIRState, TopicLoungeACIRTemp)
@@ -334,16 +404,20 @@ func TestReadLoungeACSetting_RejectsImplausibleSetpoint(t *testing.T) {
 }
 
 // covers: LAC-BOUND-1
-func TestEvaluateLoungeAC_OneChangeYieldsAtMostTwoCommands(t *testing.T) {
+func TestEvaluateLoungeAC_OneChangeYieldsAtMostOneOfEachAction(t *testing.T) {
 	desired := loungeACSetting(acStateCool, 18)
 	state := seededLoungeACState(loungeACSetting(acStateCool, 21))
 	in := LoungeACInput{Desired: desired, Actual: loungeACSetting(acStateHeat, 24)}
 
-	// Tick once a second for well past the deadline, as the broadcast worker does.
-	var got []LoungeACAction
-	for i := 0; i < int((loungeACConfirmTimeout+time.Minute)/time.Second); i++ {
-		got = append(got, EvaluateLoungeAC(state, in, loungeACT0.Add(time.Duration(i)*time.Second))...)
-	}
+	// Tick once a second for minutes past the last step, as the broadcast worker does.
+	// The unit never agrees, so nothing here stops the schedule early: what bounds it is
+	// the schedule being finite.
+	got := tickLoungeAC(state, in, 5*time.Minute)
 
-	assert.Equal(t, []LoungeACAction{ActionLoungeACResendIR, ActionLoungeACFallbackWiFi}, got)
+	assert.Equal(t, []LoungeACAction{
+		ActionLoungeACRefreshWiFi,
+		ActionLoungeACResendIR,
+		ActionLoungeACRefreshWiFi,
+		ActionLoungeACFallbackWiFi,
+	}, got)
 }

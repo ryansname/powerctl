@@ -44,23 +44,42 @@ same value or not.
 - **LAC-TRIGGER-3** — Changing the setpoint while the unit is off is not a command. There is
   nothing to send, and an IR frame per nudge of the dial is a dozen wasted Zigbee round
   trips on a lossy mesh.
-- **LAC-RESEND-1** — Shortly after a desired change, the same command is re-issued once to
-  the IR entity, unconditionally and without checking anything first. This is the second IR
-  transmission; it is what takes a ~80% per-attempt hit rate to ~96%.
-- **LAC-CONFIRM-1** — After the resend, actual state is compared against desired on *every*
-  update, and the sequence succeeds the moment they match. There is no fixed settling wait.
-- **LAC-CONFIRM-2** — If no match is seen before a timeout, the WiFi fallback fires. The
-  timeout must comfortably exceed the WiFi entity's poll interval, or a command that did
-  land gets overridden before it could ever be observed.
-- **LAC-FALLBACK-1** — On timeout, the equivalent command is issued to the WiFi entity.
+- **LAC-SCHEDULE-1** — A desired change starts a fixed schedule, every step timed from the
+  change itself rather than chained off the step before it:
+
+  | at | step |
+  | --- | --- |
+  | +5s | refresh actual state |
+  | +7s | re-send the command to the IR entity |
+  | +12s | refresh actual state |
+  | +14s | command the WiFi entity directly |
+
+  The whole escalation is therefore over in a bounded 14 seconds, and no step can push the
+  ones after it out.
+- **LAC-CONFIRM-1** — Before every step, actual state is compared against desired, and the
+  moment they match the sequence ends with all remaining steps abandoned. There is nothing
+  left to escalate, and each remaining step costs either a poll or a dozen Zigbee round
+  trips.
+- **LAC-REFRESH-1** — A refresh tells the unit's own integration to poll now rather than on
+  its own schedule, and does not command the unit. Each is followed by slack — enough for a
+  round trip and the state to propagate — so the step after it decides on a current reading.
+  Without them the reading at each decision is near-certainly older than the command being
+  decided about, and the decision could only ever be made blind.
+- **LAC-RESEND-1** — The re-send re-issues the same command to the IR entity. This is the
+  second IR transmission; together with the first it takes a ~80% per-attempt hit rate to
+  ~96%, and the refresh before it means the frame is spent only where the first was observed
+  to miss.
+- **LAC-FALLBACK-1** — The last step issues the equivalent command to the WiFi entity.
 - **LAC-TERMINAL-1** — The WiFi fallback ends the sequence. Nothing is watched afterwards:
   the WiFi path is reliable and there is no further escalation available, so there is
   nothing a continued watch could do.
 - **LAC-SUPERSEDE-1** — A desired change while a sequence is in flight abandons it and
-  starts over from the resend.
-- **LAC-BOUND-1** — One desired change yields at most one IR resend and one WiFi fallback.
-  No rate limiting is needed to achieve this: the resend writes the same value, so SmartIR's
-  state does not change, so nothing looks like a new command and no feedback loop exists.
+  restarts the schedule from the top.
+- **LAC-BOUND-1** — One desired change runs the schedule at most once, and at most one step
+  fires per evaluation — a stalled input must not put two IR frames on the mesh in the same
+  instant, which is the collision the spacing exists to avoid. No rate limiting is needed
+  beyond that: the resend writes the same value, so SmartIR's state does not change, so
+  nothing looks like a new command and no feedback loop exists.
 
 ## Matching
 
@@ -72,9 +91,12 @@ same value or not.
   meaningless with the unit off.
 
 **Known limitation.** A half-degree change is unverifiable in principle: a 1.0°-step entity
-cannot distinguish 20.0 from 20.5, and 0.5 is exactly the tolerance. Such a command is
-reported as matched immediately, so it gets the IR double-send but no confirmation and no
-fallback. Demanding a *fresh* reading instead does not help — if the unit really did move
+cannot distinguish 20.0 from 20.5, and 0.5 is exactly the tolerance. Such a command reads as
+matched at the first comparison, so it gets one IR frame and no escalation — and if that
+frame missed, the unit sits 0.5° from where it was asked to be, with the right mode. That is
+below what anyone notices, and it does not latch: the next step is a full degree away from
+what the unit reports, so it compares as a mismatch and escalates
+normally. Demanding a *fresh* reading instead does not help — if the unit really did move
 20.0 → 20.5 the WiFi entity still reports 20 and never republishes, so a freshness rule
 would time out and fall back over a command that worked. The failures worth catching (wrong
 mode, several degrees out) sit far outside tolerance and detect normally.
@@ -98,9 +120,10 @@ which are not mirrored at all.
 ## Validity
 
 - **LAC-VALID-1** — Missing or nonsensical desired state (no mode, or a setpoint outside a
-  plausible range) never triggers a resend or a fallback.
-- **LAC-VALID-2** — Unusable actual state means the confirmation is skipped rather than
-  failed: with nothing trustworthy to compare against, powerctl must not fall back on the
+  plausible range) never starts a sequence.
+- **LAC-VALID-2** — Unusable actual state neither confirms nor condemns: the IR steps still
+  run, since telling the unit twice costs it nothing, but the WiFi fallback is skipped.
+  With nothing trustworthy to compare against, powerctl must not take the unit over on the
   assumption that the IR missed.
 - **LAC-VALID-3** — The SmartIR entity's topics are pre-seeded with sentinels that read as
   invalid. Subscribing is the same as requiring at startup, and statestream publishes on
@@ -110,14 +133,33 @@ which are not mirrored at all.
   Daikin reports `current_temperature` constantly, and the tile worker already depends on
   its state topic arriving.
 
+## Logging
+
+- **LAC-LOG-1** — Every change to either entity is logged, with the value it replaced. The
+  IR entity is the only thing that starts a sequence and the WiFi entity the only thing that
+  ends one early, so between them these explain every decision taken.
+- **LAC-LOG-2** — Every outgoing command is logged: each refresh, the IR re-send, and the
+  WiFi fallback.
+- **LAC-LOG-3** — The two silent endings — confirmed, and gave up without falling back — are
+  logged too. Otherwise a sequence that succeeded and one that never started look identical.
+
+The point of this is being able to answer "why is the lounge the wrong temperature" from the
+log alone, without a live mesh to poke at. It also makes the ~80% IR hit rate an observable
+number rather than an assumption, since a miss shows up as a re-send with the unit still
+reporting the old value.
+
 ## Worked workflows
 
-- **Command lands first time** — Siri sets 21° cool. powerctl re-sends once. The WiFi entity
-  reports cool/21° a minute later: matched immediately, sequence ends, no fallback and no
-  waiting out the timeout. (LAC-RESEND-1, LAC-CONFIRM-1)
-- **Both IR attempts miss** — Siri sets 18° cool; neither transfer completes. The WiFi
-  entity keeps reading heat/24° until the timeout expires, so powerctl commands the WiFi
-  entity to cool/18° and stops. (LAC-CONFIRM-2, LAC-FALLBACK-1, LAC-TERMINAL-1)
+- **Command lands first time** — Siri sets 21° cool. At +5s powerctl polls the unit, which
+  reports cool/21°; at +7s that match ends the sequence, so no second IR frame is sent and
+  it is over seven seconds after the command rather than a poll interval later.
+  (LAC-REFRESH-1, LAC-CONFIRM-1)
+- **First attempt misses, second lands** — Siri sets 18° cool. The +5s poll still reads
+  heat/24°, so powerctl re-sends at +7s. The +12s poll comes back cool/18°: matched at +14s,
+  no fallback. (LAC-RESEND-1, LAC-CONFIRM-1)
+- **Both IR attempts miss** — Siri sets 18° cool; neither transfer completes. Both polls
+  read heat/24°, so at +14s powerctl commands the WiFi entity to cool/18° and stops.
+  (LAC-FALLBACK-1, LAC-TERMINAL-1)
 - **Latched desync, the case this exists for** — An earlier miss left HA showing cool/20°
   while the unit is really heat/24°. Asking Siri for cool/20° again is deduped and emits
   nothing, so powerctl sees no desired change and correctly does nothing. Setting 20.5°
