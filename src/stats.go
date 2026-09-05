@@ -29,8 +29,12 @@ const (
 
 const (
 	topicHouseLoadPower2 = "homeassistant/sensor/home_sweet_home_load_power_2/state"
-	topicACFrequency     = "homeassistant/sensor/lounge_ac_frequency/state"
-	topicSolar2ACPower   = "homeassistant/sensor/primo_5_0_ac_power/state"
+	// topicACFrequency drives the >52.75Hz curtailment safety check in both
+	// controllers. Read off the gateway's `load` meter, which follows the backup
+	// bus and so measures what the house sees whether or not the grid is up.
+	// Previously came from a lounge air conditioner.
+	topicACFrequency   = "homeassistant/sensor/home_sweet_home_load_frequency/state"
+	topicSolar2ACPower = "homeassistant/sensor/primo_5_0_ac_power/state"
 	// topicSitePower is whole-house flow at the grid meter: +ve importing, -ve
 	// exporting. Feeds the dynamic controller's export limit.
 	topicSitePower = "homeassistant/sensor/home_sweet_home_site_power/state"
