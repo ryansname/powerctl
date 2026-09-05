@@ -197,9 +197,6 @@ type DynamicInverterState struct {
 	houseSideGeneration governor.RollingMinMax // 1-min tracking of solar_1 + inverter_1_9
 	cvlVoltageEMA       governor.EMA           // EMA-smoothed IR-compensated Battery 3 voltage (V_adj); CVL ramp input
 
-	smoothedForecastWh float64   // running daily-min of remaining-solar forecast (Wh)
-	forecastResetDate  time.Time // calendar day the smoothing was last reset
-
 	mp2VoltageEMA  governor.EMA // EMA-smoothed Multiplus AC-in voltage; recovers sub-quantum resolution
 	voltageOffsetV float64      // InverterVoltageAvg - mp2VoltageEMA; corrects the Multiplus's calibration bias
 	// voltageCapW is the integrator: the current discharge ceiling in W. Persists
@@ -508,26 +505,13 @@ func cclOverflowConstraint(solar3A, solar4A, ccl, voltage float64) DynamicModeCo
 	}
 }
 
-// updateForecastSmoothing tracks the running minimum of the remaining-solar forecast (Wh) over
-// the calendar day, resetting at the start of each day. Using the most pessimistic estimate
-// seen keeps the charge limit from under-charging B3 on the strength of an upward forecast
-// revision that may not materialise. Mirrors the daily-reset ratchet in
-// governor.ForecastExcessRequestCore. Returns the smoothed value.
-func (s *DynamicInverterState) updateForecastSmoothing(forecastWh float64, now time.Time) float64 {
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	if !s.forecastResetDate.Equal(today) {
-		s.forecastResetDate = today
-		s.smoothedForecastWh = forecastWh
-	} else {
-		s.smoothedForecastWh = min(s.smoothedForecastWh, forecastWh)
-	}
-	return s.smoothedForecastWh
-}
-
 // b3ForecastChargeLimit caps voluntary Multiplus charging so Battery 3 reaches b3ChargeTargetSOC
 // by the end of the forecast solar day, accounting for the battery-side solar (Solar 3 & 4) still
-// expected to arrive. The energy gap to target minus that expected solar is the deficit the
-// powerhouse side must supply; spreading it over the hours until solar end gives the rate cap.
+// expected to arrive. The remaining-solar forecast is used as published: it already declines
+// monotonically as the day is consumed, so carrying a running minimum over it added no pessimism
+// and only risked latching an overnight zero for the whole day. The energy gap to target minus
+// that expected solar is the deficit the powerhouse side must supply; spreading it over the
+// hours until solar end gives the rate cap.
 // MaxCharge is 0 once battery-side solar alone covers the gap (or B3 is already at target), and
 // full once solar has ended (the surplus-only charge intent gates actual charging anyway).
 // Transfer-limit forced absorption is unaffected — MinCharge beats MaxCharge via the lo>hi
@@ -535,7 +519,7 @@ func (s *DynamicInverterState) updateForecastSmoothing(forecastWh float64, now t
 func b3ForecastChargeLimit(
 	soc float64,
 	capacityWh float64,
-	smoothedForecastWh float64,
+	forecastRemainingWh float64,
 	solarMultiplier float64,
 	forecast governor.ForecastPeriods,
 	now time.Time,
@@ -551,7 +535,7 @@ func b3ForecastChargeLimit(
 		return c
 	}
 
-	deficitWh := gapWh - solarMultiplier*smoothedForecastWh
+	deficitWh := gapWh - solarMultiplier*forecastRemainingWh
 	if deficitWh <= 0 {
 		c.MaxCharge = 0 // battery-side solar alone reaches target
 		return c
@@ -694,11 +678,10 @@ func calculateDynamicSetpoint(
 	// end given the forecast (transfer-limit MinCharge still wins via lo>hi).
 	// phChargeLimit prevents charging from drawing power through the cable from the house side.
 	now := time.Now()
-	smoothedForecastWh := state.updateForecastSmoothing(input.ForecastRemainingWh, now)
 	socLimit := b3ForecastChargeLimit(
 		input.Battery3SOC,
 		input.Battery3CapacityWh,
-		smoothedForecastWh,
+		input.ForecastRemainingWh,
 		input.SolarMultiplier,
 		input.DetailedForecast,
 		now,
@@ -771,8 +754,8 @@ func calculateDynamicSetpoint(
 		BusVoltage:      vEst,
 		VoltageCapW:     state.voltageCapW,
 		// Projected EOD energy if only battery-side solar charges B3 (no powerhouse charging):
-		// current stored energy + smoothed forecast solar, in kWh.
-		B3ExpectedFinalKwh: (input.Battery3SOC/100*input.Battery3CapacityWh + input.SolarMultiplier*smoothedForecastWh) / 1000,
+		// current stored energy + forecast solar, in kWh.
+		B3ExpectedFinalKwh: (input.Battery3SOC/100*input.Battery3CapacityWh + input.SolarMultiplier*input.ForecastRemainingWh) / 1000,
 	}
 }
 

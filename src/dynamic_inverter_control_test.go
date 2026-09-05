@@ -640,28 +640,13 @@ func TestCalculateDynamic_Headroom(t *testing.T) {
 	assert.InDelta(t, input.Battery3SOC, debug.Battery3SOC, 0.001)
 }
 
-// --- forecast smoothing tests ---
-
-func TestForecastSmoothing_RunningMinWithinDay(t *testing.T) {
-	s := &DynamicInverterState{}
-	day := time.Date(2026, 6, 13, 9, 0, 0, 0, time.Local)
-	assert.InDelta(t, 5000.0, s.updateForecastSmoothing(5000, day), 0.001)                  // first → set
-	assert.InDelta(t, 3000.0, s.updateForecastSmoothing(3000, day.Add(time.Hour)), 0.001)   // lower → tracks down
-	assert.InDelta(t, 3000.0, s.updateForecastSmoothing(8000, day.Add(2*time.Hour)), 0.001) // higher → held
-}
-
-func TestForecastSmoothing_ResetsNextDay(t *testing.T) {
-	s := &DynamicInverterState{}
-	s.updateForecastSmoothing(2000, time.Date(2026, 6, 13, 14, 0, 0, 0, time.Local))
-	got := s.updateForecastSmoothing(9000, time.Date(2026, 6, 14, 8, 0, 0, 0, time.Local))
-	assert.InDelta(t, 9000.0, got, 0.001) // new calendar day → reset up
-}
-
 // --- b3ForecastChargeLimit tests ---
 
 // makeForecast builds 30-minute forecast periods of constant generation starting at `start`,
-// spanning `hours`. Solar end time resolves to start+hours (all periods exceed the threshold).
-func makeForecast(start time.Time, hours, pvKw float64) governor.ForecastPeriods {
+// spanning `hours`. Generation is fixed at 1kW, comfortably above b3SolarEndThresholdKw, so
+// solar end time resolves to start+hours.
+func makeForecast(start time.Time, hours float64) governor.ForecastPeriods {
+	const pvKw = 1.0
 	var periods governor.ForecastPeriods
 	for i := 0; i < int(hours*2); i++ {
 		periods = append(periods, governor.ForecastPeriod{
@@ -686,14 +671,14 @@ func TestB3ForecastChargeLimit_SolarCoversGap_NoCharge(t *testing.T) {
 func TestB3ForecastChargeLimit_DeficitSpreadOverHours(t *testing.T) {
 	// gap=7830, expected solar=3.9*500=1950 → deficit=5880 over 5h → 1176W.
 	now := time.Date(2026, 6, 13, 12, 0, 0, 0, time.Local)
-	c := b3ForecastChargeLimit(80, 43500, 500, 3.9, makeForecast(now, 5, 1.0), now)
+	c := b3ForecastChargeLimit(80, 43500, 500, 3.9, makeForecast(now, 5), now)
 	assert.InDelta(t, 1176.0, c.MaxCharge, 0.001)
 }
 
 func TestB3ForecastChargeLimit_RateClampedToMax(t *testing.T) {
 	// gap=78%*43500=33930, no solar, only 2h → 16965W → clamped to 3500W.
 	now := time.Date(2026, 6, 13, 12, 0, 0, 0, time.Local)
-	c := b3ForecastChargeLimit(20, 43500, 0, 3.9, makeForecast(now, 2, 1.0), now)
+	c := b3ForecastChargeLimit(20, 43500, 0, 3.9, makeForecast(now, 2), now)
 	assert.InDelta(t, dynamicMaxChargeW, c.MaxCharge, 0.001)
 }
 
@@ -712,7 +697,7 @@ func TestCalculateDynamic_ChargeLimit_DeficitCaps(t *testing.T) {
 	input.HouseLoad = 0
 	input.Solar1Power = 2000
 	input.ForecastRemainingWh = 500
-	input.DetailedForecast = makeForecast(time.Now(), 5, 1.0)
+	input.DetailedForecast = makeForecast(time.Now(), 5)
 
 	setpoint, debug := calculateDynamicSetpoint(input, state)
 	assert.Equal(t, priorityCharge, debug.Priority)
@@ -1156,4 +1141,29 @@ func TestEstimateBusVoltage_NoSources(t *testing.T) {
 func TestEstimateBusVoltage_ShellyOnlyFallback(t *testing.T) {
 	state := newVoltageState()
 	assert.InDelta(t, 251.5, estimateBusVoltage(state, 0, 251.5), 0.001)
+}
+
+// TestCalculateDynamic_ChargeLimit_OvernightZeroForecast covers the regression where an
+// overnight forecast sample of 0 (Solcast reports 0 remaining from sunset until it
+// recalculates after midnight) poisoned the rest of the day's charge limit.
+func TestCalculateDynamic_ChargeLimit_OvernightZeroForecast(t *testing.T) {
+	state := makeTestDynamicState()
+
+	// Overnight tick: Solcast still reporting 0 remaining for the day just ended.
+	night := makeBaseDynamicInput()
+	night.Battery3SOC = 80
+	night.ForecastRemainingWh = 0
+	calculateDynamicSetpoint(night, state)
+
+	// Morning tick on the same state: Solcast has published the new day's forecast.
+	// gap=7830, expected solar=3.9*500=1950 → deficit=5880 over ~5h → ~1176W.
+	morning := makeBaseDynamicInput()
+	morning.Battery3SOC = 80
+	morning.HouseLoad = 0
+	morning.Solar1Power = 2000
+	morning.ForecastRemainingWh = 500
+	morning.DetailedForecast = makeForecast(time.Now(), 5)
+
+	_, debug := calculateDynamicSetpoint(morning, state)
+	assert.InDelta(t, 1176.0, debug.B3ChargeMaxW, 2.0)
 }
