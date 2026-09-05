@@ -48,9 +48,9 @@ var kiloToBaseUnitTopics = map[string]bool{
 	topicHouseLoadPower2: true,
 	topicSitePower:       true,
 	// Energy sensors (kWh → Wh)
-	"homeassistant/sensor/home_sweet_home_tg118095000r1a_battery_remaining/state": true,
-	"homeassistant/sensor/solcast_pv_forecast_forecast_today/state":               true,
-	TopicSolcastForecastRemaining:                                                 true,
+	TopicBattery1Energy: true,
+	"homeassistant/sensor/solcast_pv_forecast_forecast_today/state": true,
+	TopicSolcastForecastRemaining:                                   true,
 }
 
 // PercentileSpec defines a specific percentile and time window combination
@@ -70,7 +70,7 @@ var requiredPercentiles = map[string][]PercentileSpec{
 	},
 
 	// Tesla battery remaining - used by powerExcessCalculator for P50._5
-	"homeassistant/sensor/home_sweet_home_tg118095000r1a_battery_remaining/state": {{50, 5 * time.Minute}},
+	TopicBattery1Energy: {{50, 5 * time.Minute}},
 
 	// Battery available energy - used by powerExcessCalculator for P50._5
 	TopicBattery2Energy: {{50, 5 * time.Minute}},

@@ -7,7 +7,7 @@ import (
 
 // Topics for power excess calculation
 const (
-	TopicBattery1Energy = "homeassistant/sensor/home_sweet_home_tg118095000r1a_battery_remaining/state"
+	TopicBattery1Energy = "homeassistant/sensor/home_sweet_home_battery_remaining_2/state"
 	TopicBattery2Energy = "homeassistant/sensor/battery_2_available_energy/state"
 	TopicBattery3Energy = "homeassistant/sensor/battery_3_available_energy/state"
 	TopicSolar1Power    = "homeassistant/sensor/solar_1_power/state"
