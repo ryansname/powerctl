@@ -18,6 +18,9 @@ const TopicTemperatureInside = "homeassistant/sensor/temperature_inside_temperat
 // TopicSunState is the sun entity state (above_horizon / below_horizon).
 const TopicSunState = "homeassistant/sun/sun/state"
 
+// TopicTilesState is the state topic for the tile light.
+const TopicTilesState = "homeassistant/light/tiles/state"
+
 const (
 	acStateCool         = "cool"
 	acStateHeat         = "heat"
@@ -109,6 +112,13 @@ func acTileWorker(
 			sunBelow := data.GetString(TopicSunState) == "below_horizon"
 
 			if action == "" {
+				continue
+			}
+
+			// Commands sent while the tiles are unreachable are lost; forget the
+			// last action so the colour is re-applied once they come back.
+			if data.GetString(TopicTilesState) == "unavailable" {
+				lastAction = ""
 				continue
 			}
 

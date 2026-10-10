@@ -93,16 +93,12 @@ func expectingPowerCutsWorker(
 				lastCommandSent = time.Now()
 			}
 
-			if enabled && hotWaterOn {
-				if !hotWaterTurnedOff {
-					log.Println("Power cut prep: turning off hot water cylinder")
-					sender.CallService("switch", "turn_off", "switch.hot_water_cylinder", nil)
-					hotWaterTurnedOff = true
-					lastCommandSent = time.Now()
-				} else {
-					// Someone manually turned it back on — don't fight them
-					hotWaterTurnedOff = false
-				}
+			// Turn it off once per episode; if someone turns it back on, leave it.
+			if enabled && hotWaterOn && !hotWaterTurnedOff {
+				log.Println("Power cut prep: turning off hot water cylinder")
+				sender.CallService("switch", "turn_off", "switch.hot_water_cylinder", nil)
+				hotWaterTurnedOff = true
+				lastCommandSent = time.Now()
 			} else if !enabled && hotWaterTurnedOff {
 				log.Println("Power cut prep over: turning on hot water cylinder")
 				sender.CallService("switch", "turn_on", "switch.hot_water_cylinder", nil)

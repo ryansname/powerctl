@@ -383,6 +383,7 @@ func main() {
 	haTopics = append(haTopics, TopicLoungeACState)
 	haTopics = append(haTopics, TopicTemperatureInside)
 	haTopics = append(haTopics, TopicSunState)
+	haTopics = append(haTopics, TopicTilesState)
 
 	// Add inverter 10 (Multiplus) setpoint command topic
 	haTopics = append(haTopics, TopicInverter10SetpointCmd)
