@@ -171,21 +171,6 @@ func BuildBaselineInverterConfig(battery2 BatteryConfig) BaselineInverterConfig 
 	}
 }
 
-// powerhouseInverterVoltageTopics are the Shelly AC voltage sensors on the
-// powerhouse bus, averaged into the accuracy reference for the voltage discharge
-// limit. Inverters 3 and 4 are absent: their voltage entities do not report, and
-// listing a topic that never arrives would only add a permanent zero for
-// averageNonZero to skip. Add them here if they ever come online.
-var powerhouseInverterVoltageTopics = []string{
-	"homeassistant/sensor/powerhouse_inverter_1_switch_0_voltage/state",
-	"homeassistant/sensor/powerhouse_inverter_2_switch_0_voltage/state",
-	"homeassistant/sensor/powerhouse_inverter_5_switch_0_voltage/state",
-	"homeassistant/sensor/powerhouse_inverter_6_switch_0_voltage/state",
-	"homeassistant/sensor/powerhouse_inverter_7_switch_0_voltage/state",
-	"homeassistant/sensor/powerhouse_inverter_8_switch_0_voltage/state",
-	"homeassistant/sensor/powerhouse_inverter_9_switch_0_voltage/state",
-}
-
 // BuildDynamicInverterConfig creates configuration for the dynamic (Multiplus) inverter controller.
 func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverterConfig {
 	return DynamicInverterConfig{
@@ -196,7 +181,6 @@ func BuildDynamicInverterConfig(battery2, battery3 BatteryConfig) DynamicInverte
 			Inverter1to9PowerTopics:   battery2.OutflowPowerTopics,
 			MultiplusACPowerTopic:     "homeassistant/sensor/powerhouse_inverter_10_ac_power/state",
 			MultiplusACInVoltageTopic: "homeassistant/sensor/powerhouse_inverter_10_ac_in_voltage/state",
-			InverterVoltageTopics:     powerhouseInverterVoltageTopics,
 			SitePowerTopic:            topicSitePower,
 			Battery3SOCTopic:          "homeassistant/sensor/" + strings.ReplaceAll(strings.ToLower(battery3.Name), " ", "_") + "_state_of_charge/state",
 			GridStatusTopic:           "homeassistant/binary_sensor/home_sweet_home_grid_status_2/state",

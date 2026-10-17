@@ -78,14 +78,14 @@ func TestFormatCombinedDebug_LowVoltage(t *testing.T) {
 	}
 }
 
-// The common case: bus healthy, ceiling at max, nothing constrained. Neither
+// The common case: bus healthy, nothing throttling. Neither
 // voltage row should take up space — the voltage is displayed better elsewhere.
 func TestFormatCombinedDebug_VoltageRowsHiddenWhenNotCurtailing(t *testing.T) {
 	dynamic := DynamicDebugInfo{
 		Auto:        true,
 		Priority:    "Default Supply",
 		BusVoltage:  230.0, // ordinary voltage, nowhere near the limit
-		VoltageCapW: dynamicMaxDischargeW,
+		VoltageCapW: 1150,  // tracking just above output, as it always does
 		ExportCapW:  dynamicMaxDischargeW,
 	}
 
@@ -102,7 +102,7 @@ func TestFormatCombinedDebug_VoltageRowsHiddenWhenNotCurtailing(t *testing.T) {
 	}
 }
 
-// Once the integrator curtails, both rows appear so the ceiling can be watched
+// Once the bus is high enough to hold or throttle, both rows appear so the ceiling can be watched
 // settling or hunting against the voltage driving it.
 func TestFormatCombinedDebug_VoltageRowsShownWhenCurtailing(t *testing.T) {
 	dynamic := DynamicDebugInfo{

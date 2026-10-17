@@ -13,8 +13,14 @@ func makeTestDynamicState() *DynamicInverterState {
 		houseLoadMax:        governor.NewRollingMinMaxSeconds(60),
 		houseSideGeneration: governor.NewRollingMinMaxSeconds(60),
 		cvlVoltageEMA:       governor.NewEMA(cvlVoltageEMATau),
+		mp2PowerMax:         governor.NewRollingMinMaxSeconds(mp2PowerLagWindowSeconds),
 	}
 }
+
+// noVoltLimit isolates the other constraints from the voltage ceiling, which
+// starts bounded to the (idle) Multiplus output and so would cap every
+// discharge test at the at-limit margin.
+var noVoltLimit = safetyConstraint(false)
 
 func makeBaseDynamicInput() DynamicInput {
 	return DynamicInput{
@@ -293,7 +299,7 @@ func TestCalculateDynamic_Safety_HighFreq_PreventsDischarge(t *testing.T) {
 	input.ACFreqP100_5Min = 53.0
 	input.HouseLoad = 1000 // would normally discharge 1000W
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 0.0, setpoint, 0.001)
 	assert.Equal(t, prioritySafety, debug.Priority)
 	assert.True(t, debug.Safety)
@@ -305,7 +311,7 @@ func TestCalculateDynamic_Safety_GridOffHighPowerwall(t *testing.T) {
 	input.GridAvailable = false
 	input.PowerwallSOC = 91.0
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 0.0, setpoint, 0.001)
 	assert.Equal(t, prioritySafety, debug.Priority)
 	assert.True(t, debug.Safety)
@@ -323,7 +329,7 @@ func TestCalculateDynamic_Safety_HighFreq_AllowsForcedCharge(t *testing.T) {
 	input.Inverter1to9Power = 3000
 	input.PowerhouseNetPower = 5000
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 3500.0, setpoint, 0.001)
 	assert.True(t, debug.Safety)
 }
@@ -333,7 +339,7 @@ func TestCalculateDynamic_DefaultSupply_NoGeneration(t *testing.T) {
 	input := makeBaseDynamicInput()
 	input.HouseLoad = 2000 // 2kW needed, no generation
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, "Supply", debug.Priority)
 	// target = 2000 - 0 = 2000, desired = -2000, headroom = 4500 → setpoint = -2000
 	assert.InDelta(t, -2000.0, setpoint, 0.001)
@@ -349,7 +355,7 @@ func TestCalculateDynamic_DefaultSupply_CappedByHeadroom(t *testing.T) {
 	input.Solar2Power = 0
 	input.PowerhouseNetPower = 4000
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, "Supply", debug.Priority)
 	assert.InDelta(t, -500.0, setpoint, 0.001)
 }
@@ -359,7 +365,7 @@ func TestCalculateDynamic_DefaultSupply_CappedAt3000(t *testing.T) {
 	input := makeBaseDynamicInput()
 	input.HouseLoad = 5000 // large load, no generation → discharge cap at 3000W
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, "Supply", debug.Priority)
 	assert.InDelta(t, -3000.0, setpoint, 0.001)
 }
@@ -374,7 +380,7 @@ func TestCalculateDynamic_ChargeFromSurplus(t *testing.T) {
 	// target = 500 - (1000+500+1000) = -2000 → surplus = 2000W → charge 2000W
 	// headroom = 4500-1000-1000 = 2500 → setpoint = 2000
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 2000.0, setpoint, 0.001)
 }
@@ -387,7 +393,7 @@ func TestCalculateDynamic_ChargeFromSurplus_SmallSurplus(t *testing.T) {
 	input.Solar1Power = 1100
 	// target = 1000 - 1100 = -100 → surplus = 100W → charge 100W
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 100.0, setpoint, 0.001)
 }
@@ -404,7 +410,7 @@ func TestCalculateDynamic_ChargeFromSurplus_ForcedChargeByTransferLimit(t *testi
 	input.Inverter1to9Power = 4000
 	input.PowerhouseNetPower = 6000
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 3500.0, setpoint, 0.001)
 }
@@ -421,7 +427,7 @@ func TestCalculateDynamic_ChargeFromSurplus_CapAt3500(t *testing.T) {
 	// headroom = 4500-4000 = 500W, so max discharge is -500W (or no discharge)
 	// desired = 3500 (charge), 3500 > 0 so no clamping needed, just cap at 3500
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 3500.0, setpoint, 0.001)
 }
@@ -441,7 +447,7 @@ func TestCalculateDynamic_CCLOverflow_SwitchesChargeToDischarge(t *testing.T) {
 	input.Battery3CCL = 80
 	input.Battery3Voltage = 53
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, -265.0, setpoint, 0.001)
 	assert.InDelta(t, 265.0, debug.CCLOverflowW, 0.001)
 }
@@ -456,7 +462,7 @@ func TestCalculateDynamic_CCLOverflow_Safety_NoForcedDischarge(t *testing.T) {
 	input.Battery3CCL = 80
 	input.Battery3Voltage = 53
 
-	setpoint, _ := calculateDynamicSetpoint(input, state)
+	setpoint, _ := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 0.0, setpoint, 0.001)
 }
 
@@ -470,7 +476,7 @@ func TestCalculateDynamic_CCLOverflow_HigherDemandWins(t *testing.T) {
 	input.Battery3CCL = 80
 	input.Battery3Voltage = 53
 
-	setpoint, _ := calculateDynamicSetpoint(input, state)
+	setpoint, _ := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, -2000.0, setpoint, 0.001)
 }
 
@@ -486,7 +492,7 @@ func TestCalculateDynamic_CCLChargeCap_LimitsCharge(t *testing.T) {
 	input.Battery3CCL = 80
 	input.Battery3Voltage = 53
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 1855.0, setpoint, 0.001)
 	assert.InDelta(t, 1855.0, debug.CCLChargeMaxW, 0.001)
@@ -504,7 +510,7 @@ func TestCalculateDynamic_CCLChargeCap_HiddenWhenNotBinding(t *testing.T) {
 	input.Battery3CCL = 80
 	input.Battery3Voltage = 53
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, "Supply", debug.Priority)
 	assert.InDelta(t, -2000.0, setpoint, 0.001)
 	assert.InDelta(t, dynamicMaxChargeW, debug.CCLChargeMaxW, 0.001) // not binding → hidden
@@ -522,7 +528,7 @@ func TestCalculateDynamic_CCLChargeCap_ShownWhenNear(t *testing.T) {
 	input.Battery3CCL = 80
 	input.Battery3Voltage = 53
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 1600.0, setpoint, 0.001)
 	assert.InDelta(t, 1855.0, debug.CCLChargeMaxW, 0.001) // within 25% → shown
 }
@@ -532,7 +538,7 @@ func TestCalculateDynamic_Headroom_HiddenWhenAmple(t *testing.T) {
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 
-	_, debug := calculateDynamicSetpoint(input, state)
+	_, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.False(t, debug.HeadroomActive)
 }
 
@@ -545,7 +551,7 @@ func TestCalculateDynamic_Headroom_ShownWhenDischargeNearCap(t *testing.T) {
 	input.Solar1Power = 0
 	input.PowerhouseNetPower = 4000
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, -500.0, setpoint, 0.001)
 	assert.True(t, debug.HeadroomActive)
 }
@@ -563,7 +569,7 @@ func TestCalculateDynamic_CVLOverflow_SwitchesChargeToDischarge(t *testing.T) {
 	input.Battery3Voltage = 55.2
 
 	expected := cvlOverCorrectFraction() * 500
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, -expected, setpoint, 0.001)
 	assert.InDelta(t, expected, debug.CVLOverflowW, 0.001)
 }
@@ -578,7 +584,7 @@ func TestCalculateDynamic_CVLOverflow_HigherSupplyWins(t *testing.T) {
 	midOffset := (cvlOverflowRampStartV + cvlOverflowTargetOffsetV) / 2
 	input.Battery3Voltage = 55.2 - midOffset
 
-	setpoint, _ := calculateDynamicSetpoint(input, state)
+	setpoint, _ := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, -2000.0, setpoint, 0.001)
 }
 
@@ -594,7 +600,7 @@ func TestCalculateDynamic_CVLOverflow_SOCFull_DischargesAnyway(t *testing.T) {
 	input.Battery3Voltage = 55.2
 
 	expected := cvlOverCorrectFraction() * 500
-	setpoint, _ := calculateDynamicSetpoint(input, state)
+	setpoint, _ := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, -expected, setpoint, 0.001)
 }
 
@@ -621,7 +627,7 @@ func TestCalculateDynamic_ChargeFromSurplus_OverLimitPreservesHigherCharge(t *te
 	input.Inverter1to9Power = 3000
 	input.PowerhouseNetPower = 5000
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 3500.0, setpoint, 0.001)
 }
@@ -634,7 +640,7 @@ func TestCalculateDynamic_Headroom(t *testing.T) {
 	input.Inverter1to9Power = 1000
 	input.PowerhouseNetPower = 1500
 
-	_, debug := calculateDynamicSetpoint(input, state)
+	_, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	// headroom = 4500 - 1500 = 3000
 	assert.InDelta(t, 3000.0, debug.Headroom, 0.001)
 	assert.InDelta(t, input.Battery3SOC, debug.Battery3SOC, 0.001)
@@ -699,7 +705,7 @@ func TestCalculateDynamic_ChargeLimit_DeficitCaps(t *testing.T) {
 	input.ForecastRemainingWh = 500
 	input.DetailedForecast = makeForecast(time.Now(), 5)
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 1176.0, setpoint, 2.0) // small tolerance for wall-clock between calls
 	assert.InDelta(t, 1176.0, debug.B3ChargeMaxW, 2.0)
@@ -713,7 +719,7 @@ func TestCalculateDynamic_ChargeLimit_AtTarget_NoVoluntaryCharge(t *testing.T) {
 	input.HouseLoad = 0
 	input.Solar1Power = 2000
 
-	setpoint, _ := calculateDynamicSetpoint(input, state)
+	setpoint, _ := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 0.0, setpoint, 0.001)
 }
 
@@ -728,7 +734,7 @@ func TestCalculateDynamic_ChargeLimit_AtTarget_TransferLimitStillCharges(t *test
 	input.Inverter1to9Power = 3000
 	input.PowerhouseNetPower = 5000 // over 4500W limit by 500W
 
-	setpoint, _ := calculateDynamicSetpoint(input, state)
+	setpoint, _ := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 500.0, setpoint, 0.001)
 }
 
@@ -740,7 +746,7 @@ func TestCalculateDynamic_ChargeLimit_AtTarget_SupplyUnaffected(t *testing.T) {
 	input.HouseLoad = 2000
 	input.Solar1Power = 0
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, "Supply", debug.Priority)
 	assert.InDelta(t, -2000.0, setpoint, 0.001)
 }
@@ -757,7 +763,7 @@ func TestCalculateDynamic_ChargeLimit_AtTarget_CCLOverflowUnaffected(t *testing.
 	input.Battery3CCL = 80
 	input.Battery3Voltage = 53
 
-	setpoint, _ := calculateDynamicSetpoint(input, state)
+	setpoint, _ := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, -265.0, setpoint, 0.001)
 }
 
@@ -797,7 +803,7 @@ func TestCalculateDynamic_B3DischargeLimit_SupplyCapped(t *testing.T) {
 	input.HouseLoad = 2000
 	input.Solar1Power = 0
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, "Supply", debug.Priority)
 	assert.InDelta(t, -1500.0, setpoint, 0.001)
 	assert.InDelta(t, 1500.0, debug.B3DischargeMaxW, 0.001)
@@ -811,7 +817,7 @@ func TestCalculateDynamic_B3DischargeLimit_AtZero_NoDischarge(t *testing.T) {
 	input.HouseLoad = 2000
 	input.Solar1Power = 0
 
-	setpoint, _ := calculateDynamicSetpoint(input, state)
+	setpoint, _ := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 0.0, setpoint, 0.001)
 }
 
@@ -845,7 +851,7 @@ func TestCalculateDynamic_PWOffset_AddsToSupplyDischarge(t *testing.T) {
 	input.HouseLoad = 2000
 	input.Solar1Power = 0
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, "Supply", debug.Priority)
 	assert.InDelta(t, -2125.0, setpoint, 0.001)
 	assert.InDelta(t, 125.0, debug.PWOffsetW, 0.001)
@@ -859,7 +865,7 @@ func TestCalculateDynamic_PWOffset_ReducesChargeNotForcesDischarge(t *testing.T)
 	input.HouseLoad = 0
 	input.Solar1Power = 100 // 100W surplus → small charge intent
 
-	setpoint, _ := calculateDynamicSetpoint(input, state)
+	setpoint, _ := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 0.0, setpoint, 0.001)
 }
 
@@ -871,7 +877,7 @@ func TestCalculateDynamic_PWOffset_ReducesLargeCharge(t *testing.T) {
 	input.HouseLoad = 0
 	input.Solar1Power = 1000
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, priorityCharge, debug.Priority)
 	assert.InDelta(t, 750.0, setpoint, 0.001)
 }
@@ -885,7 +891,7 @@ func TestCalculateDynamic_PWOffset_CappedByB3DischargeLimit(t *testing.T) {
 	input.HouseLoad = 2000
 	input.Solar1Power = 0
 
-	setpoint, _ := calculateDynamicSetpoint(input, state)
+	setpoint, _ := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 0.0, setpoint, 0.001)
 }
 
@@ -925,7 +931,7 @@ func TestDynamicOverflowScenario(t *testing.T) {
 	t.Logf("overflowA=%.1fA  overflowW=%.0fW (instantaneous, no ramp)", overflowA, overflowW)
 	t.Logf("%-10s  %-10s  %-12s", "setpoint W", "cclOverflW", "priority")
 
-	setpoint, debug := calculateDynamicSetpoint(input, state)
+	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	t.Logf("%-10.0f  %-10.0f  %-12s", setpoint, debug.CCLOverflowW, debug.Priority)
 }
 
@@ -994,15 +1000,15 @@ func TestExportLimit_ChargeIntentAlwaysPassesThrough(t *testing.T) {
 	assert.InDelta(t, 1000.0, got, 0.001)
 }
 
-// --- voltage discharge limit (integrator) tests ---
+// --- voltage discharge limit tests ---
 
 func newVoltageState() *DynamicInverterState {
-	return &DynamicInverterState{mp2VoltageEMA: governor.NewEMA(mp2VoltageEMATau)}
+	return &DynamicInverterState{}
 }
 
-// The integrator steps by measured time, not by the keepalive tick: the
-// controller recalculates on every inbound reading, so assuming dynamicTick would
-// slew the ceiling several times faster than the rates allow.
+// The ceiling steps by measured time, not by the keepalive tick: the controller
+// recalculates on every inbound reading, so assuming dynamicTick would slew the
+// ceiling several times faster than the rates allow.
 func TestVoltageCapDt_MeasuresElapsed(t *testing.T) {
 	state := newVoltageState()
 	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -1026,121 +1032,158 @@ func TestVoltageCapDt_ClampsStallAndBackwardsClock(t *testing.T) {
 	assert.InDelta(t, 0.0, voltageCapDt(state, t0), 0.001)
 }
 
-// Over target, the ceiling walks down at the shed rate and no faster. The rate is
-// the whole stability argument, so it is asserted exactly.
-func TestVoltageCap_ShedsAtRateWhenOverTarget(t *testing.T) {
+// The incident case: Multiplus idle, voltage fine, so the old ceiling recovered
+// to 3kW and let a CCL-overflow step jump straight there. The ceiling must sit
+// just above what is actually running instead.
+func TestVoltageCap_NeverWindsUpAboveActualOutput(t *testing.T) {
 	state := newVoltageState()
-	over := voltageTargetV + voltageDeadbandV + 1.0
+	for i := 0; i < 100; i++ {
+		updateVoltageCap(state, 245, 0, 1)
+	}
+	// Idle output: the ceiling sits at the margin plus at most one relax step.
+	assert.InDelta(t, voltageAtLimitMarginW+voltageRelaxRateWps, state.voltageCapW, 0.001)
 
-	c := updateVoltageCap(state, over, dynamicTickSeconds)
-	assert.InDelta(t, dynamicMaxDischargeW-voltageShedRateWps*dynamicTickSeconds, c.MaxDischarge, 0.001)
-
-	updateVoltageCap(state, over, dynamicTickSeconds)
-	assert.InDelta(t, dynamicMaxDischargeW-2*voltageShedRateWps*dynamicTickSeconds, state.voltageCapW, 0.001)
+	cclStep := DynamicModeConstraint{MinDischarge: 2500, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
+	c := updateVoltageCap(state, 245, 0, 1)
+	assert.InDelta(t, -c.MaxDischarge, cclStep.add(c).Setpoint(), 0.001)
+	assert.LessOrEqual(t, c.MaxDischarge, voltageAtLimitMarginW+voltageRelaxRateWps)
 }
 
-// Under target it recovers, and deliberately slower than it sheds.
-func TestVoltageCap_RecoversSlowerThanItSheds(t *testing.T) {
+// Through the whole chain: Multiplus idle, solar 3+4 well over a dropped CCL, so
+// CCL overflow demands ~2.6kW. The setpoint must start from the idle output, not
+// jump to the demand.
+func TestDynamicSetpoint_CCLOverflowStepHeldByVoltageCeiling(t *testing.T) {
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 0
+	input.MultiplusACInVoltage = 248.6
+	input.Battery3CCL = 50
+	input.Solar3BatteryCurrent = 50
+	input.Solar4BatteryCurrent = 50
+
+	setpoint, _ := calculateDynamicSetpoint(input, state, stepVoltageCap(input, state))
+	assert.InDelta(t, -voltageAtLimitMarginW, setpoint, 0.001)
+}
+
+// Pressed against the ceiling with voltage low, it relaxes at the relax rate.
+func TestVoltageCap_RelaxesWhenAtLimitAndLow(t *testing.T) {
 	state := newVoltageState()
 	state.voltageCapInit = true
 	state.voltageCapW = 1000
 
-	updateVoltageCap(state, voltageTargetV-voltageDeadbandV-1.0, dynamicTickSeconds)
-	assert.InDelta(t, 1000+voltageRecoverRateWps*dynamicTickSeconds, state.voltageCapW, 0.001)
-	assert.Less(t, voltageRecoverRateWps, voltageShedRateWps)
+	updateVoltageCap(state, 248.6, 1000, 1)
+	assert.InDelta(t, 1000+voltageRelaxRateWps, state.voltageCapW, 0.001)
 }
 
-// Inside the deadband nothing moves — this is what stops the Multiplus's ~1V
-// quantisation nudging the ceiling every single tick.
-func TestVoltageCap_DeadbandHolds(t *testing.T) {
+// Voltage low but the output isn't using the ceiling: no relax, and the ceiling
+// is pulled down to the output plus margin.
+func TestVoltageCap_NoRelaxWhenNotAtLimit(t *testing.T) {
 	state := newVoltageState()
 	state.voltageCapInit = true
-	state.voltageCapW = 1500
+	state.voltageCapW = 1000
 
-	for _, v := range []float64{voltageTargetV, voltageTargetV + voltageDeadbandV*0.9, voltageTargetV - voltageDeadbandV*0.9} {
-		updateVoltageCap(state, v, dynamicTickSeconds)
-		assert.InDelta(t, 1500.0, state.voltageCapW, 0.001, "moved at %.2fV", v)
+	updateVoltageCap(state, 248.6, 400, 1)
+	assert.InDelta(t, 400+voltageAtLimitMarginW, state.voltageCapW, 0.001)
+}
+
+// Between the relax and easy-throttle thresholds the ceiling holds.
+func TestVoltageCap_HoldsInBand(t *testing.T) {
+	state := newVoltageState()
+	state.voltageCapInit = true
+	state.voltageCapW = 1000
+
+	for _, v := range []float64{249.0, 249.6, 250.0} {
+		updateVoltageCap(state, v, 1000, 1)
+		assert.InDelta(t, 1000.0, state.voltageCapW, 0.001, "moved at %.1fV", v)
 	}
 }
 
-// Clamped at both ends; clamping is the anti-windup, so sustained over-voltage
-// must not drive the ceiling negative and bank curtailment it can't use.
-func TestVoltageCap_ClampsBothEnds(t *testing.T) {
+// Over the thresholds it sheds from the current output, not from a ceiling
+// that may be well above it, at the easy then hard rate.
+func TestVoltageCap_ThrottlesFromActualOutput(t *testing.T) {
+	cases := []struct {
+		v    float64
+		rate float64
+	}{
+		{250.6, voltageEasyShedRateWps},
+		{251.6, voltageHardShedRateWps},
+	}
+	for _, tc := range cases {
+		state := newVoltageState()
+		state.voltageCapInit = true
+		state.voltageCapW = 1100 // within margin of the output
+		updateVoltageCap(state, tc.v, 1000, 1)
+		assert.InDelta(t, 1000-tc.rate, state.voltageCapW, 0.001, "at %.1fV", tc.v)
+	}
+	assert.Greater(t, voltageHardShedRateWps, voltageEasyShedRateWps)
+}
+
+// Sustained over-voltage bottoms out at 0 rather than banking curtailment.
+func TestVoltageCap_ClampsAtZero(t *testing.T) {
 	state := newVoltageState()
-	for i := 0; i < 500; i++ {
-		updateVoltageCap(state, 260, dynamicTickSeconds)
+	for i := 0; i < 100; i++ {
+		updateVoltageCap(state, 255, 0, 1)
 	}
 	assert.InDelta(t, 0.0, state.voltageCapW, 0.001)
-
-	for i := 0; i < 5000; i++ {
-		updateVoltageCap(state, 240, dynamicTickSeconds)
-	}
-	assert.InDelta(t, dynamicMaxDischargeW, state.voltageCapW, 0.001)
 }
 
-// A fresh state must start at full discharge, not at the zero value.
-func TestVoltageCap_StartsAtFullDischarge(t *testing.T) {
-	state := newVoltageState()
-	c := updateVoltageCap(state, 0, dynamicTickSeconds) // no reading
-	assert.InDelta(t, dynamicMaxDischargeW, c.MaxDischarge, 0.001)
-}
-
-// No reading holds the ceiling. Integrating up on absent data would silently
-// disable the limit, which is the failure mode that matters here.
+// No reading holds the ceiling (still bounded to the output). Relaxing on
+// absent data would silently disable the limit.
 func TestVoltageCap_NoReadingHolds(t *testing.T) {
 	state := newVoltageState()
 	state.voltageCapInit = true
 	state.voltageCapW = 800
 
-	updateVoltageCap(state, 0, dynamicTickSeconds)
+	updateVoltageCap(state, 0, 800, 1)
 	assert.InDelta(t, 800.0, state.voltageCapW, 0.001)
 }
 
 // Charging is never restricted: it pulls voltage down, so it is the remedy.
 func TestVoltageCap_NeverLimitsCharging(t *testing.T) {
 	state := newVoltageState()
-	for i := 0; i < 500; i++ {
-		updateVoltageCap(state, 260, dynamicTickSeconds)
+	for i := 0; i < 100; i++ {
+		updateVoltageCap(state, 255, 0, 1)
 	}
-	c := updateVoltageCap(state, 260, dynamicTickSeconds)
+	c := updateVoltageCap(state, 255, 0, 1)
 	assert.InDelta(t, dynamicMaxChargeW, c.MaxCharge, 0.001)
 
 	got := DynamicModeConstraint{Target: 1000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(c).Setpoint()
 	assert.InDelta(t, 1000.0, got, 0.001)
 }
 
-// The Shelly average calibrates the Multiplus's bias out of the estimate.
-func TestEstimateBusVoltage_ShellyCalibratesMP2Bias(t *testing.T) {
-	state := newVoltageState()
-	// MP2 reads 2V low against the accurate reference.
-	v := estimateBusVoltage(state, 250.0, 252.0)
-	assert.InDelta(t, 252.0, v, 0.001)
-	assert.InDelta(t, 2.0, state.voltageOffsetV, 0.001)
+// --- MP2 lag compensation in the transfer/export limits ---
+
+// The incident feedback loop: net power is stale (doesn't yet include the
+// Multiplus's new output) while the Multiplus reading is fresh. Stripping the
+// fresh reading out of the stale total counted the new discharge as headroom.
+func TestDynamicSetpoint_HeadroomNotInflatedByMP2Ramp(t *testing.T) {
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 5000 // Supply wants as much as it can get
+	input.PowerhouseNetPower = 3000
+	input.MultiplusACPower = 0
+	_, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
+	assert.InDelta(t, 1500.0, debug.Headroom, 0.001)
+
+	// Multiplus now discharging 1500W; net power hasn't caught up.
+	input.MultiplusACPower = -1500
+	_, debug = calculateDynamicSetpoint(input, state, noVoltLimit)
+	assert.InDelta(t, 1500.0, debug.Headroom, 0.001, "fresh MP2 discharge must not count as headroom")
 }
 
-// Between bursts the fast source still drives the estimate, carrying the offset.
-func TestEstimateBusVoltage_FastSourceDrivesBetweenBursts(t *testing.T) {
-	state := newVoltageState()
-	estimateBusVoltage(state, 250.0, 252.0) // burst: learn +2.0 offset
+func TestDynamicSetpoint_ExportHeadroomNotInflatedByMP2Ramp(t *testing.T) {
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 5000
+	input.SitePower = -5000 // exporting 5000 with the Multiplus idle
+	input.MultiplusACPower = 0
+	calculateDynamicSetpoint(input, state, noVoltLimit)
 
-	// No Shelly reading; MP2 rises. EMA lags, so assert the direction and that
-	// the learned offset is still applied rather than an exact value.
-	v := estimateBusVoltage(state, 254.0, 0)
-	assert.Greater(t, v, 252.0)
-	assert.InDelta(t, 2.0, state.voltageOffsetV, 0.001)
-}
-
-// With neither source reporting the estimate is 0, which updateVoltageCap treats
-// as "unknown" and holds on.
-func TestEstimateBusVoltage_NoSources(t *testing.T) {
-	state := newVoltageState()
-	assert.InDelta(t, 0.0, estimateBusVoltage(state, 0, 0), 0.001)
-}
-
-// Falls back to the slow source alone when the Multiplus topic never arrives.
-func TestEstimateBusVoltage_ShellyOnlyFallback(t *testing.T) {
-	state := newVoltageState()
-	assert.InDelta(t, 251.5, estimateBusVoltage(state, 0, 251.5), 0.001)
+	// Multiplus discharging 2000W; site power hasn't caught up. Export headroom
+	// must still be 500W, not 2500W.
+	input.MultiplusACPower = -2000
+	setpoint, _ := calculateDynamicSetpoint(input, state, noVoltLimit)
+	assert.GreaterOrEqual(t, setpoint, -500.0-0.001)
 }
 
 // TestCalculateDynamic_ChargeLimit_OvernightZeroForecast covers the regression where an
@@ -1153,7 +1196,7 @@ func TestCalculateDynamic_ChargeLimit_OvernightZeroForecast(t *testing.T) {
 	night := makeBaseDynamicInput()
 	night.Battery3SOC = 80
 	night.ForecastRemainingWh = 0
-	calculateDynamicSetpoint(night, state)
+	calculateDynamicSetpoint(night, state, noVoltLimit)
 
 	// Morning tick on the same state: Solcast has published the new day's forecast.
 	// gap=7830, expected solar=3.9*500=1950 → deficit=5880 over ~5h → ~1176W.
@@ -1164,6 +1207,6 @@ func TestCalculateDynamic_ChargeLimit_OvernightZeroForecast(t *testing.T) {
 	morning.ForecastRemainingWh = 500
 	morning.DetailedForecast = makeForecast(time.Now(), 5)
 
-	_, debug := calculateDynamicSetpoint(morning, state)
+	_, debug := calculateDynamicSetpoint(morning, state, noVoltLimit)
 	assert.InDelta(t, 1176.0, debug.B3ChargeMaxW, 2.0)
 }

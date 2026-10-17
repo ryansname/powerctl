@@ -64,12 +64,14 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 	if dynamic.ExportCapW < dynamicMaxDischargeW {
 		rows = append(rows, [2]string{"Export Limit", fmt.Sprintf("%.0fW", dynamic.ExportCapW)})
 	}
-	// Voltage rows appear only once the integrator has actually curtailed, i.e.
-	// the ceiling has come off its maximum. A ceiling pinned at max is not
-	// constraining anything, and the bus voltage is displayed better elsewhere,
-	// so neither earns a row until this limit is the one biting. Once it is, the
-	// pair moving together is what distinguishes settling from hunting.
-	if dynamic.VoltageCapW < dynamicMaxDischargeW {
+	// Voltage rows appear only while the voltage limit is holding or throttling
+	// (bus at/above the relax threshold), or curtailed with no reading. The
+	// ceiling always tracks just above actual output, so its value alone says
+	// nothing; once the bus is high, the pair moving together is what
+	// distinguishes settling from hunting.
+	voltageActive := dynamic.BusVoltage >= voltageRelaxV ||
+		(dynamic.BusVoltage == 0 && dynamic.VoltageCapW < dynamicMaxDischargeW)
+	if voltageActive {
 		if dynamic.BusVoltage > 0 {
 			rows = append(rows, [2]string{"Bus V", fmt.Sprintf("%.1fV", dynamic.BusVoltage)})
 		}

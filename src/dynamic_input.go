@@ -14,10 +14,6 @@ type DynamicInputConfig struct {
 	Inverter1to9PowerTopics   []string
 	MultiplusACPowerTopic     string
 	MultiplusACInVoltageTopic string
-	// InverterVoltageTopics are the per-inverter Shelly AC voltage sensors on the
-	// powerhouse bus. Averaged (skipping absent ones) into a slow but accurate
-	// reference that calibrates the Multiplus's own coarse reading.
-	InverterVoltageTopics     []string
 	SitePowerTopic            string
 	Battery3SOCTopic          string
 	GridStatusTopic           string
@@ -71,14 +67,9 @@ type DynamicInput struct {
 	Solar4BatteryCurrent  float64 // A
 	PowerhouseNetPower    float64 // W, actual flow across the powerhouse↔house cable
 	// MultiplusACInVoltage is grid voltage as the Multiplus measures it: fast
-	// (~2s) but quantised to a ~0.9875V lattice, so it is smoothed and offset
-	// against InverterVoltageAvg before use.
+	// (~2s) but quantised to a ~1V lattice. Used raw — the voltage limit only
+	// needs to know whether to throttle, and latency matters more than precision.
 	MultiplusACInVoltage float64 // V
-	// InverterVoltageAvg is the mean of the powerhouse Shelly voltage sensors,
-	// skipping any that are absent. Slow (~60s, all reporting in one burst) but
-	// precise (0.1V) and spatially averaged, so it serves as the accuracy
-	// reference rather than as a control input. Zero when none are reporting.
-	InverterVoltageAvg float64 // V
 	// SitePower is whole-house flow at the grid meter: POSITIVE = importing,
 	// NEGATIVE = exporting (the convention sankey/config.go already encodes, where
 	// "Selling Back" is this sensor multiplied by -1). Includes the Multiplus's own
@@ -176,29 +167,7 @@ func (c DynamicInputConfig) Topics() []string {
 	}
 	topics = append(topics, c.Inverter1to9PowerTopics...)
 	topics = append(topics, c.Solar34PowerTopics...)
-	topics = append(topics, c.InverterVoltageTopics...)
 	return topics
-}
-
-// averageNonZero means the given topics, skipping any reading exactly 0.
-//
-// Skipping zeros is a safety requirement, not tidiness: an absent or unavailable
-// sensor reads 0, and folding that into the mean would drag it tens of volts
-// below the real bus voltage — masking an over-voltage precisely when a sensor
-// has dropped out. Returns 0 when nothing is reporting, which callers treat as
-// "no reading" rather than as a valid low voltage.
-func averageNonZero(data DisplayData, topics []string) float64 {
-	sum, n := 0.0, 0
-	for _, topic := range topics {
-		if v := data.GetFloat(topic).Current; v != 0 {
-			sum += v
-			n++
-		}
-	}
-	if n == 0 {
-		return 0
-	}
-	return sum / float64(n)
 }
 
 // ExtractDynamicInput extracts values from DisplayData for the dynamic controller.
@@ -240,7 +209,6 @@ func ExtractDynamicInput(data DisplayData, config DynamicInputConfig) DynamicInp
 		// Already in W: statsWorker converts this topic via kiloToBaseUnitTopics.
 		SitePower:            data.GetFloat(config.SitePowerTopic).Current,
 		MultiplusACInVoltage: data.GetFloat(config.MultiplusACInVoltageTopic).Current,
-		InverterVoltageAvg:   averageNonZero(data, config.InverterVoltageTopics),
 		// Already in Wh: statsWorker converts this topic via kiloToBaseUnitTopics.
 		ForecastRemainingWh: data.GetFloat(config.ForecastRemainingTopic).Current,
 		DetailedForecast:    forecast,
