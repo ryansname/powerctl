@@ -85,7 +85,7 @@ Goroutine-based with message passing via channels. All source code in `src/`.
 
 15. **sankeyWorker** (src/main.go) - Generates Sankey chart configs at startup via `src/sankey` package
 
-16. **cerboKeepaliveWorker** (src/powerhouse3.go) - Sends Victron GX keepalive every 50s so Cerbo keeps publishing N/ topics
+16. **cerboKeepaliveWorker** (src/powerhouse3.go) - Sends Victron GX keepalive every 50s so Cerbo keeps publishing N/ topics. Also re-asserts `Hub4/DoNotFeedInOvervoltage=1` each tick: in ESS external control that flag is ours, and its feed-in default lets the Multiplus invert any overvoltage regardless of setpoint (tripped the fleet 2026-10-17)
 
 17. **tankLevelsWorker** (src/tank_levels_worker.go) - Computes water tank fill % from 5m Tukey-trimean-smoothed ADC voltages + HA calibration input_numbers; publishes powerctl-owned sensors (Water Tanks device). Invalid data (sensor offline, degenerate calibration) ⇒ no publish ⇒ entities expire to unavailable. Spec: `specs/water-tanks.md`
 

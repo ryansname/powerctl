@@ -51,6 +51,7 @@ func announceDiscovery(s *MQTTSender, batteries []BatteryConfig) {
 	logErr("inverter 10 AC power entity", s.CreateMultiplusACPowerEntity())
 	logErr("inverter 10 AC in voltage entity", s.CreateMultiplusACInVoltageEntity())
 	logErr("inverter 10 DC current entity", s.CreateMultiplusDCCurrentEntity())
+	logErr("inverter 10 no overvoltage feed-in entity", s.CreateMultiplusNoOvervoltageFeedInEntity())
 	logErr("Solar 3 MPPT mode entity", s.CreateSolarMpptModeEntity("Solar 3", TopicSolarcharger279MppMode))
 	logErr("Solar 4 MPPT mode entity", s.CreateSolarMpptModeEntity("Solar 4", TopicSolarcharger278MppMode))
 	logErr("Battery 3 DC power entity", s.CreateBattery3DCPowerEntity())

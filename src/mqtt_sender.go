@@ -642,6 +642,56 @@ func (s *MQTTSender) CreateMultiplusACPowerEntity() error {
 	return nil
 }
 
+// CreateMultiplusNoOvervoltageFeedInEntity exposes the Multiplus's
+// DoNotFeedInOvervoltage flag, which powerctl re-asserts on the Cerbo keepalive.
+// Reading OFF means the Multiplus is back to inverting overvoltage regardless of
+// setpoint — see TopicMultiplusNoOvervoltageFeedInWrite.
+func (s *MQTTSender) CreateMultiplusNoOvervoltageFeedInEntity() error {
+	type haDeviceConfig struct {
+		Identifiers []string `json:"identifiers"`
+		Name        string   `json:"name"`
+		Model       string   `json:"model,omitempty"`
+	}
+
+	type haBinarySensorConfig struct {
+		Name          string         `json:"name"`
+		UniqueId      string         `json:"unique_id"`
+		StateTopic    string         `json:"state_topic"`
+		ValueTemplate string         `json:"value_template"`
+		PayloadOn     string         `json:"payload_on"`
+		PayloadOff    string         `json:"payload_off"`
+		Device        haDeviceConfig `json:"device"`
+	}
+
+	config := haBinarySensorConfig{
+		Name:          "No Overvoltage Feed-in",
+		UniqueId:      "powerhouse_inverter_10_no_overvoltage_feed_in",
+		StateTopic:    TopicMultiplusNoOvervoltageFeedInRead,
+		ValueTemplate: valueTemplateJSONValue,
+		PayloadOn:     "1",
+		PayloadOff:    "0",
+		Device: haDeviceConfig{
+			Identifiers: []string{deviceIDInverter10},
+			Name:        deviceNameInverter10,
+			Model:       deviceModelMultiplus2,
+		},
+	}
+
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	s.Send(MQTTMessage{
+		Topic:   "homeassistant/binary_sensor/powerhouse_inverter_10_no_overvoltage_feed_in/config",
+		Payload: payload,
+		QoS:     2,
+		Retain:  true,
+	})
+
+	return nil
+}
+
 // CreateMultiplusACInVoltageEntity creates the Multiplus II AC input (grid) voltage
 // sensor entity via MQTT discovery. powerctl consumes the voltage back off HA's
 // statestream rather than parsing the Cerbo's {"value":N} payload itself — same
