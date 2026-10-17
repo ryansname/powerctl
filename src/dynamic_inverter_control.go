@@ -137,11 +137,11 @@ const (
 
 	// voltageRelaxV: below this the ceiling may rise, if the output is at it.
 	// Between this and voltageThrottleV the ceiling holds.
-	voltageRelaxV = 249.0
+	voltageRelaxV = 251.0
 
 	// Ceiling slew rates. Relaxing overshoot ≈ rate × lag × 3.3 V/kW: 50 W/s over
-	// ~4s of reading lag is ~0.7V, so a relax that starts below 249 tops out
-	// well before the throttle threshold.
+	// ~4s of reading lag is ~0.7V, so a relax that starts below 251 tops out
+	// before the throttle threshold.
 	voltageShedRateWps  = 50.0
 	voltageRelaxRateWps = 50.0
 

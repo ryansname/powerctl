@@ -1092,7 +1092,7 @@ func TestVoltageCap_HoldsInBand(t *testing.T) {
 	state.voltageCapInit = true
 	state.voltageCapW = 1000
 
-	for _, v := range []float64{249.0, 249.6, 250.6, 251.6, 252.0} {
+	for _, v := range []float64{251.0, 251.6, 252.0} {
 		updateVoltageCap(state, v, 1000, 1)
 		assert.InDelta(t, 1000.0, state.voltageCapW, 0.001, "moved at %.1fV", v)
 	}
