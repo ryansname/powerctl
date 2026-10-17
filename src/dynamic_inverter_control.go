@@ -132,21 +132,18 @@ const (
 	// (…248.6, 249.6, 250.6…). Exact voltage does not matter, only whether to
 	// throttle, and the raw reading presents within a couple of seconds.
 
-	// voltageEasyThrottleV / voltageHardThrottleV: above these the ceiling sheds
-	// at the easy / hard rate.
-	voltageEasyThrottleV = 250.0
-	voltageHardThrottleV = 251.0
+	// voltageThrottleV: above this the ceiling sheds from the current output.
+	voltageThrottleV = 252.0
 
 	// voltageRelaxV: below this the ceiling may rise, if the output is at it.
-	// Between this and voltageEasyThrottleV the ceiling holds.
+	// Between this and voltageThrottleV the ceiling holds.
 	voltageRelaxV = 249.0
 
 	// Ceiling slew rates. Relaxing overshoot ≈ rate × lag × 3.3 V/kW: 50 W/s over
 	// ~4s of reading lag is ~0.7V, so a relax that starts below 249 tops out
-	// before the easy-throttle threshold.
-	voltageEasyShedRateWps  = 50.0
-	voltageHardShedRateWps  = 200.0
-	voltageRelaxRateWps     = 50.0
+	// well before the throttle threshold.
+	voltageShedRateWps  = 50.0
+	voltageRelaxRateWps = 50.0
 
 	// voltageAtLimitMarginW is how close the output must be to the ceiling to
 	// count as pressed against it, and how far above the output the ceiling may
@@ -350,8 +347,8 @@ func voltageCapDt(state *DynamicInverterState, now time.Time) float64 {
 // Multiplus voltage reading v and its actual discharge, and returns the
 // resulting constraint.
 //
-//   - v > hard / easy threshold: shed from the current output (not from a
-//     ceiling that may be well above it) at the hard / easy rate.
+//   - v > throttle threshold: shed from the current output (not from a
+//     ceiling that may be well above it).
 //   - v < relax threshold and the output is pressed against the ceiling: rise
 //     at the relax rate.
 //   - otherwise: hold.
@@ -376,10 +373,8 @@ func updateVoltageCap(
 
 	if v > 0 {
 		switch {
-		case v > voltageHardThrottleV:
-			state.voltageCapW = min(state.voltageCapW, actualDischargeW) - voltageHardShedRateWps*dt
-		case v > voltageEasyThrottleV:
-			state.voltageCapW = min(state.voltageCapW, actualDischargeW) - voltageEasyShedRateWps*dt
+		case v > voltageThrottleV:
+			state.voltageCapW = min(state.voltageCapW, actualDischargeW) - voltageShedRateWps*dt
 		case v < voltageRelaxV && atLimit:
 			state.voltageCapW += voltageRelaxRateWps * dt
 		}

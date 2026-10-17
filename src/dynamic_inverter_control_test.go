@@ -1086,36 +1086,26 @@ func TestVoltageCap_NoRelaxWhenNotAtLimit(t *testing.T) {
 	assert.InDelta(t, 400+voltageAtLimitMarginW, state.voltageCapW, 0.001)
 }
 
-// Between the relax and easy-throttle thresholds the ceiling holds.
+// Between the relax and throttle thresholds the ceiling holds.
 func TestVoltageCap_HoldsInBand(t *testing.T) {
 	state := newVoltageState()
 	state.voltageCapInit = true
 	state.voltageCapW = 1000
 
-	for _, v := range []float64{249.0, 249.6, 250.0} {
+	for _, v := range []float64{249.0, 249.6, 250.6, 251.6, 252.0} {
 		updateVoltageCap(state, v, 1000, 1)
 		assert.InDelta(t, 1000.0, state.voltageCapW, 0.001, "moved at %.1fV", v)
 	}
 }
 
-// Over the thresholds it sheds from the current output, not from a ceiling
-// that may be well above it, at the easy then hard rate.
+// Over the threshold it sheds from the current output, not from a ceiling
+// that may be well above it.
 func TestVoltageCap_ThrottlesFromActualOutput(t *testing.T) {
-	cases := []struct {
-		v    float64
-		rate float64
-	}{
-		{250.6, voltageEasyShedRateWps},
-		{251.6, voltageHardShedRateWps},
-	}
-	for _, tc := range cases {
-		state := newVoltageState()
-		state.voltageCapInit = true
-		state.voltageCapW = 1100 // within margin of the output
-		updateVoltageCap(state, tc.v, 1000, 1)
-		assert.InDelta(t, 1000-tc.rate, state.voltageCapW, 0.001, "at %.1fV", tc.v)
-	}
-	assert.Greater(t, voltageHardShedRateWps, voltageEasyShedRateWps)
+	state := newVoltageState()
+	state.voltageCapInit = true
+	state.voltageCapW = 1100 // within margin of the output
+	updateVoltageCap(state, 252.6, 1000, 1)
+	assert.InDelta(t, 1000-voltageShedRateWps, state.voltageCapW, 0.001)
 }
 
 // Sustained over-voltage bottoms out at 0 rather than banking curtailment.
