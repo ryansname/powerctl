@@ -77,6 +77,9 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 		}
 		rows = append(rows, [2]string{"Volt Limit", fmt.Sprintf("%.0fW", dynamic.VoltageCapW)})
 	}
+	if dynamic.VoltageCapMaxW > voltageCapBaseW {
+		rows = append(rows, [2]string{"Volt Max", fmt.Sprintf("%.0fW", dynamic.VoltageCapMaxW)})
+	}
 
 	var sb strings.Builder
 	sb.WriteString("| B2 | Value |\n")

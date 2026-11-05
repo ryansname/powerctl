@@ -567,8 +567,8 @@ func (s *MQTTSender) CreateInverter10ACSetpointEntity() error {
 		ValueTemplate: valueTemplateJSONValue,
 		CommandTopic:  TopicInverter10SetpointCmd,
 		UnitOfMeasure: "W",
-		Min:           -3000,
-		Max:           3500,
+		Min:           -dynamicMaxDischargeW,
+		Max:           dynamicMaxChargeW,
 		Step:          10,
 		Mode:          "slider",
 		Device: haDeviceConfig{
