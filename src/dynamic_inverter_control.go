@@ -47,8 +47,11 @@ const (
 	carChargingMinHeadroom = 1500.0
 
 	// b3ChargeTargetSOC is the SOC the forecast-aware charge limit aims to reach by the end of
-	// the solar day. Above it, voluntary charging stops (only transfer-limit absorption remains).
-	b3ChargeTargetSOC = 98.0
+	// the solar day. Deliberately above 100%: SOC never reads above 100, so it acts as pacing
+	// margin rather than a stop point. At 98% the battery-side solar the limit counted on didn't
+	// arrive and B3 finished around 80%; the extra ~7.4kWh covers that shortfall. When B3 is
+	// actually full, CCL/CVL bring charging down.
+	b3ChargeTargetSOC = 115.0
 
 	// b3SolarEndThresholdKw is the (pre-multiplier Solcast) generation above which a forecast
 	// period still counts as "solar producing" when locating the end of the solar day.

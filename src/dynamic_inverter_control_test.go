@@ -589,7 +589,7 @@ func TestCalculateDynamic_CVLOverflow_HigherSupplyWins(t *testing.T) {
 }
 
 func TestCalculateDynamic_CVLOverflow_SOCFull_DischargesAnyway(t *testing.T) {
-	// SOC at 98% (MaxCharge=0) + V=CVL + Solar34=500W → CVL discharge floor still wins.
+	// SOC 98% + V=CVL + Solar34=500W → CVL discharge floor still wins.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 	input.Battery3SOC = 98
@@ -664,25 +664,25 @@ func makeForecast(start time.Time, hours float64) governor.ForecastPeriods {
 }
 
 func TestB3ForecastChargeLimit_AtTarget_NoCharge(t *testing.T) {
-	c := b3ForecastChargeLimit(98, 43500, 0, 3.9, nil, time.Now())
+	c := b3ForecastChargeLimit(b3ChargeTargetSOC, 43500, 0, 3.9, nil, time.Now())
 	assert.InDelta(t, 0.0, c.MaxCharge, 0.001)
 }
 
 func TestB3ForecastChargeLimit_SolarCoversGap_NoCharge(t *testing.T) {
-	// SOC=80 → gap=18%*43500=7830Wh. 3.9*2100=8190Wh ≥ gap → deficit≤0 → no charge.
-	c := b3ForecastChargeLimit(80, 43500, 2100, 3.9, nil, time.Now())
+	// SOC=80 → gap=35%*43500=15225Wh. 3.9*4000=15600Wh ≥ gap → deficit≤0 → no charge.
+	c := b3ForecastChargeLimit(80, 43500, 4000, 3.9, nil, time.Now())
 	assert.InDelta(t, 0.0, c.MaxCharge, 0.001)
 }
 
 func TestB3ForecastChargeLimit_DeficitSpreadOverHours(t *testing.T) {
-	// gap=7830, expected solar=3.9*500=1950 → deficit=5880 over 5h → 1176W.
+	// gap=15225, expected solar=3.9*2000=7800 → deficit=7425 over 5h → 1485W.
 	now := time.Date(2026, 6, 13, 12, 0, 0, 0, time.Local)
-	c := b3ForecastChargeLimit(80, 43500, 500, 3.9, makeForecast(now, 5), now)
-	assert.InDelta(t, 1176.0, c.MaxCharge, 0.001)
+	c := b3ForecastChargeLimit(80, 43500, 2000, 3.9, makeForecast(now, 5), now)
+	assert.InDelta(t, 1485.0, c.MaxCharge, 0.001)
 }
 
 func TestB3ForecastChargeLimit_RateClampedToMax(t *testing.T) {
-	// gap=78%*43500=33930, no solar, only 2h → 16965W → clamped to 3500W.
+	// gap=95%*43500=41325, no solar, only 2h → 20662W → clamped to 3500W.
 	now := time.Date(2026, 6, 13, 12, 0, 0, 0, time.Local)
 	c := b3ForecastChargeLimit(20, 43500, 0, 3.9, makeForecast(now, 2), now)
 	assert.InDelta(t, dynamicMaxChargeW, c.MaxCharge, 0.001)
@@ -695,27 +695,27 @@ func TestB3ForecastChargeLimit_SolarEnded_FullCharge(t *testing.T) {
 }
 
 func TestCalculateDynamic_ChargeLimit_DeficitCaps(t *testing.T) {
-	// SOC=80 → gap=7830; forecast remaining 500Wh → expected solar 1950 → deficit 5880 over
-	// ~5h → ~1176W cap. Surplus=2000W charge intent is capped to the deficit rate.
+	// SOC=80 → gap=15225; forecast remaining 2000Wh → expected solar 7800 → deficit 7425 over
+	// ~5h → ~1485W cap. Surplus=2000W charge intent is capped to the deficit rate.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 	input.Battery3SOC = 80
 	input.HouseLoad = 0
 	input.Solar1Power = 2000
-	input.ForecastRemainingWh = 500
+	input.ForecastRemainingWh = 2000
 	input.DetailedForecast = makeForecast(time.Now(), 5)
 
 	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, priorityCharge, debug.Priority)
-	assert.InDelta(t, 1176.0, setpoint, 2.0) // small tolerance for wall-clock between calls
-	assert.InDelta(t, 1176.0, debug.B3ChargeMaxW, 2.0)
+	assert.InDelta(t, 1485.0, setpoint, 2.0) // small tolerance for wall-clock between calls
+	assert.InDelta(t, 1485.0, debug.B3ChargeMaxW, 2.0)
 }
 
 func TestCalculateDynamic_ChargeLimit_AtTarget_NoVoluntaryCharge(t *testing.T) {
-	// SOC≥98%: MaxCharge=0. Surplus=2000W → charge intent blocked → 0W.
+	// SOC at target: MaxCharge=0. Surplus=2000W → charge intent blocked → 0W.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
-	input.Battery3SOC = 98
+	input.Battery3SOC = b3ChargeTargetSOC
 	input.HouseLoad = 0
 	input.Solar1Power = 2000
 
@@ -724,11 +724,11 @@ func TestCalculateDynamic_ChargeLimit_AtTarget_NoVoluntaryCharge(t *testing.T) {
 }
 
 func TestCalculateDynamic_ChargeLimit_AtTarget_TransferLimitStillCharges(t *testing.T) {
-	// SOC=98% (MaxCharge=0) + over transfer limit (MinCharge=500, MaxDischarge=0).
+	// SOC at target (MaxCharge=0) + over transfer limit (MinCharge=500, MaxDischarge=0).
 	// lo=MinCharge(500)-MaxDischarge(0)=500, hi=MaxCharge(0) → lo>hi → 500W charge.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
-	input.Battery3SOC = 98
+	input.Battery3SOC = b3ChargeTargetSOC
 	input.HouseLoad = 0
 	input.Solar1Power = 2000
 	input.Inverter1to9Power = 3000
@@ -739,10 +739,10 @@ func TestCalculateDynamic_ChargeLimit_AtTarget_TransferLimitStillCharges(t *test
 }
 
 func TestCalculateDynamic_ChargeLimit_AtTarget_SupplyUnaffected(t *testing.T) {
-	// SOC=98% but house load > generation → supply intent → discharge unaffected by MaxCharge cap.
+	// SOC at target but house load > generation → supply intent → discharge unaffected by MaxCharge cap.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
-	input.Battery3SOC = 98
+	input.Battery3SOC = b3ChargeTargetSOC
 	input.HouseLoad = 2000
 	input.Solar1Power = 0
 
@@ -752,10 +752,10 @@ func TestCalculateDynamic_ChargeLimit_AtTarget_SupplyUnaffected(t *testing.T) {
 }
 
 func TestCalculateDynamic_ChargeLimit_AtTarget_CCLOverflowUnaffected(t *testing.T) {
-	// SOC=98% + CCL overflow (MinDischarge=265W). MaxCharge=0 but discharge must still occur.
+	// SOC at target + CCL overflow (MinDischarge=265W). MaxCharge=0 but discharge must still occur.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
-	input.Battery3SOC = 98
+	input.Battery3SOC = b3ChargeTargetSOC
 	input.HouseLoad = 500
 	input.Solar1Power = 1000 // surplus → Charge intent (blocked by charge limit)
 	input.Solar3BatteryCurrent = 40
@@ -1189,16 +1189,16 @@ func TestCalculateDynamic_ChargeLimit_OvernightZeroForecast(t *testing.T) {
 	calculateDynamicSetpoint(night, state, noVoltLimit)
 
 	// Morning tick on the same state: Solcast has published the new day's forecast.
-	// gap=7830, expected solar=3.9*500=1950 → deficit=5880 over ~5h → ~1176W.
+	// gap=15225, expected solar=3.9*2000=7800 → deficit=7425 over ~5h → ~1485W.
 	morning := makeBaseDynamicInput()
 	morning.Battery3SOC = 80
 	morning.HouseLoad = 0
-	morning.Solar1Power = 2000
-	morning.ForecastRemainingWh = 500
+	morning.Solar1Power = 3000 // the night tick's 1kW house-load max still holds; leave 2kW surplus
+	morning.ForecastRemainingWh = 2000
 	morning.DetailedForecast = makeForecast(time.Now(), 5)
 
 	_, debug := calculateDynamicSetpoint(morning, state, noVoltLimit)
-	assert.InDelta(t, 1176.0, debug.B3ChargeMaxW, 2.0)
+	assert.InDelta(t, 1485.0, debug.B3ChargeMaxW, 2.0)
 }
 
 // --- earned extension above the base ceiling ---
