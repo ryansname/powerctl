@@ -338,10 +338,6 @@ var preSeededTopics = []SensorMessage{
 	// tile worker already depends on its state topic arriving.
 	{Topic: TopicLoungeACIRState, Value: hvacModeUnknown},
 	{Topic: TopicLoungeACIRTemp, Value: "-1000"},
-	// The Nanoleaf tiles drop off the network, and statestream doesn't retain, so
-	// their state may never arrive and would hold the startup gate shut. Seed them
-	// unreachable: the tile worker then applies the colour once they report in.
-	{Topic: TopicTilesState, Value: tilesStateUnavailable},
 }
 
 // Topics that should be initialized to 0.0 if not received within timeout
