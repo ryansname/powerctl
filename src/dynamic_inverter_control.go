@@ -136,7 +136,7 @@ const (
 	// throttle, and the raw reading presents within a couple of seconds.
 
 	// voltageThrottleV: above this the ceiling sheds from the current output.
-	voltageThrottleV = 252.0
+	voltageThrottleV = 253.0
 
 	// voltageRelaxV: below this the ceiling may rise, if the output is at it.
 	// Between this and voltageThrottleV the ceiling holds.
