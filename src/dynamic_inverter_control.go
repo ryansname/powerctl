@@ -153,17 +153,12 @@ const (
 	// sit. Covers the Multiplus's setpoint tracking error.
 	voltageAtLimitMarginW = 150.0
 
-	// voltageCapBaseW is the ceiling's default top. Above it the room has to be
-	// earned: the bound rises at voltageExtendRateWps only while the output is
-	// pressed against it with the bus low, and falls at voltageExtendDecayRateWps
-	// once the bus runs high or the room goes unused — for the same reason the
-	// ceiling tracks actual output, since how the bus behaves at power never yet
-	// run is unknown.
-	voltageCapBaseW           = 3000.0
-	voltageExtendRateWps      = 2.0  // 120 W/min
-	voltageExtendDecayRateWps = 10.0 // 600 W/min
-	// voltageExtendUnusedW: output this far below the bound counts as unused room.
-	voltageExtendUnusedW = 500.0
+	// voltageCapBaseW is where the ceiling stops relaxing quickly. Above it, up
+	// to dynamicMaxDischargeW, it relaxes at voltageExtendRateWps instead: only
+	// long steady loads need that much, so they can afford to earn it slowly
+	// while the bus shows how it behaves at power not yet run.
+	voltageCapBaseW      = 3000.0
+	voltageExtendRateWps = 2.0 // 120 W/min
 
 	// voltageCapMaxDtSeconds bounds one ceiling step. The controller runs off
 	// inbound readings, not a ticker, and the bridge feeding it drops updates when
@@ -201,9 +196,6 @@ type DynamicInverterState struct {
 	// voltageCapW is the current discharge ceiling in W. Persists across ticks —
 	// it is the controller's only memory of how much curtailment the bus needs.
 	voltageCapW float64
-	// voltageCapMaxW is the earned upper bound on voltageCapW, in
-	// [voltageCapBaseW, dynamicMaxDischargeW].
-	voltageCapMaxW float64
 	// voltageCapInit guards the zero value: a fresh state starts at the base
 	// ceiling, and the actual-output bound pulls it down on the first step.
 	voltageCapInit bool
@@ -236,7 +228,6 @@ type DynamicDebugInfo struct {
 	// to bind would make it impossible to tell settling from hunting.
 	BusVoltage     float64 // V, raw Multiplus AC-in reading (0 = no reading)
 	VoltageCapW    float64 // W, current discharge ceiling from the voltage limit
-	VoltageCapMaxW float64 // W, earned upper bound on VoltageCapW
 }
 
 // DynamicModeConstraint encodes a mode's desired setpoint and its allowed range.
@@ -369,16 +360,14 @@ func voltageCapDt(state *DynamicInverterState, now time.Time) float64 {
 //   - v > throttle threshold: shed from the current output (not from a
 //     ceiling that may be well above it).
 //   - v < relax threshold and the output is pressed against the ceiling: rise
-//     at the relax rate.
+//     at the relax rate up to voltageCapBaseW, and at the slower extension
+//     rate above it.
 //   - otherwise: hold.
 //
 // In every case the ceiling is first bounded to the actual output plus the
 // at-limit margin, so it can never be wound up above what has actually been run.
 // No reading (v=0) holds; relaxing on absent data would quietly disable the
 // limit. Charging is never restricted: it pulls voltage down.
-//
-// The ceiling's top is voltageCapMaxW, which starts at voltageCapBaseW and is
-// earned up toward dynamicMaxDischargeW (see voltageCapBaseW).
 func updateVoltageCap(
 	state *DynamicInverterState,
 	v float64,
@@ -387,17 +376,8 @@ func updateVoltageCap(
 ) DynamicModeConstraint {
 	if !state.voltageCapInit {
 		state.voltageCapW = voltageCapBaseW
-		state.voltageCapMaxW = voltageCapBaseW
 		state.voltageCapInit = true
 	}
-
-	switch {
-	case v > voltageThrottleV || actualDischargeW < state.voltageCapMaxW-voltageExtendUnusedW:
-		state.voltageCapMaxW -= voltageExtendDecayRateWps * dt
-	case v > 0 && v < voltageRelaxV && actualDischargeW >= state.voltageCapMaxW-voltageAtLimitMarginW:
-		state.voltageCapMaxW += voltageExtendRateWps * dt
-	}
-	state.voltageCapMaxW = clamp(state.voltageCapMaxW, voltageCapBaseW, dynamicMaxDischargeW)
 
 	atLimit := actualDischargeW >= state.voltageCapW-voltageAtLimitMarginW
 	state.voltageCapW = min(state.voltageCapW, actualDischargeW+voltageAtLimitMarginW)
@@ -406,11 +386,14 @@ func updateVoltageCap(
 		switch {
 		case v > voltageThrottleV:
 			state.voltageCapW = min(state.voltageCapW, actualDischargeW) - voltageShedRateWps*dt
+		case v < voltageRelaxV && atLimit && state.voltageCapW < voltageCapBaseW:
+			// Stop at the base rather than carry a fast step past it.
+			state.voltageCapW = min(state.voltageCapW+voltageRelaxRateWps*dt, voltageCapBaseW)
 		case v < voltageRelaxV && atLimit:
-			state.voltageCapW += voltageRelaxRateWps * dt
+			state.voltageCapW += voltageExtendRateWps * dt
 		}
 	}
-	state.voltageCapW = clamp(state.voltageCapW, 0, state.voltageCapMaxW)
+	state.voltageCapW = clamp(state.voltageCapW, 0, dynamicMaxDischargeW)
 
 	return DynamicModeConstraint{
 		MaxDischarge: state.voltageCapW,
@@ -764,7 +747,6 @@ func calculateDynamicSetpoint(
 		ExportCapW:      exportCapW,
 		BusVoltage:      input.MultiplusACInVoltage,
 		VoltageCapW:     volt.MaxDischarge,
-		VoltageCapMaxW:  state.voltageCapMaxW,
 		// Projected EOD energy if only battery-side solar charges B3 (no powerhouse charging):
 		// current stored energy + forecast solar, in kWh.
 		B3ExpectedFinalKwh: (input.Battery3SOC/100*input.Battery3CapacityWh + input.SolarMultiplier*input.ForecastRemainingWh) / 1000,

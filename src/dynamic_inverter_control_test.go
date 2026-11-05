@@ -1201,69 +1201,44 @@ func TestCalculateDynamic_ChargeLimit_OvernightZeroForecast(t *testing.T) {
 	assert.InDelta(t, 1485.0, debug.B3ChargeMaxW, 2.0)
 }
 
-// --- earned extension above the base ceiling ---
+// --- slow relax above the base ceiling ---
 
-// pressedState returns a voltage state whose ceiling and bound both sit at w.
-func pressedState(w float64) *DynamicInverterState {
-	return &DynamicInverterState{voltageCapInit: true, voltageCapW: w, voltageCapMaxW: w}
+func capState(w float64) *DynamicInverterState {
+	return &DynamicInverterState{voltageCapInit: true, voltageCapW: w}
 }
 
-// A fresh state tops out at the base ceiling; above it the room is earned at
-// the extension rate, not the 50 W/s relax rate.
-func TestVoltageCap_ExtendsSlowlyAboveBase(t *testing.T) {
+// A fresh state starts at the base; above it the ceiling relaxes at the
+// extension rate, not the 50 W/s relax rate.
+func TestVoltageCap_RelaxesSlowlyAboveBase(t *testing.T) {
 	state := newVoltageState()
 	updateVoltageCap(state, 248.6, voltageCapBaseW, 0)
 	assert.InDelta(t, voltageCapBaseW, state.voltageCapW, 0.001)
 
 	updateVoltageCap(state, 248.6, voltageCapBaseW, 1)
-	assert.InDelta(t, voltageCapBaseW+voltageExtendRateWps, state.voltageCapMaxW, 0.001)
 	assert.InDelta(t, voltageCapBaseW+voltageExtendRateWps, state.voltageCapW, 0.001)
 }
 
-// Held pressed against it with the bus low, the bound reaches the hardware max
-// (~1000s at 2 W/s) and stops there.
-func TestVoltageCap_ExtensionClampsAtMax(t *testing.T) {
-	state := pressedState(voltageCapBaseW)
+// A fast relax step that would cross the base stops at it.
+func TestVoltageCap_FastRelaxStopsAtBase(t *testing.T) {
+	state := capState(voltageCapBaseW - 10)
+	updateVoltageCap(state, 248.6, voltageCapBaseW-10, 1)
+	assert.InDelta(t, voltageCapBaseW, state.voltageCapW, 0.001)
+}
+
+// Held pressed against it with the bus low, the ceiling reaches the hardware
+// max (~1000s at 2 W/s) and stops there.
+func TestVoltageCap_ClampsAtMaxDischarge(t *testing.T) {
+	state := capState(voltageCapBaseW)
 	for i := 0; i < 1200; i++ {
 		updateVoltageCap(state, 248.6, state.voltageCapW, 1)
 	}
-	assert.InDelta(t, dynamicMaxDischargeW, state.voltageCapMaxW, 0.001)
 	assert.InDelta(t, dynamicMaxDischargeW, state.voltageCapW, 0.001)
 }
 
-// Between the relax and throttle thresholds the bound holds.
-func TestVoltageCap_ExtensionHoldsInBand(t *testing.T) {
-	state := pressedState(4000)
-	updateVoltageCap(state, 251.6, 4000, 1)
-	assert.InDelta(t, 4000.0, state.voltageCapMaxW, 0.001)
-}
-
-// Over the throttle threshold the bound decays, never below the base.
-func TestVoltageCap_ExtensionDecaysOnHighVoltage(t *testing.T) {
-	state := pressedState(4000)
-	updateVoltageCap(state, 252.6, 4000, 1)
-	assert.InDelta(t, 4000-voltageExtendDecayRateWps, state.voltageCapMaxW, 0.001)
-
-	for i := 0; i < 1000; i++ {
-		updateVoltageCap(state, 252.6, 4000, 1)
-	}
-	assert.InDelta(t, voltageCapBaseW, state.voltageCapMaxW, 0.001)
-}
-
-// Room left unused decays; a small shortfall below the bound holds it.
-func TestVoltageCap_ExtensionDecaysWhenUnused(t *testing.T) {
-	state := pressedState(4000)
-	updateVoltageCap(state, 248.6, 4000-voltageExtendUnusedW-1, 1)
-	assert.InDelta(t, 4000-voltageExtendDecayRateWps, state.voltageCapMaxW, 0.001)
-
-	state = pressedState(4000)
-	updateVoltageCap(state, 248.6, 4000-300, 1)
-	assert.InDelta(t, 4000.0, state.voltageCapMaxW, 0.001)
-}
-
-// No reading never earns room.
-func TestVoltageCap_ExtensionNoGrowthWithoutReading(t *testing.T) {
-	state := pressedState(4000)
-	updateVoltageCap(state, 0, 4000, 1)
-	assert.InDelta(t, 4000.0, state.voltageCapMaxW, 0.001)
+// Above the base, a drop in output still pulls the ceiling straight down to
+// the output plus margin: the room is re-earned slowly, never banked.
+func TestVoltageCap_DropAboveBaseIsNotBanked(t *testing.T) {
+	state := capState(4000)
+	updateVoltageCap(state, 248.6, 3500, 1)
+	assert.InDelta(t, 3500+voltageAtLimitMarginW, state.voltageCapW, 0.001)
 }
