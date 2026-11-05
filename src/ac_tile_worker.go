@@ -21,6 +21,9 @@ const TopicSunState = "homeassistant/sun/sun/state"
 // TopicTilesState is the state topic for the tile light.
 const TopicTilesState = "homeassistant/light/tiles/state"
 
+// tilesStateUnavailable is the HA light state while the tiles are unreachable.
+const tilesStateUnavailable = "unavailable"
+
 const (
 	acStateCool         = "cool"
 	acStateHeat         = "heat"
@@ -117,7 +120,7 @@ func acTileWorker(
 
 			// Commands sent while the tiles are unreachable are lost; forget the
 			// last action so the colour is re-applied once they come back.
-			if data.GetString(TopicTilesState) == "unavailable" {
+			if data.GetString(TopicTilesState) == tilesStateUnavailable {
 				lastAction = ""
 				continue
 			}

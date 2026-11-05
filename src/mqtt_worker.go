@@ -17,6 +17,25 @@ type TopicRoute struct {
 	Channel chan<- SensorMessage
 }
 
+// unavailablePassthroughTopics are delivered even when HA reports them
+// unavailable, for workers that act on the dropout itself rather than treating
+// it as a missing reading.
+var unavailablePassthroughTopics = map[string]bool{
+	TopicTilesState: true, // acTileWorker re-applies the colour once the tiles return
+}
+
+// isDroppedValue reports whether an incoming payload is an HA dropout marker
+// rather than a reading. An empty payload is a retained-message delete.
+func isDroppedValue(topic, value string) bool {
+	switch value {
+	case "unavailable":
+		return !unavailablePassthroughTopics[topic]
+	case "", "Undefined", "unknown":
+		return true
+	}
+	return false
+}
+
 // mqttWorker manages MQTT connection and forwards messages to routed channels.
 func mqttWorker(
 	ctx context.Context,
@@ -64,7 +83,7 @@ func mqttWorker(
 					// TODO: Track how long sensors have been invalid and send notification
 					// An empty payload is a retained-message delete (e.g. the state
 					// store's one-time retained clear), not a real reading.
-					if value == "" || value == "Undefined" || value == "unavailable" || value == "unknown" {
+					if isDroppedValue(msg.Topic(), value) {
 						return
 					}
 
