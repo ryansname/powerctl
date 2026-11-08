@@ -129,14 +129,12 @@ const (
 	//
 	// Exporting raises grid voltage, and the Multiplus is a strong actuator: a
 	// step test measured ~3.3 V/kW, so its full 3kW swings the bus ~10V — enough
-	// to trip the rest of the fleet. The limit is a discharge ceiling that only
-	// ever moves relative to what the Multiplus is actually doing: it throttles
-	// down from the current output while voltage is high, and only relaxes while
-	// the output is pressed against the ceiling and voltage is low. It never
-	// sits more than voltageAtLimitMarginW above the current output, because how
-	// the bus behaves at a power level not yet run is unknown — a ceiling left
-	// up at 3kW lets a step demand (CCL/CVL overflow, car charging) jump
-	// straight there.
+	// to trip the rest of the fleet. The limit is a discharge ceiling: it throttles
+	// down from the current output while voltage is high, and recovers while voltage
+	// is low. Up to voltageCapBaseW the Multiplus has free rein. Above it the ceiling
+	// never sits more than voltageAtLimitMarginW over the current output, because how
+	// the bus behaves at a power level not recently run is unknown — after a drop
+	// from 5kW, demand must not jump straight back there.
 	//
 	// Thresholds are on the raw Multiplus reading, which sits on a ~1V lattice
 	// (…248.6, 249.6, 250.6…). Exact voltage does not matter, only whether to
@@ -145,7 +143,7 @@ const (
 	// voltageThrottleV: above this the ceiling sheds from the current output.
 	voltageThrottleV = 253.0
 
-	// voltageRelaxV: below this the ceiling may rise, if the output is at it.
+	// voltageRelaxV: below this the ceiling may rise.
 	// Between this and voltageThrottleV the ceiling holds.
 	voltageRelaxV = 251.0
 
@@ -156,14 +154,14 @@ const (
 	voltageRelaxRateWps = 50.0
 
 	// voltageAtLimitMarginW is how close the output must be to the ceiling to
-	// count as pressed against it, and how far above the output the ceiling may
-	// sit. Covers the Multiplus's setpoint tracking error.
+	// count as pressed against it, and how far above the output a ceiling over
+	// voltageCapBaseW may sit. Covers the Multiplus's setpoint tracking error.
 	voltageAtLimitMarginW = 150.0
 
-	// voltageCapBaseW is where the ceiling stops relaxing quickly. Above it, up
-	// to dynamicMaxDischargeW, it relaxes at voltageExtendRateWps instead: only
-	// long steady loads need that much, so they can afford to earn it slowly
-	// while the bus shows how it behaves at power not yet run.
+	// voltageCapBaseW is the default ceiling: voltage permitting, the Multiplus can
+	// step anywhere up to it. Above it, up to dynamicMaxDischargeW, the ceiling rises
+	// at voltageExtendRateWps only while the output is pressed against it: only long
+	// steady loads need that much, so they can afford to earn it slowly.
 	voltageCapBaseW      = 3000.0
 	voltageExtendRateWps = 2.0 // 120 W/min
 
@@ -200,8 +198,7 @@ type DynamicInverterState struct {
 	// voltageCapW is the current discharge ceiling in W. Persists across ticks —
 	// it is the controller's only memory of how much curtailment the bus needs.
 	voltageCapW float64
-	// voltageCapInit guards the zero value: a fresh state starts at the base
-	// ceiling, and the actual-output bound pulls it down on the first step.
+	// voltageCapInit guards the zero value: a fresh state starts at the base ceiling.
 	voltageCapInit bool
 	// voltageCapAt is when the ceiling last stepped, so the next step can use
 	// the real elapsed time.
@@ -361,16 +358,16 @@ func voltageCapDt(state *DynamicInverterState, now time.Time) float64 {
 //
 //   - v > throttle threshold: shed from the current output (not from a
 //     ceiling that may be well above it).
-//   - v < relax threshold and the output is pressed against the ceiling: rise
-//     at the relax rate up to voltageCapBaseW, and at the slower extension
-//     rate above it.
+//   - v < relax threshold: rise at the relax rate up to voltageCapBaseW; above
+//     it, only while the output is pressed against the ceiling, and at the
+//     slower extension rate.
 //   - otherwise: hold.
 //
 // Measured cable flow over powerhouseNetFailsafeW sheds the same way, and at or above
 // the transfer limit it blocks relaxing. Neither needs a voltage reading.
 //
-// In every case the ceiling is first bounded to the actual output plus the
-// at-limit margin, so it can never be wound up above what has actually been run.
+// In every case a ceiling above voltageCapBaseW is first bounded to the actual
+// output plus the at-limit margin, so room over the base is never kept unused.
 // No reading (v=0) holds; relaxing on absent data would quietly disable the
 // limit. Charging is never restricted: it pulls voltage down.
 func updateVoltageCap(
@@ -386,16 +383,16 @@ func updateVoltageCap(
 	}
 
 	atLimit := actualDischargeW >= state.voltageCapW-voltageAtLimitMarginW
-	state.voltageCapW = min(state.voltageCapW, actualDischargeW+voltageAtLimitMarginW)
+	state.voltageCapW = min(state.voltageCapW, max(voltageCapBaseW, actualDischargeW+voltageAtLimitMarginW))
 
-	canRelax := v > 0 && v < voltageRelaxV && atLimit && cableNetW < powerhouseTransferLimitW
+	canRelax := v > 0 && v < voltageRelaxV && cableNetW < powerhouseTransferLimitW
 	switch {
 	case v > voltageThrottleV || cableNetW > powerhouseNetFailsafeW:
 		state.voltageCapW = min(state.voltageCapW, actualDischargeW) - voltageShedRateWps*dt
 	case canRelax && state.voltageCapW < voltageCapBaseW:
 		// Stop at the base rather than carry a fast step past it.
 		state.voltageCapW = min(state.voltageCapW+voltageRelaxRateWps*dt, voltageCapBaseW)
-	case canRelax:
+	case canRelax && atLimit:
 		state.voltageCapW += voltageExtendRateWps * dt
 	}
 	state.voltageCapW = clamp(state.voltageCapW, 0, dynamicMaxDischargeW)

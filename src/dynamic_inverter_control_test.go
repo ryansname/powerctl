@@ -1026,28 +1026,18 @@ func TestVoltageCapDt_ClampsStallAndBackwardsClock(t *testing.T) {
 	assert.InDelta(t, 0.0, voltageCapDt(state, t0), 0.001)
 }
 
-// The incident case: Multiplus idle, voltage fine, so the old ceiling recovered
-// to 3kW and let a CCL-overflow step jump straight there. The ceiling must sit
-// just above what is actually running instead.
-func TestVoltageCap_NeverWindsUpAboveActualOutput(t *testing.T) {
+// Up to the base the Multiplus has free rein: an idle output leaves the ceiling at
+// the base, and a step demand goes straight there.
+func TestVoltageCap_FreeUpToBaseWhenIdle(t *testing.T) {
 	state := newVoltageState()
 	for i := 0; i < 100; i++ {
 		updateVoltageCap(state, 245, 0, 0, 1)
 	}
-	// Idle output: the ceiling sits at the margin plus at most one relax step.
-	assert.InDelta(t, voltageAtLimitMarginW+voltageRelaxRateWps, state.voltageCapW, 0.001)
-
-	cclStep := DynamicModeConstraint{MinDischarge: 2500, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
-	c := updateVoltageCap(state, 245, 0, 0, 1)
-	assert.InDelta(t, -c.MaxDischarge, cclStep.add(c).Setpoint(), 0.001)
-	assert.LessOrEqual(t, c.MaxDischarge, voltageAtLimitMarginW+voltageRelaxRateWps)
+	assert.InDelta(t, voltageCapBaseW, state.voltageCapW, 0.001)
 }
 
-// Through the whole chain: Multiplus idle, solar 3+4 well over a dropped CCL, so
-// CCL overflow demands ~2.6kW. The setpoint must start from the idle output, not
-// jump to the demand.
-func TestDynamicSetpoint_CCLOverflowStepHeldByVoltageCeiling(t *testing.T) {
-	state := makeTestDynamicState()
+// Through the whole chain: a CCL-overflow step from idle isn't held back.
+func TestDynamicSetpoint_CCLOverflowStepPassesVoltageCeiling(t *testing.T) {
 	input := makeBaseDynamicInput()
 	input.HouseLoad = 0
 	input.MultiplusACInVoltage = 248.6
@@ -1055,8 +1045,11 @@ func TestDynamicSetpoint_CCLOverflowStepHeldByVoltageCeiling(t *testing.T) {
 	input.Solar3BatteryCurrent = 50
 	input.Solar4BatteryCurrent = 50
 
+	unlimited, _ := calculateDynamicSetpoint(input, makeTestDynamicState(), noVoltLimit)
+	state := makeTestDynamicState()
 	setpoint, _ := calculateDynamicSetpoint(input, state, stepVoltageCap(input, state))
-	assert.InDelta(t, -voltageAtLimitMarginW, setpoint, 0.001)
+	assert.Less(t, setpoint, -1000.0)
+	assert.InDelta(t, unlimited, setpoint, 0.001)
 }
 
 // Pressed against the ceiling with voltage low, it relaxes at the relax rate.
@@ -1069,15 +1062,15 @@ func TestVoltageCap_RelaxesWhenAtLimitAndLow(t *testing.T) {
 	assert.InDelta(t, 1000+voltageRelaxRateWps, state.voltageCapW, 0.001)
 }
 
-// Voltage low but the output isn't using the ceiling: no relax, and the ceiling
-// is pulled down to the output plus margin.
-func TestVoltageCap_NoRelaxWhenNotAtLimit(t *testing.T) {
+// Below the base a curtailed ceiling recovers with the bus low whether or not the
+// output is using it, or it would stay stuck after an over-voltage.
+func TestVoltageCap_RecoversBelowBaseWhenNotAtLimit(t *testing.T) {
 	state := newVoltageState()
 	state.voltageCapInit = true
 	state.voltageCapW = 1000
 
 	updateVoltageCap(state, 248.6, 400, 0, 1)
-	assert.InDelta(t, 400+voltageAtLimitMarginW, state.voltageCapW, 0.001)
+	assert.InDelta(t, 1000+voltageRelaxRateWps, state.voltageCapW, 0.001)
 }
 
 // Between the relax and throttle thresholds the ceiling holds.
@@ -1252,6 +1245,13 @@ func TestVoltageCap_DropAboveBaseIsNotBanked(t *testing.T) {
 	state := capState(4000)
 	updateVoltageCap(state, 248.6, 3500, 0, 1)
 	assert.InDelta(t, 3500+voltageAtLimitMarginW, state.voltageCapW, 0.001)
+}
+
+// A drop well below the base leaves the ceiling at the base, not at the output.
+func TestVoltageCap_DropBelowBaseStopsAtBase(t *testing.T) {
+	state := capState(4000)
+	updateVoltageCap(state, 248.6, 1000, 0, 1)
+	assert.InDelta(t, voltageCapBaseW, state.voltageCapW, 0.001)
 }
 
 // --- measured cable flow failsafe ---
