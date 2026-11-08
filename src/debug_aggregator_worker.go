@@ -69,6 +69,9 @@ func formatCombinedDebug(baseline BaselineDebugInfo, dynamic DynamicDebugInfo) s
 	// ceiling always tracks just above actual output, so its value alone says
 	// nothing; once the bus is high, the pair moving together is what
 	// distinguishes settling from hunting.
+	if dynamic.CableNetW >= powerhouseTransferLimitW {
+		rows = append(rows, [2]string{"Cable Net", fmt.Sprintf("%.0fW", dynamic.CableNetW)})
+	}
 	voltageActive := dynamic.BusVoltage >= voltageRelaxV ||
 		(dynamic.BusVoltage == 0 && dynamic.VoltageCapW < dynamicMaxDischargeW)
 	if voltageActive {

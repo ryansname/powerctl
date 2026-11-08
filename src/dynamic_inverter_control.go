@@ -32,6 +32,13 @@ const (
 	// 255W inverter steps against it, the dynamic one trims the remainder.
 	powerhouseTransferLimitW = 4500.0
 
+	// powerhouseNetFailsafeW is the measured cable flow above which discharge sheds.
+	// The transfer limit sums the component meters so the Multiplus isn't in its own
+	// calculation, but they can't see generation behind a dead meter (an inverter stuck
+	// on with its Shelly offline). The margin keeps ordinary meter disagreement near the
+	// limit from tripping it; discharge may rise again only below the limit itself.
+	powerhouseNetFailsafeW = powerhouseTransferLimitW + 100.0
+
 	// dynamicExportLimit caps total sell-back at the grid meter, the whole-house
 	// analogue of the powerhouse cable's transfer limit above. Unlike that one it
 	// is not a conductor rating — it bounds what the whole site pushes back to the
@@ -166,15 +173,12 @@ const (
 	// step after a stall would move the ceiling further than the slew rate allows.
 	voltageCapMaxDtSeconds = 5.0
 
-	// mp2PowerLagWindowSeconds covers the reporting lag of powerhouse_net_power and
-	// site power relative to the Multiplus's own ~2s power reading. Both contain the
-	// Multiplus's output, which the limits strip back out using its power reading.
-	// Pairing a fresh Multiplus reading with a stale total double-counts every watt
-	// the Multiplus has just added as headroom — positive feedback that let it run
-	// straight through the cable limit. So the strip uses the least-discharging
-	// Multiplus power over this window: credit is only taken for output the slow
-	// meters have had time to see.
-	mp2PowerLagWindowSeconds = 60
+	// mp2PowerLagWindowSeconds covers the reporting lag of site power (a steady 5s)
+	// relative to the Multiplus's own sub-second power reading. Site power contains
+	// the Multiplus's output, which the export limit strips back out. Pairing a fresh
+	// Multiplus reading with a stale total counts every watt it has just added as
+	// headroom, so the strip uses the least-discharging power over this window.
+	mp2PowerLagWindowSeconds = 15
 
 	priorityCarCharge = "CarCharge"
 	priorityCharge    = "Charge"
@@ -228,6 +232,7 @@ type DynamicDebugInfo struct {
 	// to bind would make it impossible to tell settling from hunting.
 	BusVoltage  float64 // V, raw Multiplus AC-in reading (0 = no reading)
 	VoltageCapW float64 // W, current discharge ceiling from the voltage limit
+	CableNetW   float64 // W, measured cable flow feeding the same ceiling as a failsafe
 }
 
 // DynamicModeConstraint encodes a mode's desired setpoint and its allowed range.
@@ -282,12 +287,9 @@ func clamp(v, lo, hi float64) float64 { return max(lo, min(hi, v)) }
 // When over the limit, MaxDischarge=0 and MinCharge>0 (must absorb excess).
 // When under the limit, MaxDischarge is capped to available headroom.
 //
-// busLoadExcludingMP2 = sensor.powerhouse_net_power + MultiplusACPower.
-// powerhouse_net_power is the actual cable flow (accounts for powerhouse loads), but
-// includes MP2's current output. Adding MultiplusACPower (negative when inverting)
-// strips MP2 back out so its own discharge doesn't reduce the headroom available to itself.
-// The caller passes the windowed (settled) MP2 power, not the instantaneous one — see
-// mp2PowerLagWindowSeconds.
+// busLoadExcludingMP2 = solar_1 + inverters 1-9, the component meters, so MP2's own output
+// never enters the calculation. The measured cable flow backs this up as a failsafe — see
+// powerhouseNetFailsafeW.
 func transferLimitConstraint(busLoadExcludingMP2 float64) DynamicModeConstraint {
 	headroom := powerhouseTransferLimitW - busLoadExcludingMP2
 	if headroom < 0 {
@@ -364,6 +366,9 @@ func voltageCapDt(state *DynamicInverterState, now time.Time) float64 {
 //     rate above it.
 //   - otherwise: hold.
 //
+// Measured cable flow over powerhouseNetFailsafeW sheds the same way, and at or above
+// the transfer limit it blocks relaxing. Neither needs a voltage reading.
+//
 // In every case the ceiling is first bounded to the actual output plus the
 // at-limit margin, so it can never be wound up above what has actually been run.
 // No reading (v=0) holds; relaxing on absent data would quietly disable the
@@ -372,6 +377,7 @@ func updateVoltageCap(
 	state *DynamicInverterState,
 	v float64,
 	actualDischargeW float64,
+	cableNetW float64,
 	dt float64,
 ) DynamicModeConstraint {
 	if !state.voltageCapInit {
@@ -382,16 +388,15 @@ func updateVoltageCap(
 	atLimit := actualDischargeW >= state.voltageCapW-voltageAtLimitMarginW
 	state.voltageCapW = min(state.voltageCapW, actualDischargeW+voltageAtLimitMarginW)
 
-	if v > 0 {
-		switch {
-		case v > voltageThrottleV:
-			state.voltageCapW = min(state.voltageCapW, actualDischargeW) - voltageShedRateWps*dt
-		case v < voltageRelaxV && atLimit && state.voltageCapW < voltageCapBaseW:
-			// Stop at the base rather than carry a fast step past it.
-			state.voltageCapW = min(state.voltageCapW+voltageRelaxRateWps*dt, voltageCapBaseW)
-		case v < voltageRelaxV && atLimit:
-			state.voltageCapW += voltageExtendRateWps * dt
-		}
+	canRelax := v > 0 && v < voltageRelaxV && atLimit && cableNetW < powerhouseTransferLimitW
+	switch {
+	case v > voltageThrottleV || cableNetW > powerhouseNetFailsafeW:
+		state.voltageCapW = min(state.voltageCapW, actualDischargeW) - voltageShedRateWps*dt
+	case canRelax && state.voltageCapW < voltageCapBaseW:
+		// Stop at the base rather than carry a fast step past it.
+		state.voltageCapW = min(state.voltageCapW+voltageRelaxRateWps*dt, voltageCapBaseW)
+	case canRelax:
+		state.voltageCapW += voltageExtendRateWps * dt
 	}
 	state.voltageCapW = clamp(state.voltageCapW, 0, dynamicMaxDischargeW)
 
@@ -409,6 +414,7 @@ func stepVoltageCap(input DynamicInput, state *DynamicInverterState) DynamicMode
 		state,
 		input.MultiplusACInVoltage,
 		max(0, -input.MultiplusACPower),
+		input.PowerhouseNetPower,
 		voltageCapDt(state, time.Now()),
 	)
 }
@@ -631,12 +637,11 @@ func calculateDynamicSetpoint(
 	state.houseSideGeneration.Update(input.Solar1Power + input.Inverter1to9Power)
 	state.cvlVoltageEMA.Update(cvlCompensatedVoltage(input.Battery3Voltage, input.MultiplusACPower))
 
-	// Strip the Multiplus back out of the slow cable and site meters using its
-	// least-discharging power over their lag window, not its instantaneous value.
-	// See mp2PowerLagWindowSeconds.
+	// Strip the Multiplus back out of the slower site meter using its least-discharging
+	// power over that meter's lag window. See mp2PowerLagWindowSeconds.
 	state.mp2PowerMax.Update(input.MultiplusACPower)
 	mp2Settled := state.mp2PowerMax.Max()
-	busLoad := input.PowerhouseNetPower + mp2Settled
+	busLoad := input.Solar1Power + input.Inverter1to9Power
 	headroom := powerhouseTransferLimitW - busLoad
 
 	// Safety: high frequency or grid-off with high Powerwall → no discharge.
@@ -747,6 +752,7 @@ func calculateDynamicSetpoint(
 		ExportCapW:      exportCapW,
 		BusVoltage:      input.MultiplusACInVoltage,
 		VoltageCapW:     volt.MaxDischarge,
+		CableNetW:       input.PowerhouseNetPower,
 		// Projected EOD energy if only battery-side solar charges B3 (no powerhouse charging):
 		// current stored energy + forecast solar, in kWh.
 		B3ExpectedFinalKwh: (input.Battery3SOC/100*input.Battery3CapacityWh + input.SolarMultiplier*input.ForecastRemainingWh) / 1000,

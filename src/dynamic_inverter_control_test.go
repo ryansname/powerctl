@@ -327,7 +327,6 @@ func TestCalculateDynamic_Safety_HighFreq_AllowsForcedCharge(t *testing.T) {
 	input.ACFreqP100_5Min = 53.0
 	input.Solar1Power = 2000
 	input.Inverter1to9Power = 3000
-	input.PowerhouseNetPower = 5000
 
 	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 3500.0, setpoint, 0.001)
@@ -353,7 +352,6 @@ func TestCalculateDynamic_DefaultSupply_CappedByHeadroom(t *testing.T) {
 	input.Solar1Power = 1000
 	input.Inverter1to9Power = 3000
 	input.Solar2Power = 0
-	input.PowerhouseNetPower = 4000
 
 	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, "Supply", debug.Priority)
@@ -408,7 +406,6 @@ func TestCalculateDynamic_ChargeFromSurplus_ForcedChargeByTransferLimit(t *testi
 	input.HouseLoad = 0
 	input.Solar1Power = 2000
 	input.Inverter1to9Power = 4000
-	input.PowerhouseNetPower = 6000
 
 	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, priorityCharge, debug.Priority)
@@ -547,9 +544,9 @@ func TestCalculateDynamic_Headroom_ShownWhenDischargeNearCap(t *testing.T) {
 	// sitting on the headroom cap → Headroom row active.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
-	input.HouseLoad = 3000
+	input.HouseLoad = 5000
 	input.Solar1Power = 0
-	input.PowerhouseNetPower = 4000
+	input.Inverter1to9Power = 4000
 
 	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, -500.0, setpoint, 0.001)
@@ -625,7 +622,6 @@ func TestCalculateDynamic_ChargeFromSurplus_OverLimitPreservesHigherCharge(t *te
 	input.HouseLoad = 0
 	input.Solar1Power = 2000
 	input.Inverter1to9Power = 3000
-	input.PowerhouseNetPower = 5000
 
 	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, priorityCharge, debug.Priority)
@@ -638,7 +634,6 @@ func TestCalculateDynamic_Headroom(t *testing.T) {
 	input.HouseLoad = 3000
 	input.Solar1Power = 500
 	input.Inverter1to9Power = 1000
-	input.PowerhouseNetPower = 1500
 
 	_, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	// headroom = 4500 - 1500 = 3000
@@ -732,7 +727,6 @@ func TestCalculateDynamic_ChargeLimit_AtTarget_TransferLimitStillCharges(t *test
 	input.HouseLoad = 0
 	input.Solar1Power = 2000
 	input.Inverter1to9Power = 3000
-	input.PowerhouseNetPower = 5000 // over 4500W limit by 500W
 
 	setpoint, _ := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 500.0, setpoint, 0.001)
@@ -1038,13 +1032,13 @@ func TestVoltageCapDt_ClampsStallAndBackwardsClock(t *testing.T) {
 func TestVoltageCap_NeverWindsUpAboveActualOutput(t *testing.T) {
 	state := newVoltageState()
 	for i := 0; i < 100; i++ {
-		updateVoltageCap(state, 245, 0, 1)
+		updateVoltageCap(state, 245, 0, 0, 1)
 	}
 	// Idle output: the ceiling sits at the margin plus at most one relax step.
 	assert.InDelta(t, voltageAtLimitMarginW+voltageRelaxRateWps, state.voltageCapW, 0.001)
 
 	cclStep := DynamicModeConstraint{MinDischarge: 2500, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}
-	c := updateVoltageCap(state, 245, 0, 1)
+	c := updateVoltageCap(state, 245, 0, 0, 1)
 	assert.InDelta(t, -c.MaxDischarge, cclStep.add(c).Setpoint(), 0.001)
 	assert.LessOrEqual(t, c.MaxDischarge, voltageAtLimitMarginW+voltageRelaxRateWps)
 }
@@ -1071,7 +1065,7 @@ func TestVoltageCap_RelaxesWhenAtLimitAndLow(t *testing.T) {
 	state.voltageCapInit = true
 	state.voltageCapW = 1000
 
-	updateVoltageCap(state, 248.6, 1000, 1)
+	updateVoltageCap(state, 248.6, 1000, 0, 1)
 	assert.InDelta(t, 1000+voltageRelaxRateWps, state.voltageCapW, 0.001)
 }
 
@@ -1082,7 +1076,7 @@ func TestVoltageCap_NoRelaxWhenNotAtLimit(t *testing.T) {
 	state.voltageCapInit = true
 	state.voltageCapW = 1000
 
-	updateVoltageCap(state, 248.6, 400, 1)
+	updateVoltageCap(state, 248.6, 400, 0, 1)
 	assert.InDelta(t, 400+voltageAtLimitMarginW, state.voltageCapW, 0.001)
 }
 
@@ -1093,7 +1087,7 @@ func TestVoltageCap_HoldsInBand(t *testing.T) {
 	state.voltageCapW = 1000
 
 	for _, v := range []float64{251.0, 251.6, 252.6, 253.0} {
-		updateVoltageCap(state, v, 1000, 1)
+		updateVoltageCap(state, v, 1000, 0, 1)
 		assert.InDelta(t, 1000.0, state.voltageCapW, 0.001, "moved at %.1fV", v)
 	}
 }
@@ -1104,7 +1098,7 @@ func TestVoltageCap_ThrottlesFromActualOutput(t *testing.T) {
 	state := newVoltageState()
 	state.voltageCapInit = true
 	state.voltageCapW = 1100 // within margin of the output
-	updateVoltageCap(state, 253.6, 1000, 1)
+	updateVoltageCap(state, 253.6, 1000, 0, 1)
 	assert.InDelta(t, 1000-voltageShedRateWps, state.voltageCapW, 0.001)
 }
 
@@ -1112,7 +1106,7 @@ func TestVoltageCap_ThrottlesFromActualOutput(t *testing.T) {
 func TestVoltageCap_ClampsAtZero(t *testing.T) {
 	state := newVoltageState()
 	for i := 0; i < 100; i++ {
-		updateVoltageCap(state, 255, 0, 1)
+		updateVoltageCap(state, 255, 0, 0, 1)
 	}
 	assert.InDelta(t, 0.0, state.voltageCapW, 0.001)
 }
@@ -1124,7 +1118,7 @@ func TestVoltageCap_NoReadingHolds(t *testing.T) {
 	state.voltageCapInit = true
 	state.voltageCapW = 800
 
-	updateVoltageCap(state, 0, 800, 1)
+	updateVoltageCap(state, 0, 800, 0, 1)
 	assert.InDelta(t, 800.0, state.voltageCapW, 0.001)
 }
 
@@ -1132,9 +1126,9 @@ func TestVoltageCap_NoReadingHolds(t *testing.T) {
 func TestVoltageCap_NeverLimitsCharging(t *testing.T) {
 	state := newVoltageState()
 	for i := 0; i < 100; i++ {
-		updateVoltageCap(state, 255, 0, 1)
+		updateVoltageCap(state, 255, 0, 0, 1)
 	}
-	c := updateVoltageCap(state, 255, 0, 1)
+	c := updateVoltageCap(state, 255, 0, 0, 1)
 	assert.InDelta(t, dynamicMaxChargeW, c.MaxCharge, 0.001)
 
 	got := DynamicModeConstraint{Target: 1000, MaxDischarge: dynamicMaxDischargeW, MaxCharge: dynamicMaxChargeW}.add(c).Setpoint()
@@ -1143,22 +1137,39 @@ func TestVoltageCap_NeverLimitsCharging(t *testing.T) {
 
 // --- MP2 lag compensation in the transfer/export limits ---
 
-// The incident feedback loop: net power is stale (doesn't yet include the
-// Multiplus's new output) while the Multiplus reading is fresh. Stripping the
-// fresh reading out of the stale total counted the new discharge as headroom.
-func TestDynamicSetpoint_HeadroomNotInflatedByMP2Ramp(t *testing.T) {
+// The incident feedback loop can't recur: the cable limit is summed from the
+// component meters, so the Multiplus's own output never moves its headroom.
+func TestDynamicSetpoint_HeadroomIgnoresMultiplus(t *testing.T) {
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 	input.HouseLoad = 5000 // Supply wants as much as it can get
-	input.PowerhouseNetPower = 3000
+	input.Inverter1to9Power = 3000
 	input.MultiplusACPower = 0
 	_, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.InDelta(t, 1500.0, debug.Headroom, 0.001)
 
-	// Multiplus now discharging 1500W; net power hasn't caught up.
 	input.MultiplusACPower = -1500
+	input.PowerhouseNetPower = 4500
 	_, debug = calculateDynamicSetpoint(input, state, noVoltLimit)
-	assert.InDelta(t, 1500.0, debug.Headroom, 0.001, "fresh MP2 discharge must not count as headroom")
+	assert.InDelta(t, 1500.0, debug.Headroom, 0.001, "the Multiplus must not affect its own headroom")
+}
+
+// A brief dip must not cost cable headroom for the following minute.
+func TestDynamicSetpoint_DipDoesNotReduceHeadroom(t *testing.T) {
+	state := makeTestDynamicState()
+	input := makeBaseDynamicInput()
+	input.HouseLoad = 5000
+	input.Inverter1to9Power = 500
+	input.PowerhouseNetPower = 3500
+	input.MultiplusACPower = -3000
+	calculateDynamicSetpoint(input, state, noVoltLimit)
+
+	input.MultiplusACPower = -1000
+	calculateDynamicSetpoint(input, state, noVoltLimit)
+
+	input.MultiplusACPower = -3000
+	_, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
+	assert.InDelta(t, 4000.0, debug.Headroom, 0.001)
 }
 
 func TestDynamicSetpoint_ExportHeadroomNotInflatedByMP2Ramp(t *testing.T) {
@@ -1211,17 +1222,17 @@ func capState(w float64) *DynamicInverterState {
 // extension rate, not the 50 W/s relax rate.
 func TestVoltageCap_RelaxesSlowlyAboveBase(t *testing.T) {
 	state := newVoltageState()
-	updateVoltageCap(state, 248.6, voltageCapBaseW, 0)
+	updateVoltageCap(state, 248.6, voltageCapBaseW, 0, 0)
 	assert.InDelta(t, voltageCapBaseW, state.voltageCapW, 0.001)
 
-	updateVoltageCap(state, 248.6, voltageCapBaseW, 1)
+	updateVoltageCap(state, 248.6, voltageCapBaseW, 0, 1)
 	assert.InDelta(t, voltageCapBaseW+voltageExtendRateWps, state.voltageCapW, 0.001)
 }
 
 // A fast relax step that would cross the base stops at it.
 func TestVoltageCap_FastRelaxStopsAtBase(t *testing.T) {
 	state := capState(voltageCapBaseW - 10)
-	updateVoltageCap(state, 248.6, voltageCapBaseW-10, 1)
+	updateVoltageCap(state, 248.6, voltageCapBaseW-10, 0, 1)
 	assert.InDelta(t, voltageCapBaseW, state.voltageCapW, 0.001)
 }
 
@@ -1230,7 +1241,7 @@ func TestVoltageCap_FastRelaxStopsAtBase(t *testing.T) {
 func TestVoltageCap_ClampsAtMaxDischarge(t *testing.T) {
 	state := capState(voltageCapBaseW)
 	for i := 0; i < 1200; i++ {
-		updateVoltageCap(state, 248.6, state.voltageCapW, 1)
+		updateVoltageCap(state, 248.6, state.voltageCapW, 0, 1)
 	}
 	assert.InDelta(t, dynamicMaxDischargeW, state.voltageCapW, 0.001)
 }
@@ -1239,6 +1250,34 @@ func TestVoltageCap_ClampsAtMaxDischarge(t *testing.T) {
 // the output plus margin: the room is re-earned slowly, never banked.
 func TestVoltageCap_DropAboveBaseIsNotBanked(t *testing.T) {
 	state := capState(4000)
-	updateVoltageCap(state, 248.6, 3500, 1)
+	updateVoltageCap(state, 248.6, 3500, 0, 1)
 	assert.InDelta(t, 3500+voltageAtLimitMarginW, state.voltageCapW, 0.001)
+}
+
+// --- measured cable flow failsafe ---
+
+// Generation the component meters can't see pushes the real cable flow over the
+// failsafe: discharge sheds from actual output, with or without a voltage reading.
+func TestVoltageCap_CableFailsafeSheds(t *testing.T) {
+	for _, v := range []float64{248.6, 0} {
+		state := capState(1100)
+		updateVoltageCap(state, v, 1000, powerhouseNetFailsafeW+1, 1)
+		assert.InDelta(t, 1000-voltageShedRateWps, state.voltageCapW, 0.001, "at %.1fV", v)
+	}
+}
+
+// From the transfer limit up to the failsafe the ceiling holds, so ordinary meter
+// disagreement neither trips it nor lets discharge climb further.
+func TestVoltageCap_CableFailsafeHoldsBelowTrip(t *testing.T) {
+	for _, net := range []float64{powerhouseTransferLimitW, powerhouseNetFailsafeW} {
+		state := capState(1000)
+		updateVoltageCap(state, 248.6, 1000, net, 1)
+		assert.InDelta(t, 1000.0, state.voltageCapW, 0.001, "moved at %.0fW", net)
+	}
+}
+
+func TestVoltageCap_RelaxesBelowTransferLimit(t *testing.T) {
+	state := capState(1000)
+	updateVoltageCap(state, 248.6, 1000, powerhouseTransferLimitW-1, 1)
+	assert.InDelta(t, 1000+voltageRelaxRateWps, state.voltageCapW, 0.001)
 }
