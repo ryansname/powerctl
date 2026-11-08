@@ -226,8 +226,8 @@ type DynamicDebugInfo struct {
 	// discharge ceiling. Unlike the other fields these are reported
 	// unconditionally: the ceiling is stateful, so hiding it while it happens not
 	// to bind would make it impossible to tell settling from hunting.
-	BusVoltage     float64 // V, raw Multiplus AC-in reading (0 = no reading)
-	VoltageCapW    float64 // W, current discharge ceiling from the voltage limit
+	BusVoltage  float64 // V, raw Multiplus AC-in reading (0 = no reading)
+	VoltageCapW float64 // W, current discharge ceiling from the voltage limit
 }
 
 // DynamicModeConstraint encodes a mode's desired setpoint and its allowed range.

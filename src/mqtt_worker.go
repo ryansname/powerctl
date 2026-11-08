@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -22,6 +23,29 @@ type TopicRoute struct {
 // it as a missing reading.
 var unavailablePassthroughTopics = map[string]bool{
 	TopicTilesState: true, // acTileWorker re-applies the colour once the tiles return
+}
+
+// Inverters 1-9 (not the Multiplus). A dropped-out inverter is treated as off and
+// producing nothing: holding its last reading counts phantom generation, and its
+// retained unavailable would otherwise hold the startup gate shut.
+const inverterSwitchOff = "off"
+
+var (
+	inverterPowerTopicRe  = regexp.MustCompile(`^homeassistant/sensor/powerhouse_inverter_[1-9]_switch_0_power/state$`)
+	inverterSwitchTopicRe = regexp.MustCompile(`^homeassistant/switch/powerhouse_inverter_[1-9]_switch_0/state$`)
+)
+
+// inverterDropoutValue replaces an unavailable inverter reading with its off value.
+func inverterDropoutValue(topic, value string) string {
+	switch {
+	case value != "unavailable":
+		return value
+	case inverterPowerTopicRe.MatchString(topic):
+		return "0"
+	case inverterSwitchTopicRe.MatchString(topic):
+		return inverterSwitchOff
+	}
+	return value
 }
 
 // isDroppedValue reports whether an incoming payload is an HA dropout marker
@@ -77,7 +101,7 @@ func mqttWorker(
 			ch := route.Channel
 			for _, topic := range route.Topics {
 				token := client.Subscribe(topic, 0, func(client mqtt.Client, msg mqtt.Message) {
-					value := string(msg.Payload())
+					value := inverterDropoutValue(msg.Topic(), string(msg.Payload()))
 
 					// Skip invalid values from HA - sensor has dropped out
 					// TODO: Track how long sensors have been invalid and send notification

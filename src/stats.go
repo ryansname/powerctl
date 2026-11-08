@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -352,6 +353,22 @@ var selfPublishedFloatTopics = []string{
 	// an empty battery.
 }
 
+// Inverter energy counters that default to 0.0 if not received within the same
+// timeout. A dead inverter's retained value is unavailable, which would hold the
+// startup gate shut. Battery 2 SOC reads high until its next calibration; a dropout
+// while running still holds the counter, since only a missing topic is defaulted.
+var inverterEnergyTopics = []string{
+	"homeassistant/sensor/powerhouse_inverter_1_switch_0_energy/state",
+	"homeassistant/sensor/powerhouse_inverter_2_switch_0_energy/state",
+	"homeassistant/sensor/powerhouse_inverter_3_switch_0_energy/state",
+	"homeassistant/sensor/powerhouse_inverter_4_switch_0_energy/state",
+	"homeassistant/sensor/powerhouse_inverter_5_switch_0_energy/state",
+	"homeassistant/sensor/powerhouse_inverter_6_switch_0_energy/state",
+	"homeassistant/sensor/powerhouse_inverter_7_switch_0_energy/state",
+	"homeassistant/sensor/powerhouse_inverter_8_switch_0_energy/state",
+	"homeassistant/sensor/powerhouse_inverter_9_switch_0_energy/state",
+}
+
 // String topics that should be initialized to a default if not received within timeout
 var selfPublishedStringTopics = map[string]string{
 	TopicMinerWorkmode: WorkmodeOff, // dump_load_enabler controls this; default to off
@@ -473,10 +490,10 @@ func statsWorker(ctx context.Context, msgChan <-chan SensorMessage, outputChan c
 			}
 
 		case <-selfPublishedTimer.C:
-			// Initialize self-published float topics to 0.0 if not yet received
-			for _, topic := range selfPublishedFloatTopics {
+			// Initialize self-published floats and inverter energy to 0.0 if not yet received
+			for _, topic := range slices.Concat(selfPublishedFloatTopics, inverterEnergyTopics) {
 				if _, exists := topicData[topic]; !exists {
-					log.Printf("Initializing missing self-published topic to 0.0: %s\n", topic)
+					log.Printf("Initializing missing topic to 0.0: %s\n", topic)
 					topicData[topic] = &FloatTopicData{Current: 0.0}
 					topicReadings[topic] = Readings{{Value: 0.0, Timestamp: time.Now()}}
 				}

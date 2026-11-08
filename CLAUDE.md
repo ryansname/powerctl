@@ -79,7 +79,7 @@ Goroutine-based with message passing via channels. All source code in `src/`.
 
 12. **mqttInterceptorWorker** (src/mqtt_interceptor.go) - Filters inverter messages via `powerctl_inverter_enabled` switch
 
-13. **mqttWorker** (src/mqtt_worker.go) - Connects to MQTT broker, subscribes to topics, forwards to statsWorker
+13. **mqttWorker** (src/mqtt_worker.go) - Connects to MQTT broker, subscribes to topics, forwards to statsWorker. Drops `unavailable` readings (statsWorker holds the last value), except inverters 1-9, whose power reads 0 and switch off so a dead inverter isn't counted as generation
 
 14. **debugWorker** (src/debug_worker.go) - Interactive introspection via `--debug` flag. Commands: list, watch, unwatch, help
 
