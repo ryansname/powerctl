@@ -70,9 +70,9 @@ const (
 	// pwOffsetMaxW is the extra discharge added to the intent when the Powerwall is fully low.
 	// pwOffsetFullSOC / pwOffsetZeroSOC bound the linear ramp: full offset at/below Full SOC,
 	// zero at/above Zero SOC. No hysteresis.
-	pwOffsetMaxW    = 250.0
+	pwOffsetMaxW    = 500.0
 	pwOffsetFullSOC = 10.0
-	pwOffsetZeroSOC = 20.0
+	pwOffsetZeroSOC = 30.0
 
 	// cclOverflowHeadroomA is the target margin below CCL (in amps) that the Multiplus
 	// maintains by discharging when solar pushes battery current above CCL - margin.

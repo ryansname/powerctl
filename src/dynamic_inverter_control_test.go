@@ -832,19 +832,19 @@ func TestPowerwallLowOffset_BelowFull_MaxOffset(t *testing.T) {
 }
 
 func TestPowerwallLowOffset_Midpoint_HalfOffset(t *testing.T) {
-	assert.InDelta(t, pwOffsetMaxW*0.5, powerwallLowOffset(15), 0.001)
+	assert.InDelta(t, pwOffsetMaxW*0.5, powerwallLowOffset(20), 0.001)
 }
 
 func TestPowerwallLowOffset_AtZero_NoOffset(t *testing.T) {
-	assert.InDelta(t, 0.0, powerwallLowOffset(20), 0.001)
-}
-
-func TestPowerwallLowOffset_AboveZero_NoOffset(t *testing.T) {
 	assert.InDelta(t, 0.0, powerwallLowOffset(30), 0.001)
 }
 
+func TestPowerwallLowOffset_AboveZero_NoOffset(t *testing.T) {
+	assert.InDelta(t, 0.0, powerwallLowOffset(40), 0.001)
+}
+
 func TestCalculateDynamic_PWOffset_AddsToSupplyDischarge(t *testing.T) {
-	// PW=15% → +125W. Supply wants 2000W discharge → total 2125W discharge.
+	// PW=15% → +375W. Supply wants 2000W discharge → total 2375W discharge.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 	input.PowerwallSOC = 15
@@ -853,12 +853,12 @@ func TestCalculateDynamic_PWOffset_AddsToSupplyDischarge(t *testing.T) {
 
 	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, "Supply", debug.Priority)
-	assert.InDelta(t, -2125.0, setpoint, 0.001)
-	assert.InDelta(t, 125.0, debug.PWOffsetW, 0.001)
+	assert.InDelta(t, -2375.0, setpoint, 0.001)
+	assert.InDelta(t, 375.0, debug.PWOffsetW, 0.001)
 }
 
 func TestCalculateDynamic_PWOffset_ReducesChargeNotForcesDischarge(t *testing.T) {
-	// PW=10% → +250W offset. Charge surplus only 100W → reduced to 0, not flipped to discharge.
+	// PW=10% → +500W offset. Charge surplus only 100W → reduced to 0, not flipped to discharge.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 	input.PowerwallSOC = 10
@@ -870,7 +870,7 @@ func TestCalculateDynamic_PWOffset_ReducesChargeNotForcesDischarge(t *testing.T)
 }
 
 func TestCalculateDynamic_PWOffset_ReducesLargeCharge(t *testing.T) {
-	// PW=10% → +250W. Charge surplus 1000W → reduced to 750W charge (still charging).
+	// PW=10% → +500W. Charge surplus 1000W → reduced to 500W charge (still charging).
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 	input.PowerwallSOC = 10
@@ -879,11 +879,11 @@ func TestCalculateDynamic_PWOffset_ReducesLargeCharge(t *testing.T) {
 
 	setpoint, debug := calculateDynamicSetpoint(input, state, noVoltLimit)
 	assert.Equal(t, priorityCharge, debug.Priority)
-	assert.InDelta(t, 750.0, setpoint, 0.001)
+	assert.InDelta(t, 500.0, setpoint, 0.001)
 }
 
 func TestCalculateDynamic_PWOffset_CappedByB3DischargeLimit(t *testing.T) {
-	// PW=10% (+250W discharge wanted) but B3 SOC=10% → MaxDischarge=0 → no discharge.
+	// PW=10% (+500W discharge wanted) but B3 SOC=10% → MaxDischarge=0 → no discharge.
 	state := makeTestDynamicState()
 	input := makeBaseDynamicInput()
 	input.PowerwallSOC = 10
